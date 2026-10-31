@@ -9,6 +9,9 @@
  *   "high"   - same engine/platform code, part is normally identical across the family
  *   "medium" - often identical, but varies with power tune / model year / emission norm
  *   "low"    - same family but fitment usually depends on body/variant; compare dimensions
+ *   "avoid"  - looks shared but must NOT be swapped (safety / incompatibility)
+ *
+ * vehicle.type: car | bike | commercial | aircraft | marine  (defaults to "car")
  *
  * `only`   - restrict a part to a subset of the family's vehicles (ids)
  * `except` - exclude vehicles from a part's interchange list (ids)
@@ -19,7 +22,7 @@
  */
 
 window.PARTTWIN_DB = {
-  version: "0.1.0",
+  version: "0.2.0",
 
   vehicles: [
     // ---------- Honda (India) ----------
@@ -110,7 +113,73 @@ window.PARTTWIN_DB = {
     { id: "lambo-urus",        make: "Lamborghini",model: "Urus",              variant: "4.0 V8 TT", years: "2018–", market: "Global" },
     { id: "audi-rsq8",         make: "Audi",       model: "RS Q8",             variant: "4.0 V8 TT", years: "2019–", market: "Global" },
     { id: "porsche-cayenne-3g",make: "Porsche",    model: "Cayenne (3rd gen) Turbo", variant: "4.0 V8 TT", years: "2018–", market: "Global" },
-    { id: "bentley-bentayga",  make: "Bentley",    model: "Bentayga V8",       variant: "4.0 V8 TT", years: "2018–", market: "Global" }
+    { id: "bentley-bentayga",  make: "Bentley",    model: "Bentayga V8",       variant: "4.0 V8 TT", years: "2018–", market: "Global" },
+
+    // ================= MORE CARS (global) =================
+    { id: "vw-golf-gti-mk7",   type: "car", make: "Volkswagen", model: "Golf GTI (Mk7)",       variant: "2.0 TSI EA888 Gen3", years: "2013–2020", market: "Global" },
+    { id: "skoda-octavia-rs-3g", type: "car", make: "Skoda",    model: "Octavia RS (3rd gen)", variant: "2.0 TSI EA888 Gen3", years: "2013–2020", market: "Global" },
+    { id: "audi-a3-8v-20",     type: "car", make: "Audi",       model: "A3 / S3 (8V)",         variant: "2.0 TFSI EA888 Gen3", years: "2013–2020", market: "Global" },
+    { id: "seat-leon-cupra-3", type: "car", make: "SEAT / Cupra", model: "Leon Cupra (Mk3)",   variant: "2.0 TSI EA888 Gen3", years: "2014–2020", market: "Europe" },
+    { id: "vw-tiguan-2g-20",   type: "car", make: "Volkswagen", model: "Tiguan (2nd gen)",     variant: "2.0 TSI EA888 Gen3", years: "2016–2023", market: "Global" },
+    { id: "toyota-camry-xv70", type: "car", make: "Toyota",     model: "Camry (XV70)",         variant: "2.5 A25A Dynamic Force", years: "2017–2024", market: "Global" },
+    { id: "toyota-rav4-xa50",  type: "car", make: "Toyota",     model: "RAV4 (XA50)",          variant: "2.5 A25A Dynamic Force", years: "2018–", market: "Global" },
+    { id: "lexus-es250-7g",    type: "car", make: "Lexus",      model: "ES 250 (7th gen)",     variant: "2.5 A25A Dynamic Force", years: "2018–", market: "Global" },
+
+    // ================= MOTORCYCLES =================
+    { id: "ktm-390-duke",      type: "bike", make: "KTM",        model: "390 Duke",            variant: "373 cc single", years: "2017–2023", market: "Global" },
+    { id: "ktm-rc390",         type: "bike", make: "KTM",        model: "RC 390",              variant: "373 cc single", years: "2017–2021", market: "Global" },
+    { id: "ktm-390-adv",       type: "bike", make: "KTM",        model: "390 Adventure",       variant: "373 cc single", years: "2019–2024", market: "Global" },
+    { id: "husq-svartpilen-401", type: "bike", make: "Husqvarna", model: "Svartpilen 401",     variant: "373 cc single", years: "2018–2023", market: "Global" },
+    { id: "husq-vitpilen-401", type: "bike", make: "Husqvarna",  model: "Vitpilen 401",        variant: "373 cc single", years: "2018–2023", market: "Global" },
+    { id: "bajaj-dominar-400", type: "bike", make: "Bajaj",      model: "Dominar 400",         variant: "373 cc single (KTM-derived)", years: "2016–", market: "India / Global" },
+    { id: "re-interceptor-650",type: "bike", make: "Royal Enfield", model: "Interceptor 650",  variant: "648 cc parallel twin", years: "2018–", market: "Global" },
+    { id: "re-gt650",          type: "bike", make: "Royal Enfield", model: "Continental GT 650", variant: "648 cc parallel twin", years: "2018–", market: "Global" },
+    { id: "re-super-meteor-650", type: "bike", make: "Royal Enfield", model: "Super Meteor 650", variant: "648 cc parallel twin", years: "2023–", market: "Global" },
+    { id: "re-shotgun-650",    type: "bike", make: "Royal Enfield", model: "Shotgun 650",      variant: "648 cc parallel twin", years: "2024–", market: "Global" },
+    { id: "re-classic-350",    type: "bike", make: "Royal Enfield", model: "Classic 350",      variant: "349 cc J-series", years: "2021–", market: "Global" },
+    { id: "re-meteor-350",     type: "bike", make: "Royal Enfield", model: "Meteor 350",       variant: "349 cc J-series", years: "2020–", market: "Global" },
+    { id: "re-hunter-350",     type: "bike", make: "Royal Enfield", model: "Hunter 350",       variant: "349 cc J-series", years: "2022–", market: "Global" },
+    { id: "re-bullet-350-j",   type: "bike", make: "Royal Enfield", model: "Bullet 350",       variant: "349 cc J-series", years: "2023–", market: "Global" },
+    { id: "tvs-apache-rr310",  type: "bike", make: "TVS",        model: "Apache RR 310",       variant: "312 cc single", years: "2017–", market: "India / Global" },
+    { id: "bmw-g310r",         type: "bike", make: "BMW Motorrad", model: "G 310 R",           variant: "313 cc single (built by TVS)", years: "2016–", market: "Global" },
+    { id: "bmw-g310gs",        type: "bike", make: "BMW Motorrad", model: "G 310 GS",          variant: "313 cc single (built by TVS)", years: "2017–", market: "Global" },
+    { id: "honda-hness-cb350", type: "bike", make: "Honda",      model: "H'ness CB350",        variant: "348 cc single", years: "2020–", market: "India" },
+    { id: "honda-cb350rs",     type: "bike", make: "Honda",      model: "CB350RS",             variant: "348 cc single", years: "2021–", market: "India" },
+    { id: "yamaha-r15-v4",     type: "bike", make: "Yamaha",     model: "R15 V4",              variant: "155 cc VVA", years: "2021–", market: "India / Asia" },
+    { id: "yamaha-mt15",       type: "bike", make: "Yamaha",     model: "MT-15",               variant: "155 cc VVA", years: "2019–", market: "India / Asia" },
+
+    // ================= COMMERCIAL / PICK-UPS / VANS =================
+    { id: "toyota-innova-crysta", type: "commercial", make: "Toyota", model: "Innova Crysta", variant: "2.4 2GD-FTV diesel", years: "2016–", market: "India / Asia" },
+    { id: "toyota-fortuner-an160", type: "commercial", make: "Toyota", model: "Fortuner (2nd gen)", variant: "2.8 1GD-FTV / 2.4 2GD-FTV", years: "2015–", market: "Asia / Africa / LatAm" },
+    { id: "toyota-hilux-an120", type: "commercial", make: "Toyota", model: "Hilux (8th gen)",  variant: "2.8 1GD-FTV / 2.4 2GD-FTV", years: "2015–", market: "Global (ex-US)" },
+    { id: "fiat-ducato-x250",  type: "commercial", make: "Fiat",       model: "Ducato (X250/X290)", variant: "2.2 / 2.3 Multijet", years: "2006–", market: "Europe / Global" },
+    { id: "peugeot-boxer-2g",  type: "commercial", make: "Peugeot",    model: "Boxer (2nd gen)",  variant: "2.0 / 2.2 BlueHDi", years: "2006–", market: "Europe / Global" },
+    { id: "citroen-jumper-2g", type: "commercial", make: "Citroën",    model: "Jumper / Relay (2nd gen)", variant: "2.0 / 2.2 BlueHDi", years: "2006–", market: "Europe / Global" },
+    { id: "ram-promaster",     type: "commercial", make: "Ram",        model: "ProMaster",        variant: "3.6 Pentastar V6", years: "2014–", market: "North America" },
+    { id: "merc-sprinter-ncv3",type: "commercial", make: "Mercedes-Benz", model: "Sprinter (NCV3)", variant: "OM646 / OM651 diesel", years: "2006–2018", market: "Global" },
+    { id: "vw-crafter-1g",     type: "commercial", make: "Volkswagen", model: "Crafter (1st gen)", variant: "2.5 / 2.0 TDI", years: "2006–2016", market: "Europe" },
+    { id: "ford-ranger-p703",  type: "commercial", make: "Ford",       model: "Ranger (2022–)",   variant: "2.0 bi-turbo / 3.0 V6 diesel", years: "2022–", market: "Global (ex-NA diesels)" },
+    { id: "vw-amarok-2g",      type: "commercial", make: "Volkswagen", model: "Amarok (2nd gen)", variant: "2.0 bi-turbo / 3.0 V6 diesel (Ford)", years: "2022–", market: "Global (ex-NA)" },
+    { id: "ram-2500-cummins",  type: "commercial", make: "Ram",        model: "2500 / 3500 Heavy Duty", variant: "6.7 Cummins turbo diesel", years: "2007–", market: "North America" },
+    { id: "freightliner-m2-b67", type: "commercial", make: "Freightliner", model: "M2 106", variant: "Cummins B6.7", years: "2010–", market: "North America" },
+
+    // ================= AIRCRAFT =================
+    { id: "cessna-172s",       type: "aircraft", make: "Cessna",  model: "172S Skyhawk SP",     variant: "Lycoming IO-360-L2A", years: "1998–", market: "Global" },
+    { id: "piper-pa28-181",    type: "aircraft", make: "Piper",   model: "PA-28-181 Archer",    variant: "Lycoming O-360-A4M", years: "1976–", market: "Global" },
+    { id: "piper-pa28r-200",   type: "aircraft", make: "Piper",   model: "PA-28R-200 Arrow",    variant: "Lycoming IO-360-C1C6", years: "1969–1976", market: "Global" },
+    { id: "diamond-da40-180",  type: "aircraft", make: "Diamond", model: "DA40 180",            variant: "Lycoming IO-360-M1A", years: "1997–", market: "Global" },
+    { id: "tecnam-p2008",      type: "aircraft", make: "Tecnam",  model: "P2008",               variant: "Rotax 912 iSc / ULS", years: "2008–", market: "Global" },
+    { id: "pipistrel-virus-sw",type: "aircraft", make: "Pipistrel", model: "Virus SW",          variant: "Rotax 912 iS / ULS", years: "2008–", market: "Global" },
+    { id: "aeroprakt-a22",     type: "aircraft", make: "Aeroprakt", model: "A-22 Foxbat / Vision", variant: "Rotax 912 UL / ULS", years: "1999–", market: "Global" },
+    { id: "icon-a5",           type: "aircraft", make: "ICON",    model: "A5",                  variant: "Rotax 912 iS", years: "2014–", market: "Global" },
+    { id: "airbus-a320ceo-cfm",type: "aircraft", make: "Airbus",  model: "A320ceo family",      variant: "CFM56-5B", years: "1988–", market: "Global" },
+    { id: "boeing-737ng",      type: "aircraft", make: "Boeing",  model: "737 Next Generation", variant: "CFM56-7B", years: "1997–2019", market: "Global" },
+
+    // ================= MARINE =================
+    { id: "volvo-penta-57-gxi",type: "marine", make: "Volvo Penta", model: "5.7 GXi (sterndrive / inboard)", variant: "GM 5.7 L V8 based", years: "1996–2017", market: "Global" },
+    { id: "mercruiser-350-mag",type: "marine", make: "MerCruiser", model: "350 MAG MPI",       variant: "GM 5.7 L V8 based", years: "1996–2017", market: "Global" },
+    { id: "chevy-c1500-57-vortec", type: "car", make: "Chevrolet", model: "C/K 1500 pickup",   variant: "5.7 Vortec V8 (L31)", years: "1996–1999", market: "North America" }
+
   ],
 
   families: [
@@ -405,6 +474,288 @@ window.PARTTWIN_DB = {
         { category: "Suspension", name: "Air-suspension components", confidence: "low", note: "Each brand tunes and specifies differently." },
         { category: "Brakes", name: "Brake pads", confidence: "low", note: "Brake systems differ strongly between brands." }
       ]
+    },
+
+    // ==================================================================
+    {
+      id: "vag-ea888-g3",
+      type: "engine",
+      name: "VW Group 2.0 TSI EA888 Gen3 (MQB)",
+      maker: "Volkswagen Group",
+      summary: "One of the highest-volume performance engines in the world, used on the MQB platform in VW, Skoda, Audi and SEAT/Cupra. Wear and service parts (coils, PCV valve, water-pump/thermostat housing) are shared, and the VW/Skoda versions are typically cheapest.",
+      vehicles: ["vw-golf-gti-mk7","skoda-octavia-rs-3g","audi-a3-8v-20","seat-leon-cupra-3","vw-tiguan-2g-20"],
+      parts: [
+        { category: "Ignition / glow", name: "Ignition coils", confidence: "high" },
+        { category: "Ignition / glow", name: "Spark plugs", confidence: "medium", note: "Plug spec depends on output (e.g. GTI vs S3 / Cupra)." },
+        { category: "Cooling", name: "Water pump & thermostat housing assembly", confidence: "high", note: "Known wear item on Gen3; later revisions supersede earlier ones." },
+        { category: "Engine", name: "PCV / oil separator valve", confidence: "high" },
+        { category: "Lubrication", name: "Engine oil filter", confidence: "high" },
+        { category: "Engine", name: "Timing chain & tensioner kit", confidence: "high" },
+        { category: "Transmission", name: "DSG (DQ250 / DQ381) service kit", confidence: "medium", note: "Match the gearbox code." },
+        { category: "Brakes", name: "Front brake pads & discs", confidence: "medium", note: "Depends on brake package (e.g. 312 mm vs 340 mm discs)." },
+        { category: "Suspension", name: "Front lower-arm bushes, drop links", confidence: "high", except: ["vw-tiguan-2g-20"] }
+      ]
+    },
+    {
+      id: "toyota-a25a",
+      type: "engine",
+      name: "Toyota 2.5 A25A-FKS Dynamic Force (TNGA-K)",
+      maker: "Toyota / Lexus",
+      summary: "The Camry, RAV4 and Lexus ES 250 share the 2.5 L Dynamic Force engine on the TNGA-K platform. Lexus-badged service parts often cost much more than the identical Toyota ones.",
+      vehicles: ["toyota-camry-xv70","toyota-rav4-xa50","lexus-es250-7g"],
+      parts: [
+        { category: "Lubrication", name: "Engine oil filter", confidence: "high" },
+        { category: "Ignition / glow", name: "Spark plugs", confidence: "high" },
+        { category: "Ignition / glow", name: "Ignition coils", confidence: "high" },
+        { category: "Sensors", name: "Air-fuel ratio & oxygen sensors", confidence: "medium" },
+        { category: "Cooling", name: "Electric water pump", confidence: "medium" },
+        { category: "Brakes", name: "Front brake pads", confidence: "low", note: "Caliper sizes differ between models." }
+      ]
+    },
+
+    // ======================== MOTORCYCLES ===========================
+    {
+      id: "ktm-373",
+      type: "engine",
+      name: "KTM 373 cc single (390 platform)",
+      maker: "KTM / Husqvarna / Bajaj",
+      summary: "KTM's 373 cc liquid-cooled single is built by Bajaj in India and used across KTM 390s and Husqvarna 401s. The Bajaj Dominar 400 uses a derivative of it. Service parts are commonly shared, and the Bajaj/KTM India versions are usually the cheapest.",
+      vehicles: ["ktm-390-duke","ktm-rc390","ktm-390-adv","husq-svartpilen-401","husq-vitpilen-401","bajaj-dominar-400"],
+      parts: [
+        { category: "Lubrication", name: "Oil filter (paper insert)", confidence: "high" },
+        { category: "Ignition / glow", name: "Spark plug", confidence: "medium", note: "Early Dominar triple-spark engines use different plug arrangements." },
+        { category: "Transmission", name: "Clutch plates & springs", confidence: "medium", note: "Slipper clutch on later models; match the clutch type." },
+        { category: "Brakes", name: "Brake pads (ByBre calipers)", confidence: "medium", note: "Check caliper model; most use ByBre (Brembo group) units." },
+        { category: "Cooling", name: "Radiator cap, coolant hoses", confidence: "low", note: "Hose routing differs by frame." },
+        { category: "Engine", name: "Cam chain & tensioner", confidence: "high", except: ["bajaj-dominar-400"] },
+        { category: "Electrical", name: "Regulator rectifier", confidence: "medium" }
+      ]
+    },
+    {
+      id: "re-650-twin",
+      type: "engine",
+      name: "Royal Enfield 648 cc parallel twin",
+      maker: "Royal Enfield",
+      summary: "The Interceptor 650, Continental GT 650, Super Meteor 650 and Shotgun 650 all use the same 648 cc twin. Engine service parts interchange widely; frames and cycle parts are model-specific.",
+      vehicles: ["re-interceptor-650","re-gt650","re-super-meteor-650","re-shotgun-650"],
+      parts: [
+        { category: "Lubrication", name: "Oil filter", confidence: "high" },
+        { category: "Ignition / glow", name: "Spark plugs", confidence: "high" },
+        { category: "Transmission", name: "Clutch plates (slip-assist)", confidence: "high" },
+        { category: "Air intake", name: "Air filter element", confidence: "low", note: "Airbox differs between Interceptor/GT and Super Meteor/Shotgun." },
+        { category: "Suspension", name: "Front fork seals", confidence: "high", only: ["re-interceptor-650","re-gt650"], note: "Conventional forks; the Super Meteor and Shotgun use USD forks." },
+        { category: "Brakes", name: "Front brake pads", confidence: "medium", only: ["re-interceptor-650","re-gt650"] },
+        { category: "Brakes", name: "Front brake pads", confidence: "medium", only: ["re-super-meteor-650","re-shotgun-650"] }
+      ]
+    },
+    {
+      id: "re-j-series",
+      type: "engine",
+      name: "Royal Enfield J-series 349 cc",
+      maker: "Royal Enfield",
+      summary: "The Meteor, Classic, Hunter and new Bullet 350 share the J-series engine, so engine service parts are common across all four.",
+      vehicles: ["re-classic-350","re-meteor-350","re-hunter-350","re-bullet-350-j"],
+      parts: [
+        { category: "Lubrication", name: "Oil filter", confidence: "high" },
+        { category: "Ignition / glow", name: "Spark plug", confidence: "high" },
+        { category: "Transmission", name: "Clutch plates", confidence: "high" },
+        { category: "Engine", name: "Cam chain & tensioner", confidence: "high" },
+        { category: "Electrical", name: "Regulator rectifier", confidence: "medium" },
+        { category: "Brakes", name: "Brake pads", confidence: "medium", note: "Check disc size per model." }
+      ]
+    },
+    {
+      id: "tvs-bmw-310",
+      type: "engine",
+      name: "TVS / BMW 312–313 cc reverse-inclined single",
+      maker: "TVS Motor / BMW Motorrad",
+      summary: "BMW's G 310 R and G 310 GS are built by TVS in India and share their engine with the TVS Apache RR 310. TVS-branded parts are usually far cheaper than BMW-branded ones.",
+      vehicles: ["tvs-apache-rr310","bmw-g310r","bmw-g310gs"],
+      parts: [
+        { category: "Lubrication", name: "Oil filter", confidence: "high" },
+        { category: "Ignition / glow", name: "Spark plug", confidence: "high" },
+        { category: "Transmission", name: "Clutch plates", confidence: "medium" },
+        { category: "Transmission", name: "Chain & sprocket kit", confidence: "low", note: "Sprocket sizes differ by model." },
+        { category: "Brakes", name: "Brake pads", confidence: "medium" },
+        { category: "Electrical", name: "Regulator rectifier", confidence: "medium" }
+      ]
+    },
+    {
+      id: "honda-cb350",
+      type: "engine",
+      name: "Honda 348 cc air-cooled single (CB350)",
+      maker: "Honda (India)",
+      summary: "The H'ness CB350 and CB350RS are the same motorcycle mechanically, with different styling.",
+      vehicles: ["honda-hness-cb350","honda-cb350rs"],
+      parts: [
+        { category: "Lubrication", name: "Oil filter", confidence: "high" },
+        { category: "Ignition / glow", name: "Spark plug", confidence: "high" },
+        { category: "Transmission", name: "Clutch plates", confidence: "high" },
+        { category: "Brakes", name: "Brake pads", confidence: "high" },
+        { category: "Suspension", name: "Fork seals", confidence: "high" }
+      ]
+    },
+    {
+      id: "yamaha-155-vva",
+      type: "engine",
+      name: "Yamaha 155 cc VVA",
+      maker: "Yamaha",
+      summary: "The R15 V4 and MT-15 share the 155 cc VVA engine and most of the chassis.",
+      vehicles: ["yamaha-r15-v4","yamaha-mt15"],
+      parts: [
+        { category: "Lubrication", name: "Oil filter", confidence: "high" },
+        { category: "Ignition / glow", name: "Spark plug", confidence: "high" },
+        { category: "Transmission", name: "Clutch plates", confidence: "high" },
+        { category: "Brakes", name: "Brake pads", confidence: "medium" },
+        { category: "Transmission", name: "Chain & sprocket kit", confidence: "medium" }
+      ]
+    },
+
+    // ======================== COMMERCIAL ===========================
+    {
+      id: "toyota-gd",
+      type: "engine",
+      name: "Toyota GD diesel (1GD 2.8 / 2GD 2.4) on IMV",
+      maker: "Toyota",
+      summary: "The Innova Crysta, Fortuner and Hilux share Toyota's GD-series diesels and the IMV ladder-frame platform. Filters and many wear parts are common to all three.",
+      vehicles: ["toyota-innova-crysta","toyota-fortuner-an160","toyota-hilux-an120"],
+      parts: [
+        { category: "Lubrication", name: "Engine oil filter", confidence: "high" },
+        { category: "Fuel system", name: "Fuel filter", confidence: "high" },
+        { category: "Fuel system", name: "Diesel injector", confidence: "medium", note: "2.4 (2GD) and 2.8 (1GD) use different injectors." },
+        { category: "Ignition / glow", name: "Glow plug", confidence: "high" },
+        { category: "Engine", name: "Turbocharger", confidence: "low", note: "Specific to engine and power output." },
+        { category: "Suspension", name: "Front suspension arms & bushes", confidence: "medium", only: ["toyota-fortuner-an160","toyota-hilux-an120"] },
+        { category: "Brakes", name: "Front brake pads", confidence: "medium", only: ["toyota-fortuner-an160","toyota-hilux-an120"] }
+      ]
+    },
+    {
+      id: "sevel-van",
+      type: "platform",
+      name: "Sevel large van (Ducato / Boxer / Jumper / ProMaster)",
+      maker: "Stellantis (formerly Fiat + PSA joint venture)",
+      summary: "Europe's best-known badge-engineered van. Body, glass, suspension and brakes are shared across all four badges. Engines differ: Fiat uses Multijet, Peugeot/Citroën use HDi/BlueHDi, and the US Ram ProMaster uses a Pentastar V6.",
+      vehicles: ["fiat-ducato-x250","peugeot-boxer-2g","citroen-jumper-2g","ram-promaster"],
+      parts: [
+        { category: "Brakes", name: "Brake pads & discs", confidence: "high", note: "Match the payload class (light vs heavy/Maxi) because disc sizes differ." },
+        { category: "Suspension", name: "Front struts, wishbones, anti-roll links", confidence: "high" },
+        { category: "Glass / body", name: "Windscreen, mirrors, door handles, lamps", confidence: "high", note: "Pre-/post-facelift lamps differ." },
+        { category: "Glass / body", name: "Sliding-door rollers & hinges", confidence: "high" },
+        { category: "Engine", name: "Engine service parts", confidence: "low", note: "Not shared across brands, since each badge uses different engines." }
+      ]
+    },
+    {
+      id: "sprinter-crafter",
+      type: "platform",
+      name: "Mercedes Sprinter ↔ VW Crafter (2006–2016)",
+      maker: "Daimler / Volkswagen",
+      summary: "The first-generation VW Crafter was built by Mercedes on the Sprinter (NCV3) body and chassis, with VW engines. Body and chassis parts interchange; engine parts do not.",
+      vehicles: ["merc-sprinter-ncv3","vw-crafter-1g"],
+      parts: [
+        { category: "Glass / body", name: "Doors, glass, mirrors, sliding-door parts", confidence: "high" },
+        { category: "Suspension", name: "Front leaf spring / shocks / bushes", confidence: "high" },
+        { category: "Brakes", name: "Brake pads & discs", confidence: "high", note: "Match by axle rating." },
+        { category: "Electrical", name: "Window regulators, switches", confidence: "medium" },
+        { category: "Engine", name: "Engine parts", confidence: "avoid", note: "Different engines (Mercedes vs VW TDI) — do not interchange." }
+      ]
+    },
+    {
+      id: "ranger-amarok",
+      type: "platform",
+      name: "Ford Ranger ↔ VW Amarok (T6.2)",
+      maker: "Ford (builds both)",
+      summary: "The second-generation Amarok is built by Ford on the new Ranger platform with Ford engines. The mechanical parts are the Ranger's, while the styling differs.",
+      vehicles: ["ford-ranger-p703","vw-amarok-2g"],
+      parts: [
+        { category: "Lubrication", name: "Engine oil & fuel filters", confidence: "high" },
+        { category: "Fuel system", name: "Diesel injectors", confidence: "high", note: "Per engine (2.0 bi-turbo vs 3.0 V6)." },
+        { category: "Suspension", name: "Shocks, control arms, leaf springs", confidence: "high" },
+        { category: "Brakes", name: "Brake pads & discs", confidence: "high" },
+        { category: "Glass / body", name: "Windscreen", confidence: "high" },
+        { category: "Glass / body", name: "Headlamps, bumpers, grille", confidence: "avoid", note: "Brand-specific styling." }
+      ]
+    },
+    {
+      id: "cummins-b67",
+      type: "engine",
+      name: "Cummins 6.7 L B-series (ISB / B6.7)",
+      maker: "Cummins",
+      summary: "The Cummins 6.7 is used in Ram Heavy Duty pickups and in medium-duty trucks, buses and equipment. Filters and many service parts cross between pickup and commercial applications; ratings, ECUs and emissions hardware differ.",
+      vehicles: ["ram-2500-cummins","freightliner-m2-b67"],
+      parts: [
+        { category: "Lubrication", name: "Oil filter", confidence: "medium", note: "Commercial engines may use a larger spec; check the filter head." },
+        { category: "Fuel system", name: "Fuel filters", confidence: "medium" },
+        { category: "Fuel system", name: "Common-rail injectors", confidence: "medium", note: "Match the Cummins CPL / ESN number." },
+        { category: "Engine", name: "Gasket sets", confidence: "high" },
+        { category: "Cooling", name: "Water pump, thermostat", confidence: "medium" },
+        { category: "Engine", name: "Aftertreatment (DPF / SCR)", confidence: "avoid", note: "Application-specific." }
+      ]
+    },
+
+    // ======================== AIRCRAFT ===========================
+    {
+      id: "lycoming-360",
+      type: "engine",
+      domain: "aircraft",
+      name: "Lycoming 360 series (O-360 / IO-360)",
+      maker: "Lycoming",
+      summary: "The 360 cubic-inch flat-four powers many of the world's most common training and touring aircraft. Some components are shared across models, but in aviation a part is only usable if it is approved for that exact engine model and airframe.",
+      vehicles: ["cessna-172s","piper-pa28-181","piper-pa28r-200","diamond-da40-180"],
+      parts: [
+        { category: "Ignition / glow", name: "Spark plugs", confidence: "medium", note: "Must appear in the plug manufacturer's approved application list for your exact engine model." },
+        { category: "Lubrication", name: "Spin-on oil filter", confidence: "medium", note: "Check approval for the engine model and the filter adapter." },
+        { category: "Ignition / glow", name: "Magnetos", confidence: "low", note: "Magneto model and timing are engine-specific." },
+        { category: "Engine", name: "Cylinder assemblies", confidence: "low", note: "Compression ratio and parallel vs angle valve heads differ." },
+        { category: "Fuel system", name: "Fuel injection servo / carburettor", confidence: "avoid", note: "O-360 is carburetted, IO-360 is fuel-injected." }
+      ]
+    },
+    {
+      id: "rotax-912",
+      type: "engine",
+      domain: "aircraft",
+      name: "Rotax 912 family",
+      maker: "BRP-Rotax",
+      summary: "The Rotax 912 is the most common light-sport and ultralight aircraft engine. Its consumables are shared across every airframe that uses the same 912 variant.",
+      vehicles: ["tecnam-p2008","pipistrel-virus-sw","aeroprakt-a22","icon-a5"],
+      parts: [
+        { category: "Lubrication", name: "Oil filter", confidence: "high", note: "Use the Rotax-approved filter." },
+        { category: "Ignition / glow", name: "Spark plugs", confidence: "high", note: "Per Rotax specification for the variant." },
+        { category: "Fuel system", name: "Carburettor diaphragms & floats", confidence: "medium", only: ["aeroprakt-a22","tecnam-p2008","pipistrel-virus-sw"], note: "Carburetted variants only; the 912 iS is fuel-injected." },
+        { category: "Cooling", name: "Coolant hoses", confidence: "low", note: "Routing is airframe-specific." }
+      ]
+    },
+    {
+      id: "cfm56",
+      type: "engine",
+      domain: "aircraft",
+      name: "CFM56 turbofan (-5B Airbus / -7B Boeing)",
+      maker: "CFM International",
+      summary: "The CFM56 powers both the Airbus A320ceo family (-5B) and the Boeing 737NG (-7B). The variants share a common core design, but most line-replaceable parts are variant-specific. This is mainly useful for MRO tooling and as a reference.",
+      vehicles: ["airbus-a320ceo-cfm","boeing-737ng"],
+      parts: [
+        { category: "Engine", name: "Some consumables & tooling", confidence: "low", note: "Only where the Illustrated Parts Catalogue (IPC) lists the same P/N for both variants." },
+        { category: "Engine", name: "Line-replaceable units (LRUs)", confidence: "avoid", note: "Variant-specific." }
+      ]
+    },
+
+    // ======================== MARINE ===========================
+    {
+      id: "gm-57-marine",
+      type: "engine",
+      domain: "marine",
+      name: "GM 5.7 L small-block V8: road vs marine",
+      maker: "General Motors (marinised by Volvo Penta, MerCruiser)",
+      summary: "Many sterndrive and inboard boat engines are marinised GM small-block V8s. Some internal parts match the truck engine, but many parts must not be swapped: marine starters, alternators and distributors are ignition-protected (to prevent fuel-vapour explosions), and marine gaskets, water pumps and cams differ.",
+      vehicles: ["volvo-penta-57-gxi","mercruiser-350-mag","chevy-c1500-57-vortec"],
+      parts: [
+        { category: "Engine", name: "Pistons, rings, bearings", confidence: "medium", note: "Confirm the block casting and spec; marine engines often use different cams." },
+        { category: "Engine", name: "Head gaskets", confidence: "avoid", note: "Marine raw-water-cooled engines need corrosion-resistant marine gaskets." },
+        { category: "Electrical", name: "Starter, alternator, distributor", confidence: "avoid", note: "Automotive units are not ignition-protected. They can ignite fuel vapour in an engine bay." },
+        { category: "Cooling", name: "Circulating water pump", confidence: "avoid", note: "Marine pumps differ in rotation, materials and seals." },
+        { category: "Lubrication", name: "Oil filter", confidence: "medium", note: "Use the marine-specified filter where the engine maker requires it." },
+        { category: "Engine", name: "Marine engine parts between Volvo Penta & MerCruiser", confidence: "low", only: ["volvo-penta-57-gxi","mercruiser-350-mag"], note: "Same GM base, but marinisation parts are brand-specific." }
+      ]
     }
+
   ]
 };
