@@ -526,7 +526,7 @@
         <label class="full"><span>Notes</span><textarea name="notes" rows="3" placeholder="Differences, modifications needed, price you paid…"></textarea></label>
         <button class="btn primary" type="submit">${icon("plus")} Save match</button>
       </form>
-      <section><div class="sec-head"><h2>Your saved matches <span class="count">${list.length}</span></h2>${list.length ? `<button class="btn" id="export">Export JSON</button>` : ""}</div>
+      <section><div class="sec-head"><h2>Your saved matches <span class="count">${list.length}</span></h2>${list.length ? `<div class="actions"><button class="btn" id="copyjson">Copy JSON</button><button class="btn" id="export">Export JSON</button></div>` : ""}</div>
       ${list.length ? `<div class="table-wrap"><table><thead><tr><th>Vehicle A</th><th>Vehicle B</th><th>Part</th><th>Part no.</th><th>Evidence</th><th></th></tr></thead><tbody>
         ${list.map((c, i) => `<tr><td>${esc(vehiclesById.get(c.a) ? vName(vehiclesById.get(c.a)) : c.a)}</td><td>${esc(c.bText || (vehiclesById.get(c.b) ? vName(vehiclesById.get(c.b)) : c.b))}</td><td>${esc(c.part)}</td><td>${esc(c.pn)}</td><td>${esc(c.evidence)}</td><td><button class="btn small ghost" data-del="${i}">Delete</button></td></tr>`).join("")}
       </tbody></table></div>` : `<p class="muted">None yet.</p>`}</section>`;
@@ -648,9 +648,10 @@
     const share = document.getElementById("share");
     if (share) share.addEventListener("click", async () => {
       try {
-        if (navigator.share) await navigator.share({ title: document.title, url: location.href });
-        else { await navigator.clipboard.writeText(location.href); toast("Link copied"); }
-      } catch { /* user cancelled */ }
+        if (navigator.share) { await navigator.share({ title: document.title, url: location.href }); return; }
+      } catch (err) { if (err && err.name === "AbortError") return; }
+      try { await navigator.clipboard.writeText(location.href); toast("Link copied"); }
+      catch { toast("Couldn't share from here. Copy the address bar instead"); }
     });
 
     // --- search page ---
@@ -684,6 +685,11 @@
     document.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
       const l = store.get(LS.contrib, []); l.splice(+b.dataset.del, 1); store.set(LS.contrib, l); route({ keepScroll: true });
     }));
+    const cj = document.getElementById("copyjson");
+    if (cj) cj.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(JSON.stringify(store.get(LS.contrib, []), null, 2)); toast("JSON copied"); }
+      catch { toast("Clipboard not available here"); }
+    });
     const exp = document.getElementById("export");
     if (exp) exp.addEventListener("click", () => {
       const blob = new Blob([JSON.stringify(store.get(LS.contrib, []), null, 2)], { type: "application/json" });
