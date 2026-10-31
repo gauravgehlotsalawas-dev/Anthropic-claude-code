@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PartTwin: find the same car part on another car</title>
+  <meta name="description" content="Cross-vehicle spare parts interchange finder. Find which other cars share the same engine, platform and parts as yours, and source them cheaper.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="logo" href="#/"><span class="logo-mark">⇄</span> Part<b>Twin</b></a>
+    <form id="gsearch" class="gsearch" role="search">
+      <input id="gq" type="search" placeholder="Search a car, engine or part (e.g. K9K, Swift, glow plug)" aria-label="Search">
+    </form>
+    <nav class="nav">
+      <a href="#/browse">Browse</a>
+      <a href="#/contribute">Contribute</a>
+      <a href="#/about">About</a>
+    </nav>
+  </header>
+
+  <main id="app" class="container"></main>
+
+  <footer class="footer container">
+    <p>PartTwin prototype · Seed data is illustrative. Always confirm OEM part numbers before buying. Brand names belong to their owners; PartTwin is not affiliated with any manufacturer.</p>
+  </footer>
+
+  <script src="data/db.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
