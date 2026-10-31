@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RateBook BOQ: estimates from your schedule of rates</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/xlsx.full.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">▦</span>
+      <div>
+        <strong>RateBook BOQ</strong>
+        <small>BOQ &amp; estimates from your own schedule of rates</small>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="ratebooks" class="active">1. Rate books</button>
+      <button role="tab" data-tab="pick">2. Pick items</button>
+      <button role="tab" data-tab="takeoff">3. Drawing takeoff</button>
+      <button role="tab" data-tab="boq">4. BOQ &amp; estimate</button>
+      <button role="tab" data-tab="settings">Settings</button>
+    </nav>
+    <div class="project-switch">
+      <label for="projectSelect" class="sr">Project</label>
+      <select id="projectSelect"></select>
+      <button id="newProjectBtn" class="ghost" title="New project">＋</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============ RATE BOOKS ============ -->
+    <section id="tab-ratebooks" class="tab active">
+      <div class="grid-2">
+        <div class="card">
+          <h2>Add a rate book (BSR / SOR / DSR)</h2>
+          <p class="muted">Upload your schedule of rates in any common format. You can add as many as you like (state BSR, CPWD DSR, your own company rates) and use items from all of them in one BOQ.</p>
+          <label class="drop" id="bsrDrop">
+            <input type="file" id="bsrFile" multiple accept=".xlsx,.xls,.xlsm,.xlsb,.ods,.csv,.tsv,.txt,.pdf,.docx,.html,.htm,.json">
+            <span class="drop-icon">⇪</span>
+            <span><strong>Drop files here</strong> or click to choose</span>
+            <small>Excel (xlsx, xls, xlsb, ods), CSV/TSV, PDF (text or scanned), Word (docx), HTML, JSON</small>
+          </label>
+          <div class="row gap">
+            <button id="pasteBsrBtn" class="ghost">Paste rows from a spreadsheet</button>
+            <button id="manualBsrBtn" class="ghost">Create an empty rate book</button>
+            <button id="sampleBsrBtn" class="ghost">Load a sample rate book</button>
+          </div>
+          <div id="importStatus" class="status"></div>
+        </div>
+        <div class="card">
+          <h2>Your rate books</h2>
+          <div id="bsrList" class="bsr-list"></div>
+        </div>
+      </div>
+      <div id="importWizard" class="card hidden"></div>
+      <div id="bsrEditor" class="card hidden"></div>
+    </section>
+
+    <!-- ============ PICK ITEMS ============ -->
+    <section id="tab-pick" class="tab">
+      <div class="card">
+        <div class="pick-toolbar">
+          <input type="search" id="pickSearch" placeholder="Search items: e.g. brick masonry 1:6, RCC M25, vitrified tiles, 12mm plaster">
+          <select id="pickBsr"><option value="">All rate books</option></select>
+          <select id="pickChapter"><option value="">All chapters</option></select>
+          <select id="pickSection" title="BOQ section to add into"></select>
+        </div>
+        <p class="muted small" id="pickCount"></p>
+        <div class="table-wrap tall">
+          <table class="data" id="pickTable">
+            <thead><tr><th></th><th>Rate book</th><th>Code</th><th>Description</th><th>Unit</th><th class="num">Rate</th><th class="num">Qty</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TAKEOFF ============ -->
+    <section id="tab-takeoff" class="tab">
+      <div class="grid-2">
+        <div class="card">
+          <h2>Upload drawings or site documents</h2>
+          <p class="muted">Floor plans, sections, elevations, structural drawings, site photos, drawing schedules. Claude reads them, measures the work items and matches each to an item in your rate books. You review every line before it goes into the BOQ.</p>
+          <label class="drop" id="bpDrop">
+            <input type="file" id="bpFile" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,.dxf,.cdr,.dwg,.tif,.tiff,.heic,.txt,.csv,.xlsx,.xls,.docx">
+            <span class="drop-icon">⌂</span>
+            <span><strong>Drop drawings here</strong> or click to choose</span>
+            <small>PDF, PNG/JPG/WebP, SVG, DXF (AutoCAD), CDR (CorelDRAW), TIFF/BMP, plus schedules in Excel, Word or text</small>
+          </label>
+          <div id="bpFiles" class="file-chips"></div>
+          <label class="field">Project notes for the estimator (optional)
+            <textarea id="bpNotes" rows="3" placeholder="e.g. G+1 residential house, floor height 3.0 m, 230 mm external walls, 115 mm internal, isolated footings 1.5 m deep, vitrified flooring, M25 concrete"></textarea>
+          </label>
+          <div class="row gap wrap">
+            <label class="check"><input type="checkbox" id="bpSendRates" checked> Let Claude pick the rate-book items (sends item list)</label>
+            <label class="inline">Detail
+              <select id="bpEffort">
+                <option value="medium">Standard</option>
+                <option value="high" selected>Thorough</option>
+                <option value="xhigh">Very thorough (slower)</option>
+              </select>
+            </label>
+          </div>
+          <div class="row gap">
+            <button id="bpRunBtn" class="primary">Generate BOQ from drawings</button>
+            <span id="bpStatus" class="status"></span>
+          </div>
+          <p class="muted small" id="bpKeyHint"></p>
+        </div>
+
+        <div class="card">
+          <h2>Or: quick takeoff without AI</h2>
+          <div class="subtabs">
+            <button data-sub="quick" class="active">Building dimensions</button>
+            <button data-sub="dxf">DXF layers</button>
+          </div>
+          <div id="sub-quick" class="sub active">
+            <p class="muted small">Enter overall dimensions. The tool works out standard quantities with a measurement sheet, then suggests matching items from your rate books.</p>
+            <div class="form-grid" id="quickForm"></div>
+            <button id="quickRunBtn" class="primary">Calculate quantities</button>
+          </div>
+          <div id="sub-dxf" class="sub">
+            <p class="muted small">Upload a DXF above. Each layer's line length, closed area and block count is measured, so you can assign layers to rate-book items.</p>
+            <div id="dxfPanel" class="muted">No DXF loaded yet.</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="takeoffResults" class="card hidden"></div>
+    </section>
+
+    <!-- ============ BOQ ============ -->
+    <section id="tab-boq" class="tab">
+      <div class="card">
+        <div class="boq-head">
+          <div class="form-grid compact" id="projectForm"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row between wrap gap">
+          <h2>Bill of quantities</h2>
+          <div class="row gap wrap">
+            <button id="addSectionBtn" class="ghost">＋ Section</button>
+            <button id="addCustomItemBtn" class="ghost">＋ Non-schedule item</button>
+            <button id="reapplyRatesBtn" class="ghost" title="Refresh rates from the rate books, including cost index">Refresh rates</button>
+          </div>
+        </div>
+        <div id="boqBody"></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h2>Add-ons and taxes</h2>
+          <div id="chargesBody"></div>
+          <button id="addChargeBtn" class="ghost">＋ Add-on</button>
+        </div>
+        <div class="card">
+          <h2>Abstract of cost</h2>
+          <div id="abstractBody"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Export</h2>
+        <div class="row gap wrap">
+          <label class="inline">Format
+            <select id="exportFormat">
+              <option value="priced">Priced estimate (BOQ with rates &amp; amounts)</option>
+              <option value="tender">Tender BOQ (unpriced, for bidders)</option>
+              <option value="measurement">Measurement sheet</option>
+              <option value="abstract">Abstract of cost</option>
+              <option value="full">Full estimate (all of the above)</option>
+            </select>
+          </label>
+          <button id="exportXlsxBtn" class="primary">Download Excel</button>
+          <button id="exportPdfBtn" class="ghost">Print / Save as PDF</button>
+          <button id="exportCsvBtn" class="ghost">CSV</button>
+          <button id="exportJsonBtn" class="ghost">Save project file</button>
+          <label class="ghost btnlike">Open project file<input type="file" id="importJson" accept=".json" hidden></label>
+        </div>
+        <details class="mt">
+          <summary>Customise the output format</summary>
+          <div id="formatOptions" class="form-grid compact mt"></div>
+        </details>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section id="tab-settings" class="tab">
+      <div class="grid-2">
+        <div class="card">
+          <h2>Claude API key</h2>
+          <p class="muted">Needed only for reading drawings and scanned rate books. Get a key at <a href="https://platform.claude.com/" target="_blank" rel="noopener">platform.claude.com</a>. The key stays in this browser and is sent only to Anthropic's API. Usage is billed to your Anthropic account.</p>
+          <label class="field">API key <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off"></label>
+          <label class="check"><input type="checkbox" id="rememberKey"> Remember on this device</label>
+          <label class="field">Model
+            <select id="modelSel">
+              <option value="claude-opus-5-5">Claude Opus 5.5 (recommended)</option>
+              <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (faster, cheaper)</option>
+              <option value="claude-fable-5-1">Claude Fable 5.1 (most capable, costliest)</option>
+            </select>
+          </label>
+          <button id="testKeyBtn" class="ghost">Test key</button> <span id="keyStatus" class="status"></span>
+        </div>
+        <div class="card">
+          <h2>Defaults</h2>
+          <div class="form-grid" id="settingsForm"></div>
+          <h3 class="mt">Data</h3>
+          <p class="muted small">Everything is stored in this browser (IndexedDB). Use "Save project file" to back up or share a project.</p>
+          <button id="backupAllBtn" class="ghost">Back up everything</button>
+          <label class="ghost btnlike">Restore backup<input type="file" id="restoreAll" accept=".json" hidden></label>
+          <button id="wipeBtn" class="danger">Delete all data</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <button class="modal-close" aria-label="Close">×</button>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <div id="printArea"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
