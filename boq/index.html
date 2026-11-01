@@ -83,7 +83,7 @@
       <div class="grid-2">
         <div class="card">
           <h2>Upload drawings or site documents</h2>
-          <p class="muted">Floor plans, sections, elevations, structural drawings, site photos, drawing schedules. Claude reads them, measures the work items and matches each to an item in your rate books. You review every line before it goes into the BOQ.</p>
+          <p class="muted">Floor plans, sections, elevations, structural drawings, site photos, drawing schedules. The AI (Claude or OpenAI, your choice in Settings) reads them, measures the work items and matches each to an item in your rate books. You review every line before it goes into the BOQ.</p>
           <label class="drop" id="bpDrop">
             <input type="file" id="bpFile" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,.dxf,.cdr,.dwg,.tif,.tiff,.heic,.txt,.csv,.xlsx,.xls,.docx">
             <span class="drop-icon">⌂</span>
@@ -95,7 +95,7 @@
             <textarea id="bpNotes" rows="3" placeholder="e.g. G+1 residential house, floor height 3.0 m, 230 mm external walls, 115 mm internal, isolated footings 1.5 m deep, vitrified flooring, M25 concrete"></textarea>
           </label>
           <div class="row gap wrap">
-            <label class="check"><input type="checkbox" id="bpSendRates" checked> Let Claude pick the rate-book items (sends item list)</label>
+            <label class="check"><input type="checkbox" id="bpSendRates" checked> Let the AI pick the rate-book items (sends item list)</label>
             <label class="inline">Detail
               <select id="bpEffort">
                 <option value="medium">Standard</option>
@@ -190,16 +190,19 @@
     <section id="tab-settings" class="tab">
       <div class="grid-2">
         <div class="card">
-          <h2>Claude API key</h2>
-          <p class="muted">Needed only for reading drawings and scanned rate books. Get a key at <a href="https://platform.claude.com/" target="_blank" rel="noopener">platform.claude.com</a>. The key stays in this browser and is sent only to Anthropic's API. Usage is billed to your Anthropic account.</p>
-          <label class="field">API key <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off"></label>
+          <h2>AI provider</h2>
+          <p class="muted">Needed only for reading drawings and scanned rate books. Use your own Claude (Anthropic) or OpenAI API key. The key stays in this browser and is sent only to that provider's API. Usage is billed to your account with them.</p>
+          <label class="field">Provider
+            <select id="providerSel">
+              <option value="anthropic">Claude (Anthropic)</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </label>
+          <label class="field"><span id="keyLabel">API key</span> <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off"></label>
+          <p class="muted small" id="keyWhere"></p>
           <label class="check"><input type="checkbox" id="rememberKey"> Remember on this device</label>
           <label class="field">Model
-            <select id="modelSel">
-              <option value="claude-opus-5-5">Claude Opus 5.5 (recommended)</option>
-              <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (faster, cheaper)</option>
-              <option value="claude-fable-5-1">Claude Fable 5.1 (most capable, costliest)</option>
-            </select>
+            <select id="modelSel"></select>
           </label>
           <button id="testKeyBtn" class="ghost">Test key</button> <span id="keyStatus" class="status"></span>
         </div>

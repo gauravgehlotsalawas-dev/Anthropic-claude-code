@@ -1,24 +1,33 @@
 // Claude API calls: reading drawings for quantity takeoff, and extracting rates from scanned/complex rate books.
 import { Anthropic } from "../vendor/libs.mjs";
 
-let session = { apiKey: "", model: "claude-opus-5-5" };
-export function configureAI({ apiKey, model }) {
+import { pdfjsLib } from "./bsr-import.js";
+
+let session = { provider: "anthropic", apiKey: "", model: "claude-opus-5-5" };
+/** provider: "anthropic" | "openai"; apiKey and model belong to that provider. */
+export function configureAI({ provider, apiKey, model }) {
+  if (provider) session.provider = provider;
   if (apiKey != null) session.apiKey = apiKey;
   if (model) session.model = model;
 }
 export const hasKey = () => !!session.apiKey;
+export const providerLabel = () => (session.provider === "openai" ? "OpenAI" : "Claude");
 
 function client() {
-  if (!session.apiKey) throw new Error("Add your Claude API key in Settings first.");
+  if (!session.apiKey) throw new Error("Add your API key in Settings first.");
   // The key belongs to the person using this page and never leaves their browser except to api.anthropic.com.
   return new Anthropic({ apiKey: session.apiKey, dangerouslyAllowBrowser: true, maxRetries: 3 });
+}
+
+async function structured(args) {
+  return session.provider === "openai" ? openaiStructured(args) : claudeStructured(args);
 }
 
 /**
  * Streams one structured-output request and returns the parsed JSON.
  * Uses server-side refusal fallbacks; retries once without them if the API rejects the combination.
  */
-async function structured({ system, content, schema, effort = "medium", maxTokens = 64000, onText }) {
+async function claudeStructured({ system, content, schema, effort = "medium", maxTokens = 64000, onText }) {
   const c = client();
   const base = {
     model: session.model,
@@ -66,13 +75,144 @@ function friendlyError(e) {
 }
 
 export async function testKey() {
+  if (session.provider === "openai") return listOpenAIModels();
   const c = client();
   try {
     await c.models.retrieve(session.model);
-    return true;
+    return null;
   } catch (e) {
     throw friendlyError(e);
   }
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI (Chat Completions with JSON-schema structured output)
+// ---------------------------------------------------------------------------
+
+const OPENAI = "https://api.openai.com/v1";
+
+async function openaiFetch(path, init = {}) {
+  if (!session.apiKey) throw new Error("Add your OpenAI API key in Settings first.");
+  let res;
+  try {
+    res = await fetch(OPENAI + path, {
+      ...init,
+      headers: { Authorization: `Bearer ${session.apiKey}`, "Content-Type": "application/json", ...(init.headers || {}) },
+    });
+  } catch {
+    throw new Error("Could not reach the OpenAI API. Check your internet connection.");
+  }
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* non-JSON error body */ }
+  if (!res.ok) {
+    const msg = json?.error?.message || text.slice(0, 300) || res.statusText;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.code = json?.error?.code || "";
+    err.param = json?.error?.param || "";
+    throw err;
+  }
+  return json;
+}
+
+function openaiFriendly(e) {
+  if (e.status === 401) return new Error("OpenAI rejected the API key. Check it in Settings.");
+  if (e.status === 404) return new Error(`OpenAI model "${session.model}" was not found for this key. Press "Test key" in Settings to load your available models.`);
+  if (e.status === 429) return new Error(e.code === "insufficient_quota" ? "Your OpenAI account has no remaining credit or quota." : "OpenAI rate limit reached. Wait a minute and try again.");
+  if (e.status === 413) return new Error("The upload is too large for OpenAI. Send fewer drawings or pages at a time.");
+  if (e.status) return new Error(`OpenAI error (${e.status}): ${e.message}`);
+  return e;
+}
+
+/** Newest general-purpose GPT models first; non-chat models removed. */
+export async function listOpenAIModels() {
+  let data;
+  try { data = await openaiFetch("/models"); } catch (e) { throw openaiFriendly(e); }
+  const skip = /(audio|realtime|transcribe|tts|search|image|embed|instruct|moderation|dall|whisper|babbage|davinci|codex|computer|deep-research|oss|chat-latest)/i;
+  const ids = (data.data || []).map((m) => m.id).filter((id) => /^(gpt-\d|o\d)/.test(id) && !skip.test(id) && !/-\d{4}-\d{2}-\d{2}$/.test(id));
+  const ver = (id) => parseFloat((id.match(/^gpt-(\d+(?:\.\d+)?)/) || id.match(/^o(\d+)/) || [0, 0])[1]);
+  const size = (id) => (/nano/.test(id) ? 0 : /mini/.test(id) ? 1 : 2);
+  ids.sort((a, b) => (b.startsWith("gpt") - a.startsWith("gpt")) || ver(b) - ver(a) || size(b) - size(a) || a.length - b.length);
+  return ids;
+}
+
+const dataUrl = (mediaType, data) => `data:${mediaType};base64,${data}`;
+
+function toOpenAIParts(content) {
+  return content.map((b) => {
+    if (b.type === "text") return { type: "text", text: b.text };
+    if (b.type === "image") return { type: "image_url", image_url: { url: dataUrl(b.source.media_type, b.source.data), detail: "high" } };
+    if (b.type === "document") return { type: "file", file: { filename: (b.title || "document").replace(/\.pdf$/i, "") + ".pdf", file_data: dataUrl("application/pdf", b.source.data) } };
+    return { type: "text", text: JSON.stringify(b) };
+  });
+}
+
+/** Fallback when a model refuses PDF file parts: render each PDF page to an image instead. */
+async function rasterisePdfParts(content) {
+  const out = [];
+  for (const b of content) {
+    if (b.type !== "document") { out.push(b); continue; }
+    const bin = Uint8Array.from(atob(b.source.data), (c) => c.charCodeAt(0));
+    const pdf = await pdfjsLib.getDocument({ data: bin }).promise;
+    const pages = Math.min(pdf.numPages, 20);
+    for (let p = 1; p <= pages; p++) {
+      const page = await pdf.getPage(p);
+      let vp = page.getViewport({ scale: 2 });
+      const k = Math.min(1, 2048 / Math.max(vp.width, vp.height));
+      vp = page.getViewport({ scale: 2 * k });
+      const c = document.createElement("canvas");
+      c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      out.push({ type: "text", text: `${b.title || "PDF"}, page ${p}` });
+      out.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: c.toDataURL("image/jpeg", 0.85).split(",")[1] } });
+    }
+  }
+  return out;
+}
+
+async function openaiStructured({ system, content, schema, effort = "medium", maxTokens = 64000 }) {
+  if (!session.model || !session.model.trim()) throw new Error('Choose an OpenAI model first: in Settings press "Test key" to load the models your key can use.');
+  const opts = { effort: effort === "xhigh" || effort === "max" ? "high" : effort, maxTokens, content, sendEffort: true };
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const body = {
+      model: session.model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: toOpenAIParts(opts.content) },
+      ],
+      response_format: { type: "json_schema", json_schema: { name: "result", strict: true, schema } },
+      max_completion_tokens: opts.maxTokens,
+    };
+    if (opts.sendEffort) body.reasoning_effort = opts.effort;
+    let res;
+    try {
+      res = await openaiFetch("/chat/completions", { method: "POST", body: JSON.stringify(body) });
+    } catch (e) {
+      // Adjust and retry for parameters some OpenAI models do not accept.
+      const m = `${e.param} ${e.message}`.toLowerCase();
+      if (e.status === 400 && opts.sendEffort && m.includes("reasoning")) { opts.sendEffort = false; continue; }
+      if (e.status === 400 && /max_completion_tokens|max_tokens|maximum/.test(m) && opts.maxTokens > 8000) { opts.maxTokens = Math.floor(opts.maxTokens / 2); continue; }
+      if (e.status === 400 && /file|pdf|document/.test(m) && opts.content.some((b) => b.type === "document")) { opts.content = await rasterisePdfParts(opts.content); continue; }
+      throw openaiFriendly(e);
+    }
+    const choice = res.choices?.[0];
+    if (!choice) throw new Error("OpenAI returned an empty response.");
+    if (choice.message?.refusal) throw new Error("OpenAI declined this request: " + choice.message.refusal);
+    if (choice.finish_reason === "length") throw new Error("The response was too long and got cut off. Try fewer files or pages at a time.");
+    try {
+      return {
+        data: JSON.parse(choice.message.content),
+        usage: { input_tokens: res.usage?.prompt_tokens || 0, output_tokens: res.usage?.completion_tokens || 0 },
+        model: res.model,
+      };
+    } catch {
+      throw new Error("OpenAI's answer could not be read as JSON. Please try again.");
+    }
+  }
+  throw new Error("OpenAI did not accept the request after several adjustments.");
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +300,7 @@ export async function takeoffFromDrawings({ files, notes, rateList, effort, onPr
       notes ? `\n\nNotes from the engineer:\n${notes}` : ""
     }${rateList && rateList.length ? "\n\nMatch each item to the rate-book list above using rate_ref." : "\n\nNo rate book was provided; leave rate_ref empty."}`,
   });
-  onProgress && onProgress("Claude is reading the drawings…");
+  onProgress && onProgress(`${providerLabel()} is reading the drawings…`);
   return structured({
     system: TAKEOFF_SYSTEM,
     content,

@@ -3,7 +3,7 @@ import {
   money, qtyFmt, setSettingsRef, esc, measurementQty, amountInWords,
 } from "./store.js";
 import { readRateFile, detectMapping, rowsToItems, linesToItems, makeItem, summarise } from "./bsr-import.js";
-import { configureAI, hasKey, testKey, takeoffFromDrawings, extractRatesFromText, extractRatesFromImages } from "./ai.js";
+import { configureAI, hasKey, testKey, providerLabel, takeoffFromDrawings, extractRatesFromText, extractRatesFromImages } from "./ai.js";
 import { prepareDrawing, pdfDocToImages } from "./blueprint.js";
 import { Index, unitFactor, canonUnit } from "./match.js";
 import { QUICK_FIELDS, quickTakeoff } from "./quick.js";
@@ -43,11 +43,10 @@ async function boot() {
   state.projectId = (kv.find((k) => k.id === "current")?.value) || state.projects[0].id;
   if (!project()) state.projectId = state.projects[0].id;
 
-  const key = localStorage.getItem("boq.apiKey") || sessionStorage.getItem("boq.apiKey") || "";
-  configureAI({ apiKey: key, model: state.settings.model });
-  $("#apiKey").value = key;
-  $("#rememberKey").checked = !!localStorage.getItem("boq.apiKey");
-  $("#modelSel").value = state.settings.model;
+  // Keys from before OpenAI support was added belong to Claude.
+  const legacy = localStorage.getItem("boq.apiKey");
+  if (legacy) { localStorage.setItem("boq.apiKey.anthropic", legacy); localStorage.removeItem("boq.apiKey"); }
+  applyProvider();
 
   rebuildIndex();
   bindGlobal();
@@ -207,15 +206,28 @@ function bindGlobal() {
   });
 
   // Settings
+  $("#providerSel").addEventListener("change", (e) => { state.settings.provider = e.target.value; saveSettings(); applyProvider(); $("#keyStatus").textContent = ""; });
   $("#apiKey").addEventListener("change", storeKey);
   $("#rememberKey").addEventListener("change", storeKey);
-  $("#modelSel").addEventListener("change", (e) => { state.settings.model = e.target.value; configureAI({ model: e.target.value }); saveSettings(); });
+  $("#modelSel").addEventListener("change", (e) => {
+    if (state.settings.provider === "openai") state.settings.openaiModel = e.target.value; else state.settings.model = e.target.value;
+    configureAI({ model: e.target.value }); saveSettings();
+  });
   $("#testKeyBtn").addEventListener("click", async () => {
     storeKey();
     const s = $("#keyStatus");
     s.textContent = "Checking…"; s.className = "status";
-    try { await testKey(); s.textContent = "Key works ✓"; s.className = "status ok"; }
-    catch (e) { s.textContent = e.message; s.className = "status err"; }
+    try {
+      const models = await testKey();
+      if (models) {
+        if (!models.length) throw new Error("This key works but has no GPT chat models available.");
+        if (!models.includes(state.settings.openaiModel)) state.settings.openaiModel = models[0];
+        state.settings.openaiModels = models;
+        saveSettings(); applyProvider();
+        s.textContent = `Key works ✓ · ${models.length} models · using ${state.settings.openaiModel}`;
+      } else s.textContent = "Key works ✓";
+      s.className = "status ok";
+    } catch (e) { s.textContent = e.message; s.className = "status err"; }
   });
   $("#backupAllBtn").addEventListener("click", () => {
     const payload = { app: "ratebook-boq", version: 1, backup: true, settings: state.settings, bsrs: state.bsrs, projects: state.projects };
@@ -236,23 +248,57 @@ function bindGlobal() {
   $("#wipeBtn").addEventListener("click", async () => {
     if (!confirm("Delete ALL rate books and projects stored in this browser? This cannot be undone.")) return;
     await Promise.all(["bsrs", "projects", "kv"].map((s) => idb.clear(s)));
-    localStorage.removeItem("boq.apiKey"); sessionStorage.removeItem("boq.apiKey");
+    for (const k of ["boq.apiKey", "boq.apiKey.anthropic", "boq.apiKey.openai"]) { localStorage.removeItem(k); sessionStorage.removeItem(k); }
     location.reload();
   });
 }
 
+const CLAUDE_MODELS = [
+  ["claude-opus-5-5", "Claude Opus 5.5 (recommended)"],
+  ["claude-sonnet-5-5", "Claude Sonnet 5.5 (faster, cheaper)"],
+  ["claude-fable-5-1", "Claude Fable 5.1 (most capable, costliest)"],
+];
+
+/** Show the key and model of the selected provider and hand them to the AI module. */
+function applyProvider() {
+  const s = state.settings;
+  const prov = s.provider === "openai" ? "openai" : "anthropic";
+  const slot = "boq.apiKey." + prov;
+  const key = localStorage.getItem(slot) || sessionStorage.getItem(slot) || "";
+  $("#providerSel").value = prov;
+  $("#apiKey").value = key;
+  $("#rememberKey").checked = !!localStorage.getItem(slot);
+  if (prov === "openai") {
+    $("#keyLabel").textContent = "OpenAI API key";
+    $("#apiKey").placeholder = "sk-...";
+    $("#keyWhere").innerHTML = `Create one at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>, then press "Test key" to load the models your key can use.`;
+    const list = s.openaiModels?.length ? s.openaiModels : s.openaiModel ? [s.openaiModel] : [];
+    $("#modelSel").innerHTML = list.length
+      ? list.map((m) => `<option value="${esc(m)}" ${m === s.openaiModel ? "selected" : ""}>${esc(m)}</option>`).join("")
+      : `<option value="">Press "Test key" to load models</option>`;
+  } else {
+    $("#keyLabel").textContent = "Claude API key";
+    $("#apiKey").placeholder = "sk-ant-...";
+    $("#keyWhere").innerHTML = `Create one at <a href="https://platform.claude.com/" target="_blank" rel="noopener">platform.claude.com</a>.`;
+    $("#modelSel").innerHTML = CLAUDE_MODELS.map(([v, l]) => `<option value="${v}" ${v === s.model ? "selected" : ""}>${l}</option>`).join("");
+  }
+  configureAI({ provider: prov, apiKey: key, model: prov === "openai" ? s.openaiModel || "" : s.model });
+  renderKeyHint();
+}
+
 function storeKey() {
+  const slot = "boq.apiKey." + (state.settings.provider === "openai" ? "openai" : "anthropic");
   const key = $("#apiKey").value.trim();
-  localStorage.removeItem("boq.apiKey"); sessionStorage.removeItem("boq.apiKey");
-  if (key) ($("#rememberKey").checked ? localStorage : sessionStorage).setItem("boq.apiKey", key);
+  localStorage.removeItem(slot); sessionStorage.removeItem(slot);
+  if (key) ($("#rememberKey").checked ? localStorage : sessionStorage).setItem(slot, key);
   configureAI({ apiKey: key });
   renderKeyHint();
 }
 
 function renderKeyHint() {
   $("#bpKeyHint").innerHTML = hasKey()
-    ? "Drawings are sent to Anthropic's Claude API using your key. Large sets can take a few minutes."
-    : `Reading drawings needs a Claude API key. <a href="#" data-goto="settings">Add one in Settings</a>, or use the quick takeoff on the right.`;
+    ? `Drawings are sent to the ${state.settings.provider === "openai" ? "OpenAI" : "Anthropic Claude"} API using your key. Large sets can take a few minutes.`
+    : `Reading drawings needs a Claude or OpenAI API key. <a href="#" data-goto="settings">Add one in Settings</a>, or use the quick takeoff on the right.`;
   const a = $("#bpKeyHint [data-goto]");
   if (a) a.addEventListener("click", (e) => { e.preventDefault(); showTab("settings"); });
 }
@@ -474,12 +520,12 @@ function openLinesWizard(name, content, file) {
     w.innerHTML = `<div class="row between"><h2>Import: ${esc(name)}</h2><button class="ghost" id="wzCancel">Cancel</button></div>
       ${wizardMeta(name)}
       ${content.hasText
-        ? `<p class="muted small">Read ${content.pages} page(s) of text. Check the preview. If descriptions or rates look wrong, let Claude read the document instead.</p>`
-        : `<p class="warn">This looks like a scanned PDF with no text layer. Claude can read the page images (needs an API key).</p>`}
+        ? `<p class="muted small">Read ${content.pages} page(s) of text. Check the preview. If descriptions or rates look wrong, let the AI read the document instead.</p>`
+        : `<p class="warn">This looks like a scanned PDF with no text layer. The AI can read the page images (needs a Claude or OpenAI key in Settings).</p>`}
       <div id="wzPreview">${items.length ? previewTable(items) : `<p class="muted">No items recognised yet.</p>`}</div>
       <div class="row gap mt wrap">
         ${items.length ? `<button class="primary" id="wzImport">Import ${items.length} items</button>` : ""}
-        <button class="${items.length ? "ghost" : "primary"}" id="wzAi">Extract with Claude${hasKey() ? "" : " (add key in Settings)"}</button>
+        <button class="${items.length ? "ghost" : "primary"}" id="wzAi">Extract with ${providerLabel()}${hasKey() ? "" : " (add key in Settings)"}</button>
         ${isPdf ? `<label class="inline small">Pages <input id="wzFrom" type="number" min="1" value="1" class="w70"> to <input id="wzTo" type="number" min="1" value="${content.pages}" class="w70"></label>` : ""}
         <span class="status" id="wzStatus">${msg}</span>
       </div>`;
@@ -508,7 +554,7 @@ function openLinesWizard(name, content, file) {
           pages.forEach((t, i) => { const block = `\n--- page ${from + i} ---\n${t}`; if (cur.length + block.length > 30000 && cur) { chunks.push(cur); cur = ""; } cur += block; });
           if (cur) chunks.push(cur);
           for (let c = 0; c < chunks.length; c++) {
-            st.textContent = `Claude is reading part ${c + 1} of ${chunks.length}… (${found.length} items so far)`;
+            st.textContent = `${providerLabel()} is reading part ${c + 1} of ${chunks.length}… (${found.length} items so far)`;
             const res = await extractRatesFromText(chunks[c]);
             found.push(...res);
           }
@@ -516,13 +562,13 @@ function openLinesWizard(name, content, file) {
           const per = 6;
           for (let p = from; p <= to; p += per) {
             const last = Math.min(to, p + per - 1);
-            st.textContent = `Claude is reading pages ${p}–${last} of ${to}… (${found.length} items so far)`;
+            st.textContent = `${providerLabel()} is reading pages ${p}–${last} of ${to}… (${found.length} items so far)`;
             const imgs = await pdfDocToImages(content.pdf, p, last, 2, name);
             found.push(...(await extractRatesFromImages(imgs)));
           }
         }
         items = found.filter((i) => i.description && i.rate).map((i) => makeItem(i.code, i.description, i.unit, i.rate, i.chapter));
-        render(`Claude found ${items.length} items.`);
+        render(`${providerLabel()} found ${items.length} items.`);
         $("#wzName").value = meta.name; $("#wzRegion").value = meta.region; $("#wzYear").value = meta.year; $("#wzIndex").value = meta.costIndex;
       } catch (e) {
         st.textContent = e.message; st.className = "status err";
@@ -686,7 +732,7 @@ async function runAiTakeoff() {
   const st = $("#bpStatus");
   const ready = state.drawings.filter((d) => d.status === "ready");
   if (!ready.length) { toast("Upload at least one drawing first."); return; }
-  if (!hasKey()) { toast("Add your Claude API key in Settings."); showTab("settings"); return; }
+  if (!hasKey()) { toast("Add your Claude or OpenAI API key in Settings."); showTab("settings"); return; }
   const parts = ready.flatMap((d) => d.parts);
   const imgCount = parts.filter((p) => p.kind === "image").length;
   if (imgCount > 90) { toast(`That is ${imgCount} images; please send fewer drawings at a time (max about 90 images).`); return; }
@@ -700,11 +746,12 @@ async function runAiTakeoff() {
   $("#bpRunBtn").disabled = true;
   st.className = "status";
   const t0 = Date.now();
-  const tick = setInterval(() => { st.dataset.t = Math.round((Date.now() - t0) / 1000); }, 1000);
+  let lastMsg = "Sending…";
+  const tick = setInterval(() => { st.textContent = `${lastMsg} ${Math.round((Date.now() - t0) / 1000)}s`; }, 1000);
   try {
     const res = await takeoffFromDrawings({
       files: parts, notes: $("#bpNotes").value.trim(), rateList, effort: $("#bpEffort").value,
-      onProgress: (m) => { st.textContent = `${m} ${Math.round((Date.now() - t0) / 1000)}s`; },
+      onProgress: (m) => { lastMsg = m; st.textContent = `${m} ${Math.round((Date.now() - t0) / 1000)}s`; },
     });
     const data = res.data;
     const lines = data.items.map((it) => {
@@ -714,7 +761,7 @@ async function runAiTakeoff() {
         measurements: it.measurements.map((m) => ({ label: m.label, nos: m.nos, l: m.length, b: m.breadth, d: m.depth })),
       }, aiPick);
     });
-    state.takeoff = { source: "Claude drawing takeoff", summary: data.summary, scale: data.drawing_scale, assumptions: data.assumptions, questions: data.questions, lines };
+    state.takeoff = { source: `${providerLabel()} drawing takeoff${res.model ? ` (${res.model})` : ""}`, summary: data.summary, scale: data.drawing_scale, assumptions: data.assumptions, questions: data.questions, lines };
     const u = res.usage || {};
     st.textContent = `Done in ${Math.round((Date.now() - t0) / 1000)}s · ${lines.length} items · ${((u.input_tokens || 0) / 1000).toFixed(0)}k in / ${((u.output_tokens || 0) / 1000).toFixed(1)}k out tokens`;
     st.className = "status ok";
@@ -851,7 +898,7 @@ function renderTakeoff() {
           ${l.measurements?.length ? `<details><summary>${l.measurements.length} measurement row(s)</summary>${measTableHtml(l.measurements)}</details>` : ""}</div></td>
         <td class="num"><input data-f="qty" type="number" step="any" class="w90 num" value="${l.qty}" ${l.measurements?.length ? 'title="Calculated from measurements; editing replaces them"' : ""}>${factor !== 1 ? `<div class="small muted">= ${qtyFmt(l.qty * factor)} ${esc(it.unit)}</div>` : ""}</td>
         <td>${esc(l.unit)}${it && canonUnit(it.unit) !== canonUnit(l.unit) && factor === 1 ? `<div class="warn small" title="Rate-book unit differs">≠ ${esc(it.unit)}</div>` : ""}</td>
-        <td><select data-f="pick" class="pick">${optionsFor(l)}</select>${l.aiPicked && l.pick === l.candidates[0]?.id ? `<div class="small muted">chosen by Claude</div>` : ""}</td>
+        <td><select data-f="pick" class="pick">${optionsFor(l)}</select>${l.aiPicked && l.pick === l.candidates[0]?.id ? `<div class="small muted">chosen by AI</div>` : ""}</td>
         <td class="num">${it ? money(indexedRate(bsrById(it._bsr), it), false) : `<input data-f="customRate" type="number" step="any" class="w90 num" value="${l.customRate || ""}" placeholder="rate">`}</td>
         <td class="num">${money(lineAmount(l), false)}</td></tr>`;
     }).join("")}

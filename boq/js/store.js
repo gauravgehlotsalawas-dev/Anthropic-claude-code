@@ -48,7 +48,9 @@ export const DEFAULT_SETTINGS = {
   locale: "en-IN",
   decimals: 2,
   qtyDecimals: 3,
+  provider: "anthropic",
   model: "claude-opus-5-5",
+  openaiModel: "",
 };
 
 export function defaultCharges() {
