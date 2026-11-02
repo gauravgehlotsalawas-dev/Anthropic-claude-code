@@ -30,6 +30,20 @@ To put it online, serve the `boq/` folder from any static host (GitHub Pages, Ne
 4. **BOQ & estimate.** Multi-select with bulk move, duplicate and delete; **Undo / Redo** for every change (buttons or Ctrl+Z / Ctrl+Shift+Z); sections, measurement sheets (with deductions), non-schedule items, add-ons (contingencies, GST, cess, profit; each a % of the works total or of the running total), and an abstract of cost with the amount in words (lakh/crore for INR).
 5. **Export.** Excel with live formulas (BOQ, abstract linked to section totals, measurement sheet, unpriced tender BOQ), Print / Save as PDF, CSV, and project files for backup and sharing.
 
+## e-Tender BOQ for NIC / GePNIC portals (tab 5)
+
+Departments that publish tenders on GePNIC portals, such as eproc.rajasthan.gov.in, must upload the BOQ in the portal's own Excel template (`BoQ_Ver3.0` / `BoQ_Ver4.0`, an .xls file with VBA macros, a very hidden `BoQ1` sheet, locked cells and validation lists). This tab writes the project's BOQ into that template:
+
+1. **Add the template.** Use the blank BoQ template from the portal's Downloads section, or any BOQ .xls from a previous tender of the same type. Percentage, Item Rate and Item Wise BoQs are detected automatically, and templates are kept in the browser.
+2. **Tender details.** Fill in the Tender Inviting Authority, Name of Work and Contract/NIT No. (rows 4 to 6). Then choose **All items**, **G-Schedule** (items from a rate book, BSR) or **H-Schedule** (non-BSR items). Change any item's schedule with its G/H button in the BOQ tab. Sections can be written as heading rows numbered 1, 1.01, 1.02 and so on.
+3. **Check and download.** The tool checks the rules the template's own macro checks: unit present when there is a quantity, an estimated rate for every item of a Percentage BoQ, unique serial numbers, the bidder-name caption in A8 and a blank B8. Then it downloads the filled .xls.
+
+What changes in the file: only the item rows of `BoQ1`. The `Total in Figures` and `Quoted Rate` rows move down. Their formulas, the drop-downs, merged cells and drawing objects are moved to match, and each new row gets the template's formulas (Addition/Deduction, amount and amount-in-words). On heading rows the bidder's rate cell is locked; on item rows it is unlocked, as the macro expects. The macros (the VBA streams) and the rest of the workbook are copied byte for byte. The department copy is saved unprotected, because GePNIC's department validation runs on an unprotected sheet.
+
+**Before uploading:** open the file in Microsoft Excel, click *Enable Content*, check the items and press *Ctrl+S*. The template's own validation runs on save. Then upload the file to the portal. Check the first file you make on the portal's BOQ validation before relying on the tool for a live tender.
+
+**Import:** "Import items" on a template, or *Import e-tender BOQ (.xls)* in the BOQ tab, turns any GePNIC BOQ into a project. Contractors can use this to price a tender BOQ against their own rates.
+
 ## File format notes
 
 | Format | Handling |
@@ -63,6 +77,7 @@ boq/
   js/match.js        local search and fuzzy matching of work items to rate-book items
   js/quick.js        dimension-based takeoff
   js/export.js       Excel, print/PDF and CSV output
+  js/nicboq.js       reads and writes NIC GePNIC BOQ templates (BIFF8 .xls with macros)
   js/sample.js       sample rate book (demo rates only)
   vendor/            SheetJS 0.18.5, pdf.js 6.4, a browser bundle of @anthropic-ai/sdk 1.3 and fflate
 ```

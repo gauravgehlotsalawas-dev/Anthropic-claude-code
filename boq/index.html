@@ -10,18 +10,19 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="logo" aria-hidden="true">▦</span>
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 32 32" width="30" height="30"><rect x="3" y="3" width="26" height="26" rx="7" fill="#7fd3ae"/><path d="M9 11h14M9 16h14M9 21h9" stroke="#10201a" stroke-width="2.6" stroke-linecap="round"/></svg></span>
       <div>
         <strong>RateBook BOQ</strong>
         <small>BOQ &amp; estimates from your own schedule of rates</small>
       </div>
     </div>
     <nav class="tabs" role="tablist">
-      <button role="tab" data-tab="ratebooks" class="active">1. Rate books</button>
-      <button role="tab" data-tab="pick">2. Pick items</button>
-      <button role="tab" data-tab="takeoff">3. Drawing takeoff</button>
-      <button role="tab" data-tab="boq">4. BOQ &amp; estimate</button>
-      <button role="tab" data-tab="settings">Settings</button>
+      <button role="tab" data-tab="ratebooks" class="active"><span class="step">1</span><span class="tab-label">Rate books<small id="tbRate"></small></span></button>
+      <button role="tab" data-tab="pick"><span class="step">2</span><span class="tab-label">Pick items<small>from BSR</small></span></button>
+      <button role="tab" data-tab="takeoff"><span class="step">3</span><span class="tab-label">Drawing takeoff<small id="tbTake"></small></span></button>
+      <button role="tab" data-tab="boq"><span class="step">4</span><span class="tab-label">BOQ &amp; estimate<small id="tbBoq"></small></span></button>
+      <button role="tab" data-tab="tender"><span class="step">5</span><span class="tab-label">e-Tender BOQ<small>NIC / GePNIC</small></span></button>
+      <button role="tab" data-tab="settings" class="tab-settings" title="Settings"><span class="step">⚙</span><span class="tab-label">Settings<small>AI &amp; defaults</small></span></button>
     </nav>
     <div class="project-switch">
       <label for="projectSelect" class="sr">Project</label>
@@ -33,6 +34,7 @@
   <main>
     <!-- ============ RATE BOOKS ============ -->
     <section id="tab-ratebooks" class="tab active">
+      <div id="welcome"></div>
       <div class="grid-2">
         <div class="card">
           <h2>Add a rate book (BSR / SOR / DSR)</h2>
@@ -134,6 +136,7 @@
 
     <!-- ============ BOQ ============ -->
     <section id="tab-boq" class="tab">
+      <div class="kpis" id="boqKpis"></div>
       <div class="card">
         <div class="boq-head">
           <div class="form-grid compact" id="projectForm"></div>
@@ -180,11 +183,53 @@
           <button id="exportCsvBtn" class="ghost">CSV</button>
           <button id="exportJsonBtn" class="ghost">Save project file</button>
           <label class="ghost btnlike">Open project file<input type="file" id="importJson" accept=".json" hidden></label>
+          <label class="ghost btnlike" title="Import the items of a NIC / GePNIC BOQ (.xls) as a new project">Import e-tender BOQ (.xls)<input type="file" id="importNic" accept=".xls" multiple hidden></label>
         </div>
         <details class="mt">
           <summary>Customise the output format</summary>
           <div id="formatOptions" class="form-grid compact mt"></div>
         </details>
+      </div>
+    </section>
+
+    <!-- ============ E-TENDER (NIC GePNIC) ============ -->
+    <section id="tab-tender" class="tab">
+      <div class="hero card">
+        <div>
+          <h2>e-Tender BOQ for NIC / GePNIC portals</h2>
+          <p class="muted">Writes this project's BOQ into the department's own BOQ template (.xls) from the e-procurement portal (eproc.rajasthan.gov.in and other GePNIC portals): Percentage, Item Rate or Item Wise BoQ, versions 3.0 and 4.0. The template's macros, locked cells, drop-downs and formulas are kept, so the file goes through the portal's BOQ validation like a hand-made one.</p>
+        </div>
+        <ol class="steps-mini">
+          <li>Add the BOQ template downloaded from the portal</li>
+          <li>Fill in the tender details and choose the items</li>
+          <li>Download, open in MS Excel with macros enabled, Save, and upload</li>
+        </ol>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h2>1. BOQ templates</h2>
+          <p class="muted small">Use the blank BoQ template from the portal's Downloads section, or any BOQ .xls from a previous tender of the same type. Templates are saved in this browser.</p>
+          <label class="drop small-drop" id="nicDrop">
+            <input type="file" id="nicFile" accept=".xls" multiple>
+            <span class="drop-icon">⇪</span>
+            <span><strong>Add BOQ template (.xls)</strong></span>
+          </label>
+          <div id="nicTemplates"></div>
+        </div>
+        <div class="card">
+          <h2>2. Tender details</h2>
+          <div class="form-grid" id="tenderForm"></div>
+          <div id="tenderScope"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row between wrap gap">
+          <h2>3. Check and download</h2>
+          <button class="primary" id="nicDownload">Download e-Tender BOQ (.xls)</button>
+        </div>
+        <div id="tenderChecks"></div>
+        <div id="tenderPreview"></div>
+        <div id="tenderDone"></div>
       </div>
     </section>
 

@@ -9,6 +9,7 @@ import { Index, unitFactor, canonUnit } from "./match.js";
 import { QUICK_FIELDS, quickTakeoff } from "./quick.js";
 import { exportXlsx, exportCsv, printProject, download } from "./export.js";
 import { SAMPLE_BSR } from "./sample.js";
+import { readNicBoq, writeNicBoq, nicNumbering } from "./nicboq.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -23,6 +24,8 @@ const state = {
   itemById: new Map(),
   tf: null, // review filters
   boqSel: new Set(),
+  nicTemplates: [],
+  tender: null, // e-tender export options
 };
 const project = () => state.projects.find((p) => p.id === state.projectId);
 
@@ -50,8 +53,10 @@ async function boot() {
   if (legacy) { localStorage.setItem("boq.apiKey.anthropic", legacy); localStorage.removeItem("boq.apiKey"); }
   applyProvider();
 
+  await loadNicTemplates();
   rebuildIndex();
   bindGlobal();
+  bindTender();
   renderAll();
   resetHistory();
 }
@@ -63,6 +68,7 @@ function renderAll() {
   renderQuickForm();
   renderBoq();
   renderTakeoff();
+  renderTender();
   renderSettings();
   renderKeyHint();
 }
@@ -113,6 +119,7 @@ function saveProject(coalesce = false) {
   const p = project();
   if (!p) return;
   recordHistory(coalesce);
+  queueMicrotask(updateBadges);
   p.updatedAt = Date.now();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => idb.put("projects", p), 300);
@@ -244,7 +251,7 @@ function bindGlobal() {
     project().charges.push({ id: uid("c"), label: "Add-on", percent: 0, on: "works" });
     saveProject(); renderCharges(); renderAbstract();
   });
-  $("#exportXlsxBtn").addEventListener("click", () => guardEmpty() && exportXlsx(project(), $("#exportFormat").value, rateBookName));
+  $("#exportXlsxBtn").addEventListener("click", () => { if (guardEmpty()) { exportXlsx(project(), $("#exportFormat").value, rateBookName); project().exportedAt = Date.now(); saveProject(); } });
   $("#exportPdfBtn").addEventListener("click", () => guardEmpty() && printProject(project(), $("#exportFormat").value, rateBookName));
   $("#exportCsvBtn").addEventListener("click", () => guardEmpty() && exportCsv(project()));
   $("#exportJsonBtn").addEventListener("click", () => {
@@ -253,6 +260,7 @@ function bindGlobal() {
     const payload = { app: "ratebook-boq", version: 1, project: p, bsrs: state.bsrs.filter((b) => used.has(b.id)) };
     download(new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" }), `${p.name.replace(/[^\w-]+/g, "_")}.boq.json`);
   });
+  $("#importNic").addEventListener("change", (e) => { const files = [...e.target.files]; e.target.value = ""; importNicFiles(files); });
   $("#importJson").addEventListener("change", async (e) => {
     const f = e.target.files[0]; e.target.value = "";
     if (!f) return;
@@ -371,6 +379,7 @@ function showTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "pick") renderPick();
   if (name === "boq") renderBoq();
+  if (name === "tender") renderTender();
   window.scrollTo({ top: 0 });
 }
 
@@ -397,7 +406,7 @@ function renderProjectSelect() {
 function switchProject(id) {
   state.projectId = id;
   idb.put("kv", { id: "current", value: id });
-  state.boqSel.clear(); state.tf = null;
+  state.boqSel.clear(); state.tf = null; if (state.tender) state.tender.scope = "all";
   renderProjectSelect(); renderBoq(); renderSectionOptions(); renderTakeoff();
   resetHistory();
 }
@@ -416,6 +425,7 @@ async function addBsr(b) {
 }
 
 function renderBsrList() {
+  updateBadges();
   const el = $("#bsrList");
   if (!state.bsrs.length) {
     el.innerHTML = `<p class="muted">No rate books yet. Upload your BSR / SOR, paste rows, or load the sample to try the tool.</p>`;
@@ -1012,6 +1022,7 @@ function runQuickTakeoff() {
 }
 
 function renderTakeoff(scroll = false) {
+  queueMicrotask(updateBadges);
   const el = $("#takeoffResults");
   const t = draft();
   if (!t || !t.lines) { el.classList.add("hidden"); el.innerHTML = ""; return; }
@@ -1305,7 +1316,7 @@ function renderBoq() {
       ${s.items.map((it) => { sNo++; return `<tr data-item="${it.id}" class="${sel.has(it.id) ? "selected" : ""}">
         <td><input type="checkbox" data-sel ${sel.has(it.id) ? "checked" : ""}></td>
         <td>${sNo}</td>
-        <td><input data-f="code" class="w80" value="${esc(it.code)}"><div class="small muted">${esc(it.bsrId ? (bsrById(it.bsrId)?.name || it.bsrName || "").slice(0, 22) : "NS")}</div></td>
+        <td><div class="code-cell"><input data-f="code" class="w80" value="${esc(it.code)}"><button class="sched ${itemSchedule(it)}" data-act="sched" title="${itemSchedule(it) === "G" ? "G-Schedule (BSR item). Click for H-Schedule" : "H-Schedule (non-BSR item). Click for G-Schedule"}">${itemSchedule(it)}</button></div><div class="small muted">${esc(it.bsrId ? (bsrById(it.bsrId)?.name || it.bsrName || "").slice(0, 22) : "Non-schedule")}</div></td>
         <td class="desc"><textarea data-f="description" rows="2">${esc(it.description)}</textarea>${it.remarks ? `<div class="small muted">${esc(it.remarks)}</div>` : ""}</td>
         <td><input data-f="unit" class="w70" value="${esc(it.unit)}"></td>
         <td class="num">${it.measurements?.length ? `<button class="link" data-act="meas">${qtyFmt(itemQty(it))}</button><div class="small muted">${it.measurements.length} row${it.measurements.length > 1 ? "s" : ""}</div>` : `<input data-f="qty" type="number" step="any" class="w90 num" value="${it.qty || ""}"><div><button class="link small" data-act="meas">measure</button></div>`}</td>
@@ -1403,6 +1414,7 @@ function renderBoq() {
     const idx = sec.items.indexOf(item);
     if (act === "del") { sec.items.splice(idx, 1); sel.delete(item.id); toast("Item deleted.", 6000, { label: "Undo", fn: undo }); }
     if (act === "dup") sec.items.splice(idx + 1, 0, { ...structuredClone(item), id: uid("b") });
+    if (act === "sched") item.schedule = itemSchedule(item) === "G" ? "H" : "G";
     if (act === "up" && idx > 0) [sec.items[idx - 1], sec.items[idx]] = [sec.items[idx], sec.items[idx - 1]];
     if (act === "meas") { openMeasurements(item); return; }
     if (act === "move") { moveItem(item, sec); return; }
@@ -1520,14 +1532,74 @@ function renderCharges() {
   };
 }
 
+/** Short amount for badges: ₹12.4 L, ₹1.2 Cr (INR) or compact notation for other currencies. */
+function moneyShort(v) {
+  const st = state.settings;
+  if (st.currency === "INR") {
+    if (Math.abs(v) >= 1e7) return `₹${(v / 1e7).toFixed(2)} Cr`;
+    if (Math.abs(v) >= 1e5) return `₹${(v / 1e5).toFixed(2)} L`;
+    return money(v).replace(/\.\d+$/, "");
+  }
+  try { return new Intl.NumberFormat(st.locale, { style: "currency", currency: st.currency, notation: "compact", maximumFractionDigits: 1 }).format(v); } catch { return money(v); }
+}
+
+function updateBadges() {
+  const p = project(); if (!p) return;
+  const items = p.sections.reduce((a, s) => a + s.items.length, 0);
+  const pending = p.draft?.lines?.filter((l) => l.status !== "removed" && !l.added).length || 0;
+  const set = (id, t) => { const e = document.getElementById(id); if (e) e.textContent = t; };
+  set("tbRate", state.bsrs.length ? `${state.bsrs.length} loaded` : "add your BSR");
+  set("tbTake", pending ? `${pending} to review` : "AI or quick");
+  set("tbBoq", items ? `${items} items · ${moneyShort(computeAbstract(p).grand)}` : "empty");
+  renderWelcome();
+}
+
+function renderWelcome() {
+  const el = $("#welcome"); if (!el) return;
+  const p = project();
+  const items = p ? p.sections.reduce((a, s) => a + s.items.length, 0) : 0;
+  const steps = [
+    ["ratebooks", "Add rate books", "Upload BSR / SOR in Excel, PDF or Word", state.bsrs.length > 0],
+    ["pick", "Add items", "Pick from BSR or read drawings", items > 0],
+    ["boq", "Check the estimate", "Measurements, add-ons, abstract", items > 0 && computeAbstract(p).grand > 0],
+    ["tender", "Export", "Excel / PDF estimate or e-tender BOQ", !!p?.exportedAt],
+  ];
+  el.className = "card welcome";
+  el.innerHTML = `<div><h2>${items ? "Your estimate" : "Make a BOQ in four steps"}</h2>
+      <p class="muted">${items ? `${esc(p.name)}: ${items} items, ${moneyShort(computeAbstract(p).grand)} with add-ons.` : "Bring your own schedule of rates, add items by hand or from drawings, and export an estimate or a portal-ready e-tender BOQ."}</p></div>
+    <div class="welcome-steps">${steps.map(([tab, t, d, done], i) => `<button class="wstep ${done ? "done" : ""}" data-goto-tab="${tab}"><span class="n">${done ? "✓" : i + 1}</span><b>${t}</b><span>${d}</span></button>`).join("")}</div>`;
+  el.onclick = (e) => { const t = e.target.closest("[data-goto-tab]")?.dataset.gotoTab; if (t) showTab(t); };
+}
+
+function renderKpis() {
+  const el = $("#boqKpis"); if (!el) return;
+  const p = project(); const ab = computeAbstract(p);
+  const items = p.sections.flatMap((s) => s.items);
+  const g = items.filter((it) => itemSchedule(it) === "G").length;
+  el.innerHTML = `
+    <div class="kpi"><small>Items</small><b>${items.length}</b> <span class="muted small">in ${p.sections.filter((s) => s.items.length).length} sections</span></div>
+    <div class="kpi"><small>G / H schedule</small><b>${g} / ${items.length - g}</b> <span class="muted small">BSR / non-BSR</span></div>
+    <div class="kpi"><small>Cost of works</small><b>${money(ab.works)}</b></div>
+    <div class="kpi"><small>Add-ons and taxes</small><b>${money(ab.grand - ab.works)}</b></div>
+    <div class="kpi grand"><small>Grand total</small><b>${money(ab.grand)}</b></div>`;
+}
+
 function renderAbstract() {
+  renderKpis();
+  updateBadges();
   const ab = computeAbstract(project());
   $("#abstractBody").innerHTML = `<table class="data abstract"><tbody>
     ${ab.sections.map((s) => `<tr><td>${esc(s.name)} <span class="muted small">(${s.count})</span></td><td class="num">${money(s.total)}</td></tr>`).join("")}
     <tr class="sub"><td>Total cost of works</td><td class="num">${money(ab.works)}</td></tr>
     ${ab.charges.filter((c) => num(c.percent)).map((c) => `<tr><td>${esc(c.label)} @ ${c.percent}%</td><td class="num">${money(c.amount)}</td></tr>`).join("")}
     <tr class="grand"><td>Grand total</td><td class="num">${money(ab.grand)}</td></tr></tbody></table>
-    <p class="small muted">${esc(amountInWords(ab.grand))}</p>`;
+    <p class="small muted">${esc(amountInWords(ab.grand))}</p>
+    ${(() => {
+      const items = project().sections.flatMap((s) => s.items);
+      const g = items.filter((it) => itemSchedule(it) === "G").reduce((a, it) => a + itemAmount(it), 0);
+      const h = items.filter((it) => itemSchedule(it) === "H").reduce((a, it) => a + itemAmount(it), 0);
+      return items.length ? `<div class="gh-split"><span><b class="sched G">G</b> BSR items ${money(g)}</span><span><b class="sched H">H</b> non-BSR items ${money(h)}</span></div>` : "";
+    })()}`;
 }
 
 function renderFormatOptions() {
@@ -1558,6 +1630,237 @@ function reapplyRates() {
   }
   saveProject(); renderBoq();
   toast(`${n} rate(s) updated${missing ? `; ${missing} item(s) whose rate book was deleted kept their rate` : ""}.`);
+}
+
+// ---------------------------------------------------------------------------
+// e-Tender BOQ (NIC GePNIC .xls)
+// ---------------------------------------------------------------------------
+
+/** G-Schedule = items from a rate book (BSR); H-Schedule = non-BSR items. Users can override per item. */
+const itemSchedule = (it) => it.schedule || (it.bsrId ? "G" : "H");
+
+async function loadNicTemplates() {
+  const rec = (await idb.all("kv")).find((k) => k.id === "nicTemplates");
+  state.nicTemplates = rec?.list || [];
+}
+const saveNicTemplates = () => idb.put("kv", { id: "nicTemplates", list: state.nicTemplates });
+
+async function addNicTemplates(files) {
+  for (const file of files) {
+    try {
+      const data = await file.arrayBuffer();
+      const info = readNicBoq(data);
+      const t = {
+        id: uid("n"), name: file.name, boqType: info.boqType, version: info.version, items: info.items.length,
+        protected: info.protected, hasMacros: info.hasMacros, work: info.work, addedAt: Date.now(), data,
+      };
+      state.nicTemplates.push(t);
+      state.tender.tplId = t.id;
+      await saveNicTemplates();
+      toast(`Template added: ${info.boqType} BoQ (${info.version}).`);
+    } catch (e) {
+      console.error(e);
+      toast(`${file.name}: ${e.message}`, 7000);
+    }
+  }
+  renderTender();
+}
+
+function tenderDetails() {
+  const p = project();
+  p.tender ||= { authority: p.client || "", work: p.name || "", contract: p.reference || "" };
+  return p.tender;
+}
+
+/** Items in NIC order with numbering, filtered by schedule. */
+function tenderItems() {
+  const p = project();
+  const opt = state.tender;
+  const tpl = state.nicTemplates.find((t) => t.id === opt.tplId);
+  const secs = p.sections.map((s) => ({
+    name: s.name,
+    items: s.items.filter((it) => opt.scope === "all" || itemSchedule(it) === opt.scope).map((it) => ({
+      description: it.description, qty: round(itemQty(it), 3), unit: it.unit,
+      rate: opt.rates ? round(num(it.rate), 2) : null, code: it.code || "", _id: it.id,
+    })),
+  })).filter((s) => s.items.length);
+  let list = nicNumbering(secs, { headings: opt.headings && secs.length > 0 });
+  if (tpl?.boqType === "Item Wise") {
+    let n = 0;
+    list = list.map((x) => (x.heading ? x : { ...x, code: `item${++n}` }));
+  }
+  return { list, tpl };
+}
+
+function tenderChecks(list, tpl) {
+  const errors = [], warnings = [];
+  if (!state.nicTemplates.length) errors.push("Add a BOQ template (.xls) from the e-procurement portal.");
+  else if (!tpl) errors.push("Choose which template to use.");
+  const items = list.filter((x) => !x.heading);
+  if (!items.length) errors.push("There are no items for the chosen schedule. Add items in the BOQ tab or change the schedule.");
+  const label = (x) => `S.No ${x.sno}`;
+  const noUnit = items.filter((x) => !String(x.unit || "").trim());
+  if (noUnit.length) errors.push(`Unit missing for ${noUnit.length} item(s): ${noUnit.slice(0, 6).map(label).join(", ")}${noUnit.length > 6 ? "…" : ""}. The portal rejects items with a quantity but no unit.`);
+  const noDesc = items.filter((x) => !String(x.description || "").trim());
+  if (noDesc.length) errors.push(`Description missing for ${noDesc.length} item(s).`);
+  const zero = items.filter((x) => !(x.qty > 0));
+  if (zero.length) warnings.push(`${zero.length} item(s) have zero or negative quantity: ${zero.slice(0, 6).map(label).join(", ")}${zero.length > 6 ? "…" : ""}.`);
+  if (tpl?.boqType === "Percentage") {
+    if (!state.tender.rates) errors.push("A Percentage BoQ needs the estimated rate of every item (column F). Tick “Write estimated rates”.");
+    const noRate = items.filter((x) => !(num(x.rate) > 0));
+    if (state.tender.rates && noRate.length) errors.push(`Estimated rate missing for ${noRate.length} item(s): ${noRate.slice(0, 6).map(label).join(", ")}${noRate.length > 6 ? "…" : ""}.`);
+  }
+  if (tpl && tpl.boqType !== "Percentage" && state.tender.scope === "G") warnings.push("G-Schedule (BSR) items are usually tendered on a Percentage BoQ; the chosen template is " + tpl.boqType + ".");
+  if (tpl && tpl.boqType === "Percentage" && state.tender.scope === "H") warnings.push("H-Schedule (non-BSR) items are usually tendered on an Item Rate BoQ; the chosen template is Percentage.");
+  const d = tenderDetails();
+  if (!d.authority.trim()) warnings.push("Tender Inviting Authority is blank; the template's text will be kept.");
+  if (!d.work.trim()) warnings.push("Name of Work is blank; the template's text will be kept.");
+  const long = items.filter((x) => String(x.description).length > 8000);
+  if (long.length) warnings.push(`${long.length} description(s) are very long (over 8,000 characters).`);
+  return { errors, warnings };
+}
+
+function renderTender() {
+  const el = $("#tab-tender"); if (!el) return;
+  const p = project(); if (!p) return;
+  const opt = (state.tender ||= { tplId: state.nicTemplates[0]?.id || "", scope: "all", headings: true, rates: true });
+  if (!state.nicTemplates.find((t) => t.id === opt.tplId)) opt.tplId = state.nicTemplates[0]?.id || "";
+
+  // Templates
+  $("#nicTemplates").innerHTML = state.nicTemplates.length ? state.nicTemplates.map((t) => `
+    <label class="tpl ${t.id === opt.tplId ? "active" : ""}">
+      <input type="radio" name="nicTpl" value="${t.id}" ${t.id === opt.tplId ? "checked" : ""}>
+      <div class="tpl-main"><strong>${esc(t.boqType)} BoQ</strong> <span class="badge">${esc(t.version.replace("BoQ_", ""))}</span>
+        <div class="small muted">${esc(t.name)} · ${t.items} item rows in template${t.protected ? " · bidder copy (will be unprotected for the department)" : ""}${t.hasMacros ? "" : " · <span class='warn'>no macros found</span>"}</div></div>
+      <div class="tpl-actions"><button class="link small" data-tpl-import="${t.id}" title="Create a project from the items in this file">Import items</button>
+        <button class="icon danger-text" data-tpl-del="${t.id}" title="Remove template">🗑</button></div>
+    </label>`).join("") : `<p class="muted small pad">No templates yet. On the portal, open Downloads → BoQ template (or download the BOQ of any tender of the same type), then add the .xls file here.</p>`;
+
+  // Details + scope
+  const d = tenderDetails();
+  $("#tenderForm").innerHTML = `
+    <label class="field wide">Tender Inviting Authority<input data-td="authority" value="${esc(d.authority)}" placeholder="e.g. Executive Engineer, PWD City Division, Jodhpur"></label>
+    <label class="field wide">Name of Work<input data-td="work" value="${esc(d.work)}"></label>
+    <label class="field wide">Contract / NIT No.<input data-td="contract" value="${esc(d.contract)}" placeholder="e.g. NIT No 08 of 2026-27, Item No. 03"></label>`;
+  const all = p.sections.flatMap((s) => s.items);
+  const g = all.filter((it) => itemSchedule(it) === "G"), h = all.filter((it) => itemSchedule(it) === "H");
+  const sum = (arr) => money(arr.reduce((a, it) => a + itemAmount(it), 0));
+  $("#tenderScope").innerHTML = `
+    <div class="scope">
+      <label class="scope-opt ${opt.scope === "all" ? "active" : ""}"><input type="radio" name="scope" value="all" ${opt.scope === "all" ? "checked" : ""}><b>All items</b><span>${all.length} items · ${sum(all)}</span></label>
+      <label class="scope-opt ${opt.scope === "G" ? "active" : ""}"><input type="radio" name="scope" value="G" ${opt.scope === "G" ? "checked" : ""}><b>G-Schedule</b><span>BSR items · ${g.length} · ${sum(g)}</span></label>
+      <label class="scope-opt ${opt.scope === "H" ? "active" : ""}"><input type="radio" name="scope" value="H" ${opt.scope === "H" ? "checked" : ""}><b>H-Schedule</b><span>non-BSR items · ${h.length} · ${sum(h)}</span></label>
+    </div>
+    <p class="muted small">Items from a rate book count as G-Schedule and non-schedule items as H-Schedule. Change any item with its G/H button in the BOQ tab.</p>
+    <label class="check"><input type="checkbox" id="tdHeadings" ${opt.headings ? "checked" : ""}> Write BOQ sections as heading rows (numbered 1, 1.01, 1.02 …)</label>
+    <label class="check"><input type="checkbox" id="tdRates" ${opt.rates ? "checked" : ""}> Write estimated rates (column F)</label>`;
+
+  // Checks + preview
+  const { list, tpl } = tenderItems();
+  const { errors, warnings } = tenderChecks(list, tpl);
+  $("#tenderChecks").innerHTML = `${errors.map((e) => `<div class="check-line err">✕ ${esc(e)}</div>`).join("")}${warnings.map((w) => `<div class="check-line warn">⚠ ${esc(w)}</div>`).join("")}${!errors.length && !warnings.length ? `<div class="check-line ok">✓ Ready: ${(() => { const n = list.filter((x) => !x.heading).length; return `${n} item${n === 1 ? "" : "s"}`; })()} will be written into the ${esc(tpl.boqType)} BoQ template.</div>` : ""}`;
+  $("#nicDownload").disabled = errors.length > 0;
+  const shown = list.slice(0, 300);
+  const total = list.reduce((a, x) => a + (x.heading ? 0 : (num(x.qty) * num(x.rate))), 0);
+  $("#tenderPreview").innerHTML = list.length ? `<div class="table-wrap tall"><table class="data small nicprev"><thead><tr><th>Sl. No.</th><th>Item Description</th>${tpl?.boqType === "Item Wise" ? "<th>Item Code</th>" : ""}<th class="num">Quantity</th><th>Units</th><th class="num">Estimated Rate</th><th class="num">Amount</th></tr></thead><tbody>
+    ${shown.map((x) => x.heading ? `<tr class="nic-head"><td>${x.sno}</td><td colspan="${tpl?.boqType === "Item Wise" ? 6 : 5}">${esc(x.description)}</td></tr>`
+      : `<tr><td>${x.sno}</td><td>${esc(x.description.slice(0, 260))}${x.description.length > 260 ? "…" : ""}</td>${tpl?.boqType === "Item Wise" ? `<td>${esc(x.code)}</td>` : ""}<td class="num">${qtyFmt(x.qty)}</td><td>${esc(x.unit)}</td><td class="num">${x.rate == null ? "" : money(x.rate, false)}</td><td class="num">${x.rate == null ? "" : money(num(x.qty) * num(x.rate), false)}</td></tr>`).join("")}
+    ${list.length > shown.length ? `<tr><td colspan="7" class="muted">… ${list.length - shown.length} more rows</td></tr>` : ""}
+    </tbody><tfoot><tr><td colspan="${tpl?.boqType === "Item Wise" ? 6 : 5}" class="num"><b>Total in Figures (estimated)</b></td><td class="num"><b>${money(total)}</b></td></tr></tfoot></table></div>` : "";
+}
+
+function bindTender() {
+  setupDrop($("#nicDrop"), $("#nicFile"), addNicTemplates);
+  const el = $("#tab-tender");
+  el.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.name === "nicTpl") state.tender.tplId = t.value;
+    else if (t.name === "scope") state.tender.scope = t.value;
+    else if (t.id === "tdHeadings") state.tender.headings = t.checked;
+    else if (t.id === "tdRates") state.tender.rates = t.checked;
+    else if (t.dataset.td) { tenderDetails()[t.dataset.td] = t.value; saveProject(); }
+    else return;
+    $("#tenderDone").innerHTML = "";
+    renderTender();
+  });
+  el.addEventListener("click", async (e) => {
+    const del = e.target.closest("[data-tpl-del]")?.dataset.tplDel;
+    if (del) {
+      e.preventDefault();
+      if (!confirm("Remove this template from the browser?")) return;
+      state.nicTemplates = state.nicTemplates.filter((t) => t.id !== del);
+      await saveNicTemplates(); renderTender(); return;
+    }
+    const imp = e.target.closest("[data-tpl-import]")?.dataset.tplImport;
+    if (imp) { e.preventDefault(); importNicAsProject(state.nicTemplates.find((t) => t.id === imp)); return; }
+    if (e.target.id === "nicDownload") downloadNicBoq();
+  });
+}
+
+function downloadNicBoq() {
+  const { list, tpl } = tenderItems();
+  const { errors } = tenderChecks(list, tpl);
+  if (errors.length) { toast(errors[0], 6000); return; }
+  const d = tenderDetails();
+  try {
+    const report = {};
+    const bytes = writeNicBoq(tpl.data, list, { authority: d.authority.trim(), work: d.work.trim(), contract: d.contract.trim() }, { unprotect: true, report });
+    const base = (d.contract || d.work || project().name).replace(/[^\w\-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "BOQ";
+    const sched = state.tender.scope === "all" ? "" : `_${state.tender.scope}-Schedule`;
+    download(new Blob([bytes], { type: "application/vnd.ms-excel" }), `BOQ_${base}${sched}.xls`);
+    project().exportedAt = Date.now(); saveProject();
+    $("#tenderDone").innerHTML = `<div class="done-box">
+      <h3>✓ ${report.rows} rows written into the ${esc(report.boqType)} BoQ template</h3>
+      ${report.fixes?.length ? `<p class="small">Corrected in the template: ${report.fixes.map(esc).join("; ")}.</p>` : ""}
+      <p><b>Before uploading to the portal:</b></p>
+      <ol>
+        <li>Open the file in <b>Microsoft Excel</b> (Windows) and click <b>Enable Content</b> so the BOQ macros run. The BoQ1 sheet appears only with macros enabled.</li>
+        <li>Check the items, then press <b>Ctrl + S</b>. The template's own validation runs on save and should report that the basic BoQ validations are complied.</li>
+        <li>Upload the saved file on the e-procurement portal as the tender's BOQ.</li>
+      </ol>
+      <p class="small muted">Keep the file name and the sheet name BoQ1 unchanged. Rows 1 to 3 are for system use.</p></div>`;
+  } catch (e) {
+    console.error(e);
+    toast("Could not write the BOQ: " + e.message, 8000);
+  }
+}
+
+/** Create a project from a NIC BOQ: headings become sections, item rows become BOQ items. */
+async function importNicAsProject(tpl, rawInfo) {
+  const info = rawInfo || readNicBoq(tpl.data);
+  const strip = (s) => String(s || "").replace(/^[^:]*:\s*/, "").trim();
+  const p = newProject(strip(info.work) || tpl?.name || "Imported BOQ");
+  p.client = strip(info.authority);
+  p.reference = strip(info.contract);
+  p.tender = { authority: p.client, work: p.name, contract: p.reference };
+  p.sections = [];
+  let sec = null;
+  const sched = info.boqType === "Percentage" ? "G" : "H";
+  for (const it of info.items) {
+    if (it.heading) { sec = { id: uid("s"), name: it.description.slice(0, 120) || "Section", items: [] }; p.sections.push(sec); continue; }
+    if (!sec) { sec = { id: uid("s"), name: "BOQ", items: [] }; p.sections.push(sec); }
+    sec.items.push({
+      id: uid("b"), bsrId: "", code: /^item\d+$|^BI\d+$/i.test(it.code) ? "" : it.code, description: it.description,
+      unit: it.unit, qty: it.qty || 0, rate: it.rate || 0, measurements: [], schedule: sched, remarks: `Imported from ${tpl?.name || "e-tender BOQ"} (S.No ${it.sno})`,
+    });
+  }
+  p.sections = p.sections.filter((s) => s.items.length);
+  if (!p.sections.length) p.sections.push({ id: uid("s"), name: "General", items: [] });
+  state.projects.unshift(p);
+  await idb.put("projects", p);
+  switchProject(p.id);
+  toast(`Imported ${info.items.filter((i) => !i.heading).length} items into a new project "${p.name}".`, 5000);
+  showTab("boq");
+}
+
+async function importNicFiles(files) {
+  for (const file of files) {
+    try {
+      const data = await file.arrayBuffer();
+      const info = readNicBoq(data);
+      await importNicAsProject({ name: file.name, data }, info);
+    } catch (e) { toast(`${file.name}: ${e.message}`, 7000); }
+  }
 }
 
 // ---------------------------------------------------------------------------
