@@ -3,6 +3,10 @@
 import { uid, round, num, money, qtyFmt, esc, itemQty, amountInWords } from "./store.js";
 import { readNicBoq } from "./nicboq.js";
 import { pdfjsLib } from "./bsr-import.js";
+import { buildDemoProject } from "./demo.js";
+
+/** Dates print as on the department's papers: 29.08.2025. */
+const fd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v).split("-").reverse().join(".") : esc(v || ""));
 
 let ctx; // { project, saveProject, toast, modal, closeModal, searchItems, rateOf, download }
 const $ = (s, el = document) => el.querySelector(s);
@@ -143,7 +147,7 @@ function contractView(p, c) {
   const f = (k, label, type = "text", ph = "") => `<label class="field">${label}<input data-c="${k}" type="${type}" value="${esc(c[k] ?? "")}" placeholder="${ph}"></label>`;
   return `<div class="card upload-card"><h2>Start from the documents</h2>
     <p class="muted small">Upload the tender BOQ: the GePNIC .xls (G- and H-Schedule tabs) or its printed PDF. Then fill in the work order details below.</p>
-    <div class="row gap wrap"><button class="primary" data-act="loadBOQ">Upload BOQ (.xls / PDF)</button><span class="status" id="docStatus"></span></div></div>
+    <div class="row gap wrap"><button class="primary" data-act="loadBOQ">Upload BOQ (.xls / PDF)</button><button class="ghost" data-act="demo" title="A complete fictional work with two running bills, extra items and photos">Load demo (Gaurav Nagar Nigam)</button><span class="status" id="docStatus"></span></div></div>
     <div class="card"><h2>Contract details</h2>
     <p class="muted small">From the work order / agreement. Used on the bill, extra item slip, deviation statement and photo sheets.</p>
     <div class="form-grid">
@@ -324,6 +328,7 @@ function onClick(e) {
     const b = { id: uid("bl"), kind: "running", number: n, base: true, date: "", qty: {}, partRate: {}, parts: {}, mbs: {}, jen: c.jen || "", aen: c.aen || "" };
     p.bills.push(b); view.billId = b.id;
   }
+  if (act === "demo") { const d = buildDemoProject(); view.tab = "bill"; view.billId = d.bills.at(-1).id; ctx.addProject(d); return; }
   if (act === "loadBOQ") { pickFiles(".xls,.pdf", loadBoq); return; }
   if (act === "addExtra") { addExtraDialog(p); return; }
   if (act === "delExtra") { const id = e.target.closest("[data-x]").dataset.x; if (!confirm("Remove this extra item?")) return; p.extras = p.extras.filter((x) => x.id !== id); }
@@ -640,17 +645,17 @@ function form27g(p, c, bill) {
     <div class="f-note">Final Payment must invariably be made on forms Printed on yellow paper which should not be used to intermediated Payment</div>
     <div class="f-title">${esc(formTitle(p, bill))}</div>
     <div class="f-sub">(For contractors &amp; Suppliers only for Payment for works or suppliers actually measured)</div>
-    <table class="f-head"><tr><td><b>Cash Book Voucher No. :</b> ${esc(bill.voucher || "")}</td><td class="r"><b>Dated :</b> ${esc(bill.date || "")}<span class="f-blank"></span></td></tr>
+    <table class="f-head"><tr><td><b>Cash Book Voucher No. :</b> ${esc(bill.voucher || "")}</td><td class="r"><b>Dated :</b> ${fd(bill.date)}<span class="f-blank"></span></td></tr>
       <tr><td colspan="2">Name of Contractor or supplier : <b>${esc((c.contractor || "").toUpperCase())}</b></td></tr>
       <tr><td colspan="2">*Name of Work :- ${esc(p.name)}</td></tr></table>
     <table class="f-fields">
       <tr><td>Serial No. of this Bill</td><td>: ${esc(formTitle(p, bill))}</td></tr>
-      <tr><td>No. &amp; date of his last Bill for this work</td><td>: ${prevBill ? `${esc(formTitle(p, prevBill))}${prevBill.date ? ` dt. ${esc(prevBill.date)}` : ""}` : ""}</td></tr>
-      <tr><td>Reference to work Order of Agreement</td><td>: ${esc(c.workOrderNo)}${c.woDate ? ` date ${esc(c.woDate)}` : ""}</td></tr>
-      <tr><td>Date of written order to commence work</td><td>: ${esc(c.commence || "")}</td></tr>
-      <tr><td>Stipulated date of completion of work</td><td>: ${esc(c.stipulated || "")}</td></tr>
-      <tr><td>Date of actual completion of work</td><td>: ${esc(c.completed || "W.I.P.")}</td></tr>
-      <tr><td>Date of measurements</td><td>: ${esc(bill.measured || "")}</td></tr></table>
+      <tr><td>No. &amp; date of his last Bill for this work</td><td>: ${prevBill ? `${esc(formTitle(p, prevBill))}${prevBill.date ? ` dt. ${fd(prevBill.date)}` : ""}` : ""}</td></tr>
+      <tr><td>Reference to work Order of Agreement</td><td>: ${esc(c.workOrderNo)}${c.woDate ? ` date ${fd(c.woDate)}` : ""}</td></tr>
+      <tr><td>Date of written order to commence work</td><td>: ${fd(c.commence)}</td></tr>
+      <tr><td>Stipulated date of completion of work</td><td>: ${fd(c.stipulated)}</td></tr>
+      <tr><td>Date of actual completion of work</td><td>: ${c.completed ? fd(c.completed) : "W.I.P."}</td></tr>
+      <tr><td>Date of measurements</td><td>: ${fd(bill.measured)}</td></tr></table>
     <div class="f-acc">A-ACCOUNT OF WORK OR SUPPLIES</div>`;
   // Measure the real printed height of every part, then fill each A4 page as far as it goes.
   const MM = 96 / 25.4, PAGE = 268 * MM;
@@ -704,7 +709,7 @@ function form27g(p, c, bill) {
 function certificateBlock(c, bill) {
   const line = (v, w = 160) => `<span class="f-line" style="min-width:${w}px">${esc(v || "")}</span>`;
   return `<div class="f-cert2"><div class="f-acc">II-CERTIFICATE AND SIGNATURE</div>
-    <p>(1) The measurements were made by ${line((bill.jen || c.jen || "") + " JEN", 170)} on ${line(bill.measured, 170)} and</p>
+    <p>(1) The measurements were made by ${line((bill.jen || c.jen || "") + " JEN", 170)} on ${line(fd(bill.measured), 170)} and</p>
     <p>&nbsp;&nbsp;&nbsp;&nbsp;as recorded at Page ${line(bill.mbPages, 90)} of Measurements Book No ${line(bill.mbNo, 170)} and were checked by</p>
     <p>&nbsp;&nbsp;&nbsp;&nbsp;(Names) ${line(`Sh. ${bill.aen || c.aen || ""}&nbsp;&nbsp;&nbsp;&nbsp; AEN`.replace(/&nbsp;/g, " "), 200)} on ${line("", 120)}.</p>
     <p>(2) The connected measurement have been closed of against bill.</p>
@@ -756,7 +761,7 @@ function extraSlip(p, c, bill) {
     <div class="d-office">OFFICE OF THE ${esc(officeLine(c, p))}</div>
     <div class="d-title">EXTRA ITEM SLIP</div>
     <table class="d-fields"><tr><td>Name of Work</td><td>:</td><td class="d-work">${esc(p.name)}</td></tr>
-      <tr><td>Contract Document No.</td><td>:</td><td>${esc(c.workOrderNo)}${c.woDate ? ` Dated ${esc(c.woDate)}` : ""}</td></tr>
+      <tr><td>Contract Document No.</td><td>:</td><td>${esc(c.workOrderNo)}${c.woDate ? ` Dated ${fd(c.woDate)}` : ""}</td></tr>
       <tr><td>Name of Contractor</td><td>:</td><td><b>${esc(c.contractor)}</b></td></tr></table>
     <table class="d-grid"><colgroup><col style="width:7%"><col style="width:43%"><col style="width:10%"><col style="width:8%"><col style="width:10%"><col style="width:12%"><col style="width:10%"></colgroup>
       <thead><tr><th>S.No.</th><th>Details</th><th colspan="2">Quantity</th><th>Rate</th><th>Amount</th><th>Remarks</th></tr></thead><tbody>
@@ -777,7 +782,7 @@ function deviationSheet(p, c) {
     <div class="d-title">DEVIATION STATEMENT</div>
     <table class="d-fields"><tr><td>Name of Work :</td><td></td><td class="d-work">${esc(p.name)}</td></tr>
       <tr><td>Name of Agency</td><td></td><td>${esc(c.contractor)}</td></tr>
-      <tr><td>Aggrement No.</td><td></td><td>${esc(c.workOrderNo)}${c.woDate ? ` Dated ${esc(c.woDate)}` : ""}</td></tr></table>
+      <tr><td>Aggrement No.</td><td></td><td>${esc(c.workOrderNo)}${c.woDate ? ` Dated ${fd(c.woDate)}` : ""}</td></tr></table>
     <table class="d-grid"><colgroup><col style="width:3%"><col style="width:23%"><col style="width:6%"><col style="width:4%"><col style="width:6.5%"><col style="width:8%"><col style="width:6%"><col style="width:4%"><col style="width:6.5%"><col style="width:8%"><col style="width:6.5%"><col style="width:6.5%"><col style="width:7.5%"><col style="width:4.5%"></colgroup>
       <thead><tr><th rowspan="2">S.<br>No.</th><th rowspan="2">Particular</th><th colspan="4">As per "G" Schedule</th><th colspan="4">As per Actual Executed of work</th><th colspan="3">Amount</th><th rowspan="2">Remarks</th></tr>
       <tr><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Excess</th><th>Extra</th><th>Saving</th></tr></thead><tbody>

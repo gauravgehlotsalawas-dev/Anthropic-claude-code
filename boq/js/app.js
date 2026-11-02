@@ -60,6 +60,7 @@ async function boot() {
   bindTender();
   initBills({
     project, saveProject, toast, modal, closeModal, download,
+    addProject: async (np) => { state.projects.unshift(np); await idb.put("projects", np); switchProject(np.id); showTab("bills"); toast(`Demo loaded: ${np.client}. All names and figures are fictional.`, 5000); },
     searchItems: (q) => state.index.search(q, () => true, 200),
     findItem: (id) => state.itemById.get(id),
     rateOf: (it) => indexedRate(bsrById(it._bsr), it),

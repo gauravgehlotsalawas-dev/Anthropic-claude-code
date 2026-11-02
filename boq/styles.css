@@ -163,8 +163,8 @@ table.abstract tr.grand td { font-weight: 800; font-size: 1.1rem; background: va
 .subtabs { display: flex; gap: .3rem; margin-bottom: .6rem; }
 .subtabs button { background: #fff; color: var(--ink); border: 1px solid var(--line); }
 .subtabs button.active { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 600; }
-.sub { display: none; }
-.sub.active { display: block; }
+div.sub { display: none; }
+div.sub.active { display: block; }
 
 /* ---------- modal & toast ---------- */
 .modal { position: fixed; inset: 0; background: rgba(16, 24, 20, .5); display: grid; place-items: center; z-index: 50; padding: 1rem; }
@@ -554,3 +554,6 @@ table.dev tr.sub td { font-weight: 700; background: #f7faf8; }
 .m-line { border-bottom: 0.8pt solid #000; padding-bottom: 1pt; }
 .m-box { height: 33mm; } .m-box2 { height: 40mm; } .m-top { padding-top: 6mm !important; }
 .f-memo2 { font-size: 10pt; } .f-memo2 p { margin: 3pt 0; } .f-memo2 .f-small { font-size: 8.8pt; }
+
+@media print { .d-slip .d-signs { margin-top: 14mm; } #printArea > section:last-child { page-break-after: auto !important; break-after: auto !important; } }
+@media print { body { min-height: 0 !important; background: #fff !important; } }
