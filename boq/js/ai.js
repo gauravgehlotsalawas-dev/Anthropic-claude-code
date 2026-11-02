@@ -366,3 +366,58 @@ export async function extractRatesFromImages(images, { onProgress } = {}) {
   const res = await structured({ system: RATES_SYSTEM, content, schema: ratesSchema, effort: "low", onText: (n) => onProgress && onProgress(n) });
   return res.data.items;
 }
+
+// ---------------------------------------------------------------------------
+// Work order and BOQ documents (for bills)
+// ---------------------------------------------------------------------------
+
+function partsToContent(files) {
+  const content = [];
+  for (const f of files) {
+    if (f.kind === "pdf") content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data }, title: f.name });
+    else if (f.kind === "image") content.push({ type: "image", source: { type: "base64", media_type: f.mediaType, data: f.data } });
+    else content.push({ type: "text", text: `<document name="${f.name}">\n${f.text}\n</document>` });
+  }
+  return content;
+}
+
+const S = { type: "string" }, N = { type: "number" };
+const workOrderSchema = {
+  type: "object", additionalProperties: false,
+  required: ["office", "work_name", "contractor", "work_order_no", "work_order_date", "agreement_no", "nit_no", "tender_premium_percent", "tender_premium_direction", "contract_amount", "commence_date", "completion_date", "engineers", "terms"],
+  properties: {
+    office: S, work_name: S, contractor: S, work_order_no: S, work_order_date: S, agreement_no: S, nit_no: S,
+    tender_premium_percent: N, tender_premium_direction: { type: "string", enum: ["below", "above", "par", "unknown"] },
+    contract_amount: N, commence_date: S, completion_date: S,
+    engineers: { type: "object", additionalProperties: false, required: ["jen", "aen", "xen"], properties: { jen: S, aen: S, xen: S } },
+    terms: { type: "array", items: S },
+  },
+};
+
+/** Read a work order / agreement (scanned or digital). Dates as YYYY-MM-DD when possible, empty string when absent. */
+export async function extractWorkOrder(files, { onText } = {}) {
+  const content = partsToContent(files);
+  content.push({ type: "text", text: "Extract the details of this work order. Use empty strings or 0 for anything not stated. Dates as YYYY-MM-DD. tender_premium_percent is the contractor's quoted percentage (e.g. 1 for '1% below'). terms: the conditions of the work order, one per entry, as written." });
+  const res = await structured({
+    system: "You read Indian government work orders and agreements (PWD, municipal corporations, development authorities) and return their details exactly as written. Do not guess values that are not in the document.",
+    content, schema: workOrderSchema, effort: "low", maxTokens: 16000, onText,
+  });
+  return res.data;
+}
+
+const boqDocSchema = {
+  type: "object", additionalProperties: false, required: ["items"],
+  properties: { items: { type: "array", items: { type: "object", additionalProperties: false, required: ["schedule", "sno", "description", "quantity", "unit", "rate"],
+    properties: { schedule: { type: "string", enum: ["G", "H"] }, sno: S, description: S, quantity: N, unit: S, rate: N } } } },
+};
+
+/** Read BOQ items from a PDF or image of a tender BOQ / G-H schedule. */
+export async function extractBoqDocument(files, { onText } = {}) {
+  const content = partsToContent(files);
+  content.push({ type: "text", text: "List every item of this BOQ. schedule is G for items of the G-Schedule / percentage BOQ (schedule-of-rates items) and H for the H-Schedule / item rate BOQ (non-SOR items). Keep descriptions complete. rate is the estimated or agreement rate (0 if blank)." });
+  const res = await structured({
+    system: "You convert Indian government tender BOQs (G-Schedule and H-Schedule) into structured items, word for word.",
+    content, schema: boqDocSchema, effort: "low", maxTokens: 64000, onText,
+  });
+  return res.data.items;
+}

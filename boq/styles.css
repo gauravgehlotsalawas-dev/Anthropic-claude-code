@@ -405,3 +405,23 @@ table.dev tr.sub td { font-weight: 700; background: #f7faf8; }
   .p-bill .p-desc { text-align: left; }
   .p-photos { height: 255mm; overflow: hidden; }
 }
+.part-row td { background: #fbfaf3; border-top: 0; }
+.warn-badge { background: #fdf0dc; color: #8a5300; }
+.upload-card { background: linear-gradient(120deg, #fff, #eef7f2); }
+@media print {
+  .p-27g { font-size: 9.5pt; }
+  .p-27g h1 { text-align: center; font-size: 15pt; text-decoration: underline; margin: 2pt 0; }
+  .p-form-no { text-align: right; font-size: 8pt; }
+  .p-note { font-size: 8.5pt; margin: 2pt 0; }
+  .c { text-align: center; }
+  .p-fields { width: 100%; border-collapse: collapse; margin: 4pt 0 6pt; }
+  .p-fields td { padding: 1pt 3pt; vertical-align: top; }
+  .p-fields td:first-child { width: 38%; }
+  .p-colno th { font-weight: 400; font-size: 8pt; }
+  .p-parts { font-size: 8pt; margin-top: 2pt; border-top: 0.4pt dashed #777; padding-top: 2pt; }
+  .p-keep { page-break-inside: avoid; }
+  .p-sign4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6pt; margin-top: 30pt; font-size: 8.5pt; text-align: center; }
+  .p-memo td { padding: 5pt 6pt; }
+  .p-terms { font-size: 9pt; padding-left: 14pt; }
+  .p-terms li { margin: 2pt 0; }
+}
