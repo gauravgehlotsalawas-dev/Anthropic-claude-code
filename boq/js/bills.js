@@ -90,7 +90,8 @@ function computeBill(p, bill) {
   const prevCalc = prev ? computeBill(p, prev) : null;
   const rows = lines(p).map((l) => {
     const base = bill.partRate?.[l.id] != null && bill.partRate[l.id] !== "" ? num(bill.partRate[l.id]) : l.rate;
-    const plist = bill.parts?.[l.id];
+    const refs = bill.mbRefs?.[l.id]?.filter((x) => num(x.qty));
+    const plist = refs?.length ? refs.map((x) => ({ qty: x.qty, rate: x.rate })) : bill.parts?.[l.id];
     let e, parts = null;
     if (plist?.length) {
       parts = plist.map((x) => { const rate = x.rate === "" || x.rate == null ? l.rate : num(x.rate); const q = num(x.qty); return { qty: q, rate, part: rate !== l.rate, amt: round(q * rate, 2), full: round(q * l.rate, 2) }; });
@@ -179,7 +180,7 @@ function billView(p, c) {
         ${p.bills.length ? "" : `<button class="ghost" data-act="baseBill" title="For the 2nd, 4th or final bill: enter the last bill already submitted, so this tool continues from it">Enter last submitted bill</button>`}
         ${bill && bill.kind !== "final" ? `<button class="ghost" data-act="finalBill">Make this the final bill</button>` : ""}
         ${bill ? `<button class="ghost danger-text" data-act="delBill">Delete bill</button>` : ""}</div>
-      ${bill ? `<div class="row gap wrap"><button class="primary" data-print="all" title="Bill with memorandum and terms, extra item slip, deviation and photos">Print complete bill file</button><button class="ghost" data-print="bill">Print bill</button><button class="ghost" data-print="slip">Extra item slip</button><button class="ghost" data-print="deviation">Deviation</button><button class="ghost" data-act="excel">Excel</button></div>` : ""}
+      ${bill ? `<div class="row gap wrap"><button class="primary" data-print="all" title="Bill with memorandum and terms, extra item slip, deviation and photos">Print complete bill file</button><button class="ghost" data-print="bill">Print bill</button><button class="ghost" data-print="mb" title="Abstract of cost as written in the measurement book">MB abstract</button><button class="ghost" data-print="slip">Extra item slip</button><button class="ghost" data-print="deviation">Deviation</button><button class="ghost" data-act="excel">Excel</button></div>` : ""}
     </div></div>`;
   if (!bill) return head + `<div class="card"><p><b>First bill of this work?</b> Press <b>New running bill</b> and enter the up-to-date quantities from the measurement book.</p>
     <p><b>Making the 2nd, 4th or final bill?</b> Press <b>Enter last submitted bill</b>, choose its number (for example 3) and type its up-to-date quantities and rates from the bill. Then press <b>New running bill</b> (or make it the final bill): “since previous bill”, “deduct previous bill” and the deviation continue exactly from it.</p></div>`;
@@ -192,13 +193,13 @@ function billView(p, c) {
     return `<tr data-line="${r.id}" class="${r.extra ? "extra-row" : ""}" data-text="${esc((r.desc + " " + r.no).toLowerCase())}"><td><input data-mbs class="w70" value="${esc(bill.mbs?.[r.id] ?? "")}" placeholder="${i + 1}"></td><td>${esc(r.no)}</td>
       <td class="desc"><div class="clamp">${esc(r.desc)}</div></td><td>${esc(r.unit)}</td>
       <td class="num">${r.extra ? "—" : qtyFmt(r.tqty)}</td><td class="num muted">${qtyFmt(r.prevQty)}</td>
-      <td class="num">${r.parts ? `<b>${qtyFmt(r.qty)}</b>` : `<input data-q class="w120 num" value="${esc(bill.qty[r.id] ?? "")}" placeholder="0" title="Up-to-date quantity. For parts at different rates use “Part rate” or type e.g. 237.74@384.5 + 409.5@159">`}<div><button class="link small" data-act="addPart" title="Split this item into quantities paid at different rates">＋ part rate</button></div></td>
+      <td class="num">${r.parts ? `<b>${qtyFmt(r.qty)}</b>${bill.mbRefs?.[r.id]?.length ? `<div class="small muted">from M.B.</div>` : ""}` : `<input data-q class="w120 num" value="${esc(bill.qty[r.id] ?? "")}" placeholder="0" title="Up-to-date quantity. For parts at different rates use “Part rate” or type e.g. 237.74@384.5 + 409.5@159">`}<div><button class="link small" data-act="mbRefs" title="Quantities from measurement book pages (e.g. 10/02 → 237.74)">MB refs${bill.mbRefs?.[r.id]?.length ? ` (${bill.mbRefs[r.id].length})` : ""}</button> · <button class="link small" data-act="addPart" title="Split this item into quantities paid at different rates">＋ part rate</button></div>${bill.mbRefs?.[r.id]?.length ? `<div class="small muted">MB: ${bill.mbRefs[r.id].map((x) => esc(x.page || "?")).join(", ")}</div>` : ""}</td>
       <td class="num">${qtyFmt(round(r.qty - r.prevQty, 3))}</td>
       <td class="num"><input data-rate type="number" step="any" class="w100 num" value="${r.rate || ""}" placeholder="rate" title="Agreement rate (for H-Schedule items: the contractor's quoted rate)"></td>
       <td class="num"><input data-pr type="number" step="any" class="w90 num" value="${bill.partRate?.[r.id] ?? ""}" placeholder="full" title="Part rate for a running bill (leave blank for the full rate)"></td>
       <td class="num">${m2(r.amt)}</td><td class="num">${m2(r.since)}</td>
       <td class="num">${pct == null ? `<span class="badge">extra</span>` : `<span class="${pct > 100 ? "warn" : ""}">${pct.toFixed(0)}%</span>`}</td></tr>
-      ${r.parts ? r.parts.map((x, k) => `<tr class="part-row" data-line="${r.id}" data-pi="${k}"><td></td><td></td><td colspan="4" class="small">↳ ${k === 0 ? "Quantity" : "Further quantity"} ${x.part ? `<span class="badge warn-badge">part rate</span>` : `<span class="badge">full rate</span>`}</td>
+      ${r.parts && !bill.mbRefs?.[r.id]?.length ? r.parts.map((x, k) => `<tr class="part-row" data-line="${r.id}" data-pi="${k}"><td></td><td></td><td colspan="4" class="small">↳ ${k === 0 ? "Quantity" : "Further quantity"} ${x.part ? `<span class="badge warn-badge">part rate</span>` : `<span class="badge">full rate</span>`}</td>
         <td class="num"><input data-pq type="number" step="any" class="w100 num" value="${x.qty || ""}" placeholder="qty"></td><td></td>
         <td class="num"><input data-prr type="number" step="any" class="w100 num" value="${bill.parts[r.id][k].rate ?? ""}" placeholder="${m2(r.rate)}" title="Rate allowed for this quantity (blank = full rate)"></td><td></td>
         <td class="num">${m2(x.amt)}</td><td class="num small muted">${x.part ? `full ${m2(x.full)}` : ""}</td><td><button class="icon danger-text" data-act="delPart" title="Remove this part">×</button></td></tr>`).join("") : ""}
@@ -298,7 +299,7 @@ function onClick(e) {
   if (act === "newBill") {
     if (p.bills.some((b) => b.kind === "final")) { ctx.toast("The final bill has already been made."); return; }
     const prev = p.bills.at(-1);
-    const b = { id: uid("bl"), kind: "running", date: new Date().toISOString().slice(0, 10), mbs: { ...(prev?.mbs || {}) }, qty: { ...(prev?.qty || {}) }, partRate: { ...(prev?.partRate || {}) }, parts: structuredClone(prev?.parts || {}), mbNo: prev?.mbNo || "", jen: prev?.jen || c.jen || "", aen: prev?.aen || c.aen || "" };
+    const b = { id: uid("bl"), kind: "running", date: new Date().toISOString().slice(0, 10), mbs: { ...(prev?.mbs || {}) }, qty: { ...(prev?.qty || {}) }, partRate: { ...(prev?.partRate || {}) }, parts: structuredClone(prev?.parts || {}), mbRefs: structuredClone(prev?.mbRefs || {}), mbNo: prev?.mbNo || "", jen: prev?.jen || c.jen || "", aen: prev?.aen || c.aen || "" };
     p.bills.push(b); view.billId = b.id; view.tab = "bill";
   }
   if (act === "finalBill" && bill) {
@@ -309,6 +310,7 @@ function onClick(e) {
     if (!confirm(`Delete ${billTitle(p, bill)}?`)) return;
     p.bills.splice(p.bills.indexOf(bill), 1); view.billId = p.bills.at(-1)?.id || "";
   }
+  if (act === "mbRefs" && bill) { mbRefsDialog(p, bill, e.target.closest("[data-line]").dataset.line); return; }
   if (act === "addPart" && bill) {
     const id = e.target.closest("[data-line]").dataset.line;
     bill.parts ||= {};
@@ -437,6 +439,8 @@ function printHtml(p, c, bill, kind) {
   let html = "";
   if (kind === "bill" && bill) {
     html = form27g(p, c, bill);
+  } else if (kind === "mb" && bill) {
+    html = mbAbstract(p, c, bill);
   } else if (kind === "slip" && bill) {
     html = extraSlip(p, c, bill);
   } else if (kind === "deviation") {
@@ -871,4 +875,77 @@ function deviationSheet(p, c) {
       ${tot("Total", d.gT, true)}${tot(esc(tpLabel(d.c).replace(/^Less T\.P\. ([\d.]+)% Below$/, "Less: $1% as per T.P.")), d.gTp)}${tot("G. Total", d.gNet, true)}
       ${d.H.length ? `<tr class="d-b"><td></td><td>H-Schedule</td><td colspan="12"></td></tr>${d.H.map(row).join("")}${tot("Total", d.grand, true)}` : ""}</tbody></table>
     <div class="d-signs d-signs3">${["Junior Engineer", "Assistant Engineer", "Executive Engineer,"].map((t) => `<div>${t}<br>${esc((c.office || p.client || "").replace(/^.*?(Corporation|Nigam)/i, "Nagar Nigam"))}</div>`).join("")}</div></section>`;
+}
+
+// ---------------------------------------------------------------------------
+// Measurement book references: quantity of an item built up from M.B. pages
+// ---------------------------------------------------------------------------
+
+function mbRefsDialog(p, bill, id) {
+  const line = lines(p).find((l) => l.id === id); if (!line) return;
+  bill.mbRefs ||= {};
+  const refs = (bill.mbRefs[id] ||= []).map((x) => ({ ...x }));
+  if (!refs.length) {
+    const cur = computeBill(p, bill).rows.find((r) => r.id === id);
+    refs.push({ page: "", qty: cur?.qty || "", rate: "" });
+  }
+  const body = () => refs.map((x, i) => `<tr data-i="${i}"><td><input data-k="page" class="w120" value="${esc(x.page ?? "")}" placeholder="e.g. 10/02"></td>
+    <td><input data-k="qty" type="number" step="any" class="w120 num" value="${x.qty ?? ""}"></td>
+    <td><input data-k="rate" type="number" step="any" class="w100 num" value="${x.rate ?? ""}" placeholder="${m2(line.rate)}"></td>
+    <td class="num">${m2(round(num(x.qty) * (x.rate === "" || x.rate == null ? line.rate : num(x.rate)), 2))}</td><td><button class="icon danger-text" data-del>×</button></td></tr>`).join("");
+  const total = () => `Total → <b>${qtyFmt(round(refs.reduce((a, x) => a + num(x.qty), 0), 3))} ${esc(line.unit)}</b> = <b>${m2(round(refs.reduce((a, x) => a + round(num(x.qty) * (x.rate === "" || x.rate == null ? line.rate : num(x.rate)), 2), 0), 2))}</b>`;
+  ctx.modal(`<h2>M.B. references</h2><p class="small">${esc(line.no)} · ${esc(line.desc.slice(0, 160))}</p>
+    <p class="muted small">One line per measurement book page: "Qty B/F this M.B. page no. …". The total becomes the up-to-date quantity. Give a rate only where the engineer allowed a part rate (blank = full rate ${m2(line.rate)}).</p>
+    <table class="data"><thead><tr><th>M.B. page no.</th><th>Quantity (${esc(line.unit)})</th><th>Rate</th><th class="num">Amount</th><th></th></tr></thead><tbody id="mbBody">${body()}</tbody></table>
+    <p id="mbTot" class="mt">${total()}</p>
+    <div class="row gap"><button class="ghost" id="mbAdd">＋ M.B. page</button><button class="primary" id="mbSave">Save</button><button class="ghost danger-text" id="mbClear">Remove references</button></div>`, (m) => {
+    $("#mbBody", m).oninput = (e) => { const tr = e.target.closest("tr"); const k = e.target.dataset.k; refs[+tr.dataset.i][k] = k === "page" ? e.target.value : e.target.value === "" ? "" : num(e.target.value); $("#mbTot", m).innerHTML = total(); };
+    $("#mbBody", m).onclick = (e) => { if (!e.target.matches("[data-del]")) return; refs.splice(+e.target.closest("tr").dataset.i, 1); $("#mbBody", m).innerHTML = body(); $("#mbTot", m).innerHTML = total(); };
+    $("#mbAdd", m).onclick = () => { refs.push({ page: "", qty: "", rate: "" }); $("#mbBody", m).innerHTML = body(); $("#mbBody tr:last-child [data-k=page]", m)?.focus(); };
+    $("#mbSave", m).onclick = () => {
+      const keep = refs.filter((x) => num(x.qty));
+      if (keep.length) { bill.mbRefs[id] = keep; delete bill.qty[id]; if (bill.parts) delete bill.parts[id]; if (bill.partRate) delete bill.partRate[id]; }
+      else delete bill.mbRefs[id];
+      ctx.closeModal(); ctx.saveProject(); renderBills();
+    };
+    $("#mbClear", m).onclick = () => {
+      const q = round(refs.reduce((a, x) => a + num(x.qty), 0), 3);
+      delete bill.mbRefs[id]; bill.qty[id] = q;
+      ctx.closeModal(); ctx.saveProject(); renderBills();
+    };
+  });
+}
+
+/** "Abstract of cost" as written at the end of the measurement book. */
+function mbAbstract(p, c, bill) {
+  const k = computeBill(p, bill);
+  const mbs = bill.mbs || {};
+  const key = (r) => (mbs[r.id] !== undefined && mbs[r.id] !== "" ? num(mbs[r.id]) : 1e9);
+  const order = (arr) => arr.filter((r) => r.qty).map((r, i) => [r, i]).sort((a, b) => key(a[0]) - key(b[0]) || a[1] - b[1]).map((x) => x[0]);
+  let n = 0;
+  const item = (r) => {
+    const refs = bill.mbRefs?.[r.id]?.filter((x) => num(x.qty)) || [];
+    const no = mbs[r.id] || ++n;
+    const short = r.desc.length > 140 ? r.desc.slice(0, 140).replace(/\s+\S*$/, "") + " -do-" : r.desc;
+    const qtyLines = refs.length ? refs.map((x) => `<tr><td></td><td>Qty B/F this M.B. page no. ${esc(x.page || "....")}</td><td class="r">${q3(num(x.qty))} ${esc(r.unit)}</td><td></td></tr>`).join("") +
+      (refs.length > 1 ? `<tr><td></td><td class="r">Total</td><td class="r f-u">${q3(r.qty)} ${esc(r.unit)}</td><td></td></tr>` : "")
+      : `<tr><td></td><td>Qty as per M.B.</td><td class="r">${q3(r.qty)} ${esc(r.unit)}</td><td></td></tr>`;
+    const groups = r.parts || [{ qty: r.qty, rate: r.applied, amt: r.amt }];
+    const rateLines = groups.map((g) => `<tr><td></td><td class="r">${q3(g.qty)} ${esc(r.unit)} @ ${n2(g.rate)}${Math.abs(g.rate - r.rate) > 0.004 ? ` / ${n2(r.rate)}` : ""} per ${esc(r.unit)}</td><td></td><td class="r">${n2(g.amt ?? round(g.qty * g.rate, 2))}</td></tr>`).join("");
+    return `<tr class="mb-item"><td class="c"><span class="mb-no">${esc(no)}</span>${r.extra ? "<br><small>Extra</small>" : ""}</td><td colspan="3"><u>${esc(short)}</u></td></tr>${qtyLines}${rateLines}`;
+  };
+  const G = order(k.gRows), H = order(k.hRows);
+  return `<section class="p-page f27 mb-abs"><div class="d-title">ABSTRACT OF COST (AS PER M.B.)</div>
+    <table class="d-fields"><tr><td>Name of Work</td><td>:</td><td>${esc(p.name)}</td></tr><tr><td>Agency</td><td>:</td><td>${esc(c.contractor)}</td></tr>
+      <tr><td>Ref. W.O. &amp; Date</td><td>:</td><td>${esc(c.workOrderNo)}${c.woDate ? ` dt. ${fd(c.woDate)}` : ""}</td></tr><tr><td>Bill</td><td>:</td><td>${esc(formTitle(p, bill))}${bill.mbNo ? ` · M.B. No. ${esc(bill.mbNo)}` : ""}${bill.mbPages ? `, pages ${esc(bill.mbPages)}` : ""}</td></tr></table>
+    <table class="mb-tab"><colgroup><col style="width:7%"><col style="width:55%"><col style="width:18%"><col style="width:20%"></colgroup><tbody>
+      ${G.map(item).join("")}
+      <tr class="mb-tot"><td></td><td class="r">Total</td><td></td><td class="r">${n2(k.gTotal)}</td></tr>
+      <tr><td></td><td class="r">${esc(tpLabel(c))}</td><td></td><td class="r">${n2(k.tp)}</td></tr>
+      <tr class="mb-tot"><td></td><td class="r">Total (A) G-Schedule</td><td></td><td class="r">${n2(k.gNet)}</td></tr>
+      ${H.length ? `<tr><td></td><td><b><u>H-Schedule item</u></b></td><td></td><td></td></tr>${H.map(item).join("")}<tr class="mb-tot"><td></td><td class="r">Total (B) H-Schedule</td><td></td><td class="r">${n2(k.hTotal)}</td></tr>` : ""}
+      <tr class="mb-tot"><td></td><td class="r">Total Amt. G-Schedule + H-Schedule (A+B)</td><td></td><td class="r">${n2(k.total)}</td></tr>
+      ${k.prevTotal ? `<tr><td></td><td class="r">Less previous bill</td><td></td><td class="r">${n2(k.prevTotal)}</td></tr><tr class="mb-tot"><td></td><td class="r">Net Amt.</td><td></td><td class="r">${n2(k.net)}</td></tr>` : `<tr class="mb-tot"><td></td><td class="r">Net Amt.</td><td></td><td class="r">${n2(k.net)}</td></tr>`}
+    </tbody></table>
+    <div class="d-signs d-signs3"><div>Junior Engineer</div><div>Assistant Engineer</div><div>Executive Engineer</div></div></section>`;
 }
