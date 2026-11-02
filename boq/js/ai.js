@@ -421,3 +421,26 @@ export async function extractBoqDocument(files, { onText } = {}) {
   });
   return res.data.items;
 }
+
+const billSchema = {
+  type: "object", additionalProperties: false,
+  required: ["bill_number", "is_final", "bill_date", "total_up_to_date", "items"],
+  properties: {
+    bill_number: N, is_final: { type: "boolean" }, bill_date: S, total_up_to_date: N,
+    items: { type: "array", items: { type: "object", additionalProperties: false,
+      required: ["schedule", "boq_no", "is_extra", "description", "unit", "qty_up_to_date", "full_rate", "paid_rate", "amount_up_to_date"],
+      properties: { schedule: { type: "string", enum: ["G", "H"] }, boq_no: S, is_extra: { type: "boolean" }, description: S, unit: S,
+        qty_up_to_date: N, full_rate: N, paid_rate: N, amount_up_to_date: N } } },
+  },
+};
+
+/** Read a contractor's running/final bill (P.W.A. Form 27G or similar). */
+export async function extractBill(files, { onText } = {}) {
+  const content = partsToContent(files);
+  content.push({ type: "text", text: `Read every item line of this bill. boq_no is the BOQ item number: in "2/18" it is 18, and items marked "Ex" or "Extra" are extra items (is_extra true, boq_no ""). qty_up_to_date is the quantity executed up to date as per the measurement book (column 3). When an item shows two rates such as 356.50 over 1064.00, paid_rate is the rate actually paid (356.50) and full_rate the agreement rate (1064.00); otherwise both are the same. If an item is paid in parts at different rates, give one entry per part with the same boq_no. schedule is H for items under the H-Schedule heading, otherwise G. total_up_to_date is the "Total value of work done to date".` });
+  const res = await structured({
+    system: "You read Indian government contractors' bills (running and final bills) exactly as written, including handwritten corrections.",
+    content, schema: billSchema, effort: "medium", maxTokens: 32000, onText,
+  });
+  return res.data;
+}

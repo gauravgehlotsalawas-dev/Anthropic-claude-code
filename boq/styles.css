@@ -425,3 +425,15 @@ table.dev tr.sub td { font-weight: 700; background: #f7faf8; }
   .p-terms { font-size: 9pt; padding-left: 14pt; }
   .p-terms li { margin: 2pt 0; }
 }
+@media print {
+  .p-fields2 { border-collapse: collapse; margin: 4pt 0 8pt; font-size: 10pt; }
+  .p-fields2 td { padding: 1pt 4pt; vertical-align: top; }
+  .p-fields2 td:first-child { white-space: nowrap; font-weight: 600; }
+  .p-slip h1 { font-size: 13pt; margin: 2pt 0 6pt; text-decoration: none; }
+  .p-dev h1 { font-size: 13pt; }
+  .p-landscape.p-photos { height: 180mm; }
+  .p-landscape.p-photos .p-photo-grid { gap: 4mm; }
+  .p-landscape.p-photos .p-sign { margin-top: 10mm; }
+  .p-sign div { text-align: center; font-size: 9pt; }
+}
+@media print { .p-bill { font-size: 8.5pt; } .p-bill th { font-size: 7.5pt; padding: 2pt; } .p-27g .p-pageno { margin-top: 4pt; } }

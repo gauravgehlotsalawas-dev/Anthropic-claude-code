@@ -3,7 +3,7 @@
 import { uid, round, num, money, qtyFmt, esc, itemQty, amountInWords } from "./store.js";
 import { readNicBoq } from "./nicboq.js";
 import { prepareDrawing } from "./blueprint.js";
-import { extractWorkOrder, extractBoqDocument, hasKey } from "./ai.js";
+import { extractWorkOrder, extractBoqDocument, extractBill, hasKey } from "./ai.js";
 
 let ctx; // { project, saveProject, toast, modal, closeModal, searchItems, rateOf, download }
 const $ = (s, el = document) => el.querySelector(s);
@@ -158,11 +158,13 @@ function billView(p, c) {
   const head = `<div class="card"><div class="row between wrap gap">
       <div class="row gap wrap"><select id="billSel">${p.bills.map((b) => `<option value="${b.id}" ${b === bill ? "selected" : ""}>${billTitle(p, b)}${b.date ? ` · ${b.date}` : ""}</option>`).join("")}${p.bills.length ? "" : `<option>No bills yet</option>`}</select>
         <button class="primary" data-act="newBill">＋ New running bill</button>
+        <button class="ghost" data-act="loadPrevBill" title="Upload bills already submitted (PDF or photos), oldest first, so later bills and the deviation are exact">⇪ Upload previous bill</button>
         ${bill && bill.kind !== "final" ? `<button class="ghost" data-act="finalBill">Make this the final bill</button>` : ""}
         ${bill ? `<button class="ghost danger-text" data-act="delBill">Delete bill</button>` : ""}</div>
       ${bill ? `<div class="row gap wrap"><button class="primary" data-print="all" title="Bill with memorandum and terms, extra item slip, deviation and photos">Print complete bill file</button><button class="ghost" data-print="bill">Print bill</button><button class="ghost" data-print="slip">Extra item slip</button><button class="ghost" data-print="deviation">Deviation</button><button class="ghost" data-act="excel">Excel</button></div>` : ""}
     </div></div>`;
-  if (!bill) return head + `<div class="card"><p class="muted">Press <b>New running bill</b> and enter the up-to-date quantities from the measurement book.</p></div>`;
+  if (!bill) return head + `<div class="card"><p><b>First bill of this work?</b> Press <b>New running bill</b> and enter the up-to-date quantities from the measurement book.</p>
+    <p><b>Making the 2nd, 4th or final bill?</b> First upload every earlier bill with <b>Upload previous bill</b> (oldest first). Their quantities become the starting point, so “since previous bill”, the deviation and the next bill’s draft are exact.</p><span class="status" id="docStatus"></span></div>`;
   const k = computeBill(p, bill);
   const cv = contractValue(p);
   const extraPct = cv ? (k.extraNet / cv) * 100 : 0;
@@ -187,6 +189,7 @@ function billView(p, c) {
   let i = 0;
   const gRows = k.rows.filter((r) => r.s === "G"), hRows = k.rows.filter((r) => r.s === "H");
   return head + `<div class="card"><h2>${billTitle(p, bill)}</h2>
+    ${bill.imported ? `<p class="small muted">Read from an uploaded bill${bill.importedTotal ? ` (bill total ${money(bill.importedTotal)})` : ""}. Check the quantities against the bill.</p>` : ""}<span class="status" id="docStatus"></span>
     <div class="form-grid compact">${meta("date", "Bill date", "date")}${meta("measured", "Date of measurement")}${meta("mbNo", "M.B. No.")}${meta("mbPages", "M.B. pages")}${meta("jen", "Measured by (JEN)")}${meta("aen", "Checked by (AEN)")}</div>
     <div class="table-wrap tall"><table class="data small bill-table"><thead><tr><th>S.No</th><th>Item</th><th>Unit</th><th class="num">Tender qty</th><th class="num">Prev. qty</th><th class="num">Qty up-to-date (M.B.)</th><th class="num">This bill</th><th class="num">Rate</th><th class="num">Part rate</th><th class="num">Amount up-to-date</th><th class="num">Since previous</th><th class="num">Done</th></tr></thead>
       <tbody><tr class="grp"><td colspan="12"><b>G-Schedule</b> <button class="link small" data-act="addExtra">＋ Extra item</button></td></tr>
@@ -244,12 +247,12 @@ function deviationView(p) {
 }
 
 function devTable(d, cls) {
-  const r6 = (r, i) => `<tr><td>${i + 1}</td><td class="desc">${esc(r.desc.slice(0, 160))}${r.desc.length > 160 ? "…" : ""}</td><td class="num">${r.extra ? "0.000" : qtyFmt(r.tqty)}</td><td>${esc(r.unit)}</td><td class="num">${m2(r.rate)}</td><td class="num">${m2(r.tamt)}</td><td class="num">${qtyFmt(r.qty)}</td><td>${esc(r.unit)}</td><td class="num">${m2(r.applied)}</td><td class="num">${m2(r.amt)}</td><td class="num">${r.excess ? m2(r.excess) : ""}</td><td class="num">${r.extraAmt ? m2(r.extraAmt) : ""}</td><td class="num">${r.saving ? m2(r.saving) : ""}</td></tr>`;
-  const tot = (label, o) => `<tr class="sub"><td></td><td><b>${label}</b></td><td colspan="3"></td><td class="num">${m2(o.tamt)}</td><td colspan="3"></td><td class="num">${m2(o.amt)}</td><td class="num">${m2(o.excess)}</td><td class="num">${m2(o.extraAmt)}</td><td class="num">${m2(o.saving)}</td></tr>`;
-  return `<div class="table-wrap"><table class="${cls} dev"><thead><tr><th rowspan="2">S.No</th><th rowspan="2">Particulars</th><th colspan="4">As per "G" Schedule</th><th colspan="4">As per actual executed</th><th colspan="3">Amount</th></tr>
+  const r6 = (r, i) => `<tr><td>${i + 1}</td><td class="desc">${esc(r.desc.slice(0, 160))}${r.desc.length > 160 ? "…" : ""}</td><td class="num">${r.extra ? "0.000" : qtyFmt(r.tqty)}</td><td>${esc(r.unit)}</td><td class="num">${m2(r.rate)}</td><td class="num">${m2(r.tamt)}</td><td class="num">${qtyFmt(r.qty)}</td><td>${esc(r.unit)}</td><td class="num">${m2(r.applied)}</td><td class="num">${m2(r.amt)}</td><td class="num">${r.excess ? m2(r.excess) : ""}</td><td class="num">${r.extraAmt ? m2(r.extraAmt) : ""}</td><td class="num">${r.saving ? m2(r.saving) : ""}</td><td></td></tr>`;
+  const tot = (label, o) => `<tr class="sub"><td></td><td><b>${label}</b></td><td colspan="3"></td><td class="num">${m2(o.tamt)}</td><td colspan="3"></td><td class="num">${m2(o.amt)}</td><td class="num">${m2(o.excess)}</td><td class="num">${m2(o.extraAmt)}</td><td class="num">${m2(o.saving)}</td><td></td></tr>`;
+  return `<div class="table-wrap"><table class="${cls} dev"><thead><tr><th rowspan="2">S.No</th><th rowspan="2">Particular</th><th colspan="4">As per "G" Schedule</th><th colspan="4">As per Actual Executed of work</th><th colspan="3">Amount</th><th rowspan="2">Remarks</th></tr>
     <tr><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Excess</th><th>Extra</th><th>Saving</th></tr></thead><tbody>
     ${d.G.map(r6).join("")}${tot("Total", d.gT)}${tot(esc(tpLabel(d.c)), d.gTp)}${tot("G. Total", d.gNet)}
-    ${d.H.length ? `<tr class="grp"><td></td><td colspan="12"><b>H-Schedule</b></td></tr>${d.H.map(r6).join("")}` : ""}${tot("Grand Total", d.grand)}</tbody></table></div>`;
+    ${d.H.length ? `<tr class="grp"><td></td><td colspan="13"><b>H-Schedule</b></td></tr>${d.H.map(r6).join("")}` : ""}${tot("Grand Total", d.grand)}</tbody></table></div>`;
 }
 
 function photosView(p, c) {
@@ -301,6 +304,7 @@ function onClick(e) {
     list.splice(+tr.dataset.pi, 1);
     if (list.length <= 1) { const x = list[0]; delete bill.parts[id]; if (x) { bill.qty[id] = num(x.qty); if (x.rate !== "" && x.rate != null) (bill.partRate ||= {})[id] = num(x.rate); } }
   }
+  if (act === "loadPrevBill") { pickFiles(".pdf,image/*", importPreviousBills); return; }
   if (act === "loadWO") { pickFiles(".pdf,image/*", loadWorkOrder); return; }
   if (act === "loadBOQ") { pickFiles(".xls,.pdf,image/*", loadBoq); return; }
   if (act === "addExtra") { addExtraDialog(p); return; }
@@ -388,7 +392,8 @@ function headerBlock(p, c, title) {
     <tr><td><b>Work order / agreement No.:</b> ${esc(c.workOrderNo)} ${c.woDate ? `dated ${esc(c.woDate)}` : ""}</td></tr>
     <tr><td><b>Name of contractor:</b> ${esc(c.contractor)}</td></tr></table></header>`;
 }
-const signs = (list = ["Junior Engineer", "Assistant Engineer", "Executive Engineer"]) => `<div class="p-sign">${list.map((s) => `<div>${s}</div>`).join("")}</div>`;
+const signs = (list = ["Junior Engineer", "Assistant Engineer", "Executive Engineer"], office = "") => `<div class="p-sign">${list.map((s) => `<div>${s.toUpperCase()}${office ? `,<br>${esc(office.toUpperCase())}` : ""}</div>`).join("")}</div>`;
+const fieldsTable = (rows) => `<table class="p-fields2">${rows.map(([k, v]) => `<tr><td>${k}</td><td>:</td><td>${v}</td></tr>`).join("")}</table>`;
 
 function printView(kind) {
   const p = ctx.project(); const c = contract(p); const bill = currentBill(p);
@@ -421,6 +426,44 @@ function printHtml(p, c, bill, kind) {
     const tot = (l, a, b = a, cls = "p-tot") => `<tr class="${cls}"><td colspan="5">${l}</td><td class="n">${m2(a)}</td><td class="n">${b === "" ? "" : m2(b)}</td><td></td></tr>`;
     const used = (r) => r.qty || r.prevQty;
     const words = amountInWords(k.say);
+    // I - Account, split into A4 pages with "Carried Over" / "B/F" like the department's bills.
+    const colgroup = `<colgroup><col style="width:6%"><col style="width:8%"><col style="width:8%"><col style="width:41%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col style="width:6%"></colgroup>`;
+    const thead = `<thead><tr><th rowspan="2">Unit</th><th rowspan="2">Quantity executed (or supplied) since last certificate</th><th rowspan="2">Quantity executed (or supplied) up-to-date as per Measurement Book</th><th rowspan="2">Item of work or supplies (grouped under "sub-heads" and "sub-work" of estimate)</th><th rowspan="2">Rate in Rs.</th><th colspan="2">AMOUNT</th><th rowspan="2">Remarks</th></tr>
+      <tr><th>% up-to-date</th><th>Since previous bill Total for each sub-head</th></tr><tr class="p-colno"><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th></tr></thead>`;
+    const seq = [];
+    const add = (html, lines, a6 = 0, a7 = 0) => seq.push({ html, lines, a6, a7 });
+    const est = (r) => Math.max(2, Math.ceil((r.desc.length + 8) / 44)) + (r.parts ? r.parts.length + 1 : 0) + (!r.parts && r.withheld > 0.004 ? 1 : 0);
+    add(`<tr class="p-sec"><td colspan="8">G-Schedule</td></tr>`, 1);
+    k.gRows.filter(used).forEach((r) => add(row(r), est(r), r.amt, r.since));
+    add(tot("TOTAL", k.gTotal, round(k.gTotal - pk.gTotal, 2)), 1);
+    add(tot(esc(tpLabel(c)), k.tp, round(k.tp - pk.tp, 2)), 1);
+    add(tot("TOTAL G-SCHEDULE", k.gNet, round(k.gNet - pk.gNet, 2)), 1);
+    if (k.hRows.some(used)) {
+      add(`<tr class="p-sec"><td colspan="8">H-Schedule</td></tr>`, 1);
+      k.hRows.filter(used).forEach((r) => add(row(r), est(r), r.amt, r.since));
+      add(tot("TOTAL H-SCHEDULE", k.hTotal, round(k.hTotal - pk.hTotal, 2)), 1);
+    }
+    add(tot("Total value of work done or supplies made to date", k.total, round(k.total - k.prevTotal, 2), "p-grand"), 2);
+    add(tot("Deduct value of work or supplies shown in previous bill", k.prevTotal, ""), 2);
+    add(tot("Net value of work or supplies since previous bill", k.net, ""), 2);
+    add(tot("SAY", k.say, "", "p-grand"), 1);
+    const certHtml = `<p class="p-words">Net value in words: ${esc(words)}</p>
+      <p class="p-foot">* The full name of the work as given in the estimate should be entered here.<br>If the outlay on the work is recorded by sub-heads, the total for each sub-head should be shown in column 6 and against this total there should be an entry in column 7 also. In no other case should any entries be made in column 7.</p>
+      <div class="p-keep"><h3 class="c">II - Certificate and signature</h3>
+      <p>(1) The measurements were made by ${esc(bill.jen || c.jen || "....................")} on ${esc(bill.measured || "..............")} and are recorded at page ${esc(bill.mbPages || "......")} of Measurement Book No. ${esc(bill.mbNo || "..........")}, and were checked by ${esc(bill.aen || c.aen || "....................")} on ..............</p>
+      <p>(2) The connected measurements have been closed against this bill.</p>
+      <p>Certificate: 1. The work is satisfactory and as per specifications and the G-Schedule. 2. Nothing is outstanding against the contractor regarding this bill.</p>
+      <div class="p-sign4"><div>Dated signature of officer preparing the bill<br><b>${esc(c.jen || "")}</b><br>Junior Engineer</div><div><br><b>${esc(c.aen || "")}</b><br>Assistant Engineer</div><div><br><b>${esc(c.xen || "")}</b><br>Executive Engineer</div><div>Dated left-hand thumb impression or dated signature of contractor<br><b>${esc(c.contractor)}</b></div></div></div>`;
+    const pages = [[]]; const carry = [];
+    let usedLines = 0, cap = 17, run6 = 0, run7 = 0;
+    for (const it of seq) {
+      if (usedLines + it.lines > cap && pages.at(-1).length) { carry.push([run6, run7]); pages.push([]); usedLines = 0; cap = 34; }
+      pages.at(-1).push(it); usedLines += it.lines; run6 += it.a6; run7 += it.a7;
+    }
+    const cf = (label, [x, y]) => `<tr class="p-tot"><td colspan="5" class="${label === "B/F" ? "n" : ""}">${label}</td><td class="n">${m2(x)}</td><td class="n">${m2(y)}</td><td></td></tr>`;
+    const accountPages = pages.map((pg, pi) => `${pi ? `<section class="p-page p-27g">` : ""}${pi ? "" : `<h3 class="c">A - ACCOUNT OF WORK OR SUPPLIES</h3>`}
+      <table class="p-table p-bill">${colgroup}${thead}<tbody>${pi ? cf("B/F", carry[pi - 1]) : ""}${pg.map((x) => x.html).join("")}${pi < pages.length - 1 ? cf("Carried Over........................", carry[pi]) : ""}</tbody></table>
+      ${pi < pages.length - 1 ? `<div class="p-pageno c">${pi + 1}</div></section>` : `${certHtml}<div class="p-pageno c">${pi + 1}</div>`}`).join("");
     html = `<section class="p-page p-27g">
       <div class="p-form-no">P.W.A. FORM No. 27G<br>Sec. Chap. XIV, Paras 440, 444 &amp; 445</div>
       <p class="p-note">Final payment must invariably be made on forms printed on yellow paper, which should not be used for intermediate payments.</p>
@@ -437,26 +480,7 @@ function printHtml(p, c, bill, kind) {
         <tr><td>Stipulated date of completion of work</td><td colspan="2">: ${esc(c.stipulated)}</td></tr>
         <tr><td>Date of actual completion of work</td><td colspan="2">: ${esc(c.completed || "W.I.P.")}</td></tr>
         <tr><td>Date of measurements</td><td colspan="2">: ${esc(bill.measured || "")}</td></tr></table>
-      <h3 class="c">I - Account of work or supplies</h3>
-      <table class="p-table p-bill"><colgroup><col style="width:6%"><col style="width:8%"><col style="width:8%"><col style="width:41%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col style="width:6%"></colgroup>
-      <thead><tr><th>Unit</th><th>Quantity executed (or supplied) since last certificate</th><th>Quantity executed (or supplied) up-to-date as per M.B.</th><th>Item of work or supplies (grouped under sub-heads and sub-works of the estimate)</th><th>Rate (Rs.)</th><th>Amount up-to-date</th><th>Since previous bill</th><th>Remarks</th></tr>
-      <tr class="p-colno"><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th></tr></thead><tbody>
-      <tr class="p-sec"><td colspan="8">G-Schedule</td></tr>
-      ${k.gRows.filter(used).map(row).join("")}
-      ${tot("TOTAL", k.gTotal, round(k.gTotal - pk.gTotal, 2))}
-      ${tot(esc(tpLabel(c)), k.tp, round(k.tp - pk.tp, 2))}${tot("TOTAL G-SCHEDULE", k.gNet, round(k.gNet - pk.gNet, 2))}
-      ${k.hRows.some(used) ? `<tr class="p-sec"><td colspan="8">H-Schedule</td></tr>${k.hRows.filter(used).map(row).join("")}${tot("TOTAL H-SCHEDULE", k.hTotal, round(k.hTotal - pk.hTotal, 2))}` : ""}
-      ${tot("Total value of work done or supplies made to date", k.total, round(k.total - k.prevTotal, 2), "p-grand")}
-      ${tot("Deduct value of work or supplies shown in the previous bill", k.prevTotal, "")}
-      ${tot("Net value of work or supplies since the previous bill", k.net, "")}
-      ${tot("SAY", k.say, "", "p-grand")}</tbody></table>
-      <p class="p-words">Net value in words: ${esc(words)}</p>
-      <p class="p-foot">* The full name of the work as given in the estimate should be entered here.<br>If the outlay on the work is recorded by sub-heads, the total for each sub-head should be shown in column 6 and against this total there should be an entry in column 7 also. In no other case should any entries be made in column 7.</p>
-      <div class="p-keep"><h3 class="c">II - Certificate and signature</h3>
-      <p>(1) The measurements were made by ${esc(bill.jen || c.jen || "....................")} on ${esc(bill.measured || "..............")} and are recorded at page ${esc(bill.mbPages || "......")} of Measurement Book No. ${esc(bill.mbNo || "..........")}, and were checked by ${esc(bill.aen || c.aen || "....................")} on ..............</p>
-      <p>(2) The connected measurements have been closed against this bill.</p>
-      <p>Certificate: 1. The work is satisfactory and as per specifications and the G-Schedule. 2. Nothing is outstanding against the contractor regarding this bill.</p>
-      <div class="p-sign4"><div>Dated signature of officer preparing the bill<br><b>${esc(c.jen || "")}</b><br>Junior Engineer</div><div><br><b>${esc(c.aen || "")}</b><br>Assistant Engineer</div><div><br><b>${esc(c.xen || "")}</b><br>Executive Engineer</div><div>Dated left-hand thumb impression or dated signature of contractor<br><b>${esc(c.contractor)}</b></div></div></div></section>
+      ${accountPages}</section>
       <section class="p-page p-27g"><h3 class="c">III - Memorandum of payment</h3>
       <table class="p-table p-memo"><tbody>
         <tr><td>1. Total value of work done, as per account I, column 6</td><td class="n">${m2(k.total)}</td></tr>
@@ -476,20 +500,24 @@ function printHtml(p, c, bill, kind) {
   } else if (kind === "slip" && bill) {
     const k = computeBill(p, bill);
     const ex = k.rows.filter((r) => r.extra);
-    html = `<section class="p-page">${headerBlock(p, c, "EXTRA ITEM SLIP")}
-      <table class="p-table"><thead><tr><th>S.No.</th><th>Details</th><th>Quantity</th><th>Rate</th><th>Amount</th><th>Remarks</th></tr></thead><tbody>
-      ${ex.map((r, i) => `<tr><td>${i + 1}</td><td class="p-desc">${esc(r.desc)}</td><td class="n">${qtyFmt(r.qty)} ${esc(r.unit)}</td><td class="n">${m2(r.applied)}</td><td class="n">${m2(r.amt)}</td><td></td></tr>`).join("")}
-      <tr class="p-tot"><td></td><td colspan="3">Total</td><td class="n">${m2(k.extraGross)}</td><td></td></tr>
-      <tr class="p-tot"><td></td><td colspan="3">${esc(tpLabel(c))}</td><td class="n">${m2(k.extraNet - k.extraGross)}</td><td></td></tr>
-      <tr class="p-grand"><td></td><td colspan="3">G/Total</td><td class="n">${m2(k.extraNet)}</td><td></td></tr></tbody></table>
-      ${signs()}</section>`;
+    html = `<section class="p-page p-slip"><div class="c"><b>OFFICE OF THE ${esc((c.office || p.client || "").toUpperCase())}</b><h1>EXTRA ITEM SLIP</h1></div>
+      ${fieldsTable([["Name of Work", esc(p.name)], ["Contract Document No.", `${esc(c.workOrderNo)}${c.woDate ? ` Dated ${esc(c.woDate)}` : ""}`], ["Name of Contractor", esc(c.contractor)]])}
+      <table class="p-table"><colgroup><col style="width:7%"><col style="width:45%"><col style="width:14%"><col style="width:11%"><col style="width:13%"><col style="width:10%"></colgroup>
+      <thead><tr><th>S.No.</th><th>Details</th><th>Quantity</th><th>Rate</th><th>Amount</th><th>Remarks</th></tr></thead><tbody>
+      ${ex.map((r, i) => `<tr><td class="c">${i + 1}</td><td class="p-desc">${esc(r.desc)}</td><td class="n">${qtyFmt(r.qty)} ${esc(r.unit)}</td><td class="n">${m2(r.applied)}</td><td class="n">${m2(r.amt)}</td><td></td></tr>`).join("")}
+      <tr class="p-tot"><td></td><td class="n" colspan="3">Total :</td><td class="n">${m2(k.extraGross)}</td><td></td></tr>
+      <tr class="p-tot"><td></td><td class="n" colspan="3">${esc(tpLabel(c))}</td><td class="n">${m2(Math.abs(k.extraNet - k.extraGross))}</td><td></td></tr>
+      <tr class="p-grand"><td></td><td class="n" colspan="3">G/Total :</td><td class="n">${m2(k.extraNet)}</td><td></td></tr></tbody></table>
+      ${signs(["Junior Engineer", "Assistant Engineer", "Executive Engineer"], c.office || p.client)}</section>`;
   } else if (kind === "deviation") {
     const d = deviationRows(p);
-    html = `<section class="p-page p-landscape">${headerBlock(p, c, "DEVIATION STATEMENT")}${devTable(d, "p-table")}${signs()}</section>`;
+    html = `<section class="p-page p-landscape p-dev"><h1 class="c">DEVIATION STATEMENT</h1>
+      ${fieldsTable([["Name of Work", esc(p.name)], ["Name of Agency", esc(c.contractor)], ["Agreement No.", `${esc(c.workOrderNo)}${c.woDate ? ` Dated ${esc(c.woDate)}` : ""}`]])}
+      ${devTable(d, "p-table")}${signs(["Junior Engineer", "Assistant Engineer", "Executive Engineer"], c.office || p.client)}</section>`;
   } else if (kind === "photos") {
     const pages = [];
     for (let i = 0; i < p.photos.length; i += 4) pages.push(p.photos.slice(i, i + 4));
-    html = pages.map((ph, pi) => `<section class="p-page p-photos"><header class="p-head"><div class="p-org">${esc(c.office || p.client || "")}</div>
+    html = pages.map((ph, pi) => `<section class="p-page p-photos p-landscape"><header class="p-head"><div class="p-org">${esc(c.office || p.client || "")}</div>
         <div><b>Name of work:</b> ${esc(p.name)}</div><div><b>Work order No.:</b> ${esc(c.workOrderNo)} ${c.woDate ? `dated ${esc(c.woDate)}` : ""}${bill ? ` · ${esc(billTitle(p, bill))}` : ""}</div></header>
       <div class="p-photo-grid">${ph.map((x) => `<figure><img src="${x.src}" alt="">${x.caption ? `<figcaption>${esc(x.caption)}</figcaption>` : ""}</figure>`).join("")}</div>
       ${signs(["JEN", "AEN", "XEN"])}<div class="p-pageno">Page ${pi + 1} of ${pages.length}</div></section>`).join("");
@@ -595,5 +623,70 @@ async function loadBoq(files) {
     p.bills = []; view.billId = "";
     ctx.saveProject(); renderBills();
     docStatus(`BOQ loaded: ${items.filter((i) => i.schedule === "G").length} G-Schedule and ${items.filter((i) => i.schedule === "H").length} H-Schedule items.`, "ok");
+  } catch (e) { console.error(e); docStatus(e.message, "err"); }
+}
+
+// ---------------------------------------------------------------------------
+// Previous bills (already submitted) so that later bills and the deviation are exact
+// ---------------------------------------------------------------------------
+
+const normNo = (v) => String(v ?? "").trim().replace(/\.0+$/, "").replace(/^0+(\d)/, "$1");
+
+async function importPreviousBills(files) {
+  if (!files.length) return;
+  if (!hasKey()) { ctx.toast("Reading a bill needs a Claude or OpenAI key (Settings). You can also enter the old bill by hand with “New running bill”."); return; }
+  const p = ctx.project(); contract(p);
+  try {
+    docStatus("Reading the bill…");
+    const x = await extractBill(await aiParts(files), { onText: (n) => docStatus(`Reading the bill… ${Math.round(n / 100) / 10}k`) });
+    const L = lines(p);
+    const bill = { id: uid("bl"), kind: x.is_final ? "final" : "running", date: x.bill_date || "", qty: {}, partRate: {}, parts: {}, imported: true, importedTotal: num(x.total_up_to_date) };
+    const groups = new Map(); const missing = [];
+    for (const it of x.items) {
+      let line;
+      if (it.is_extra) {
+        const key = it.description.toLowerCase().replace(/\s+/g, " ").slice(0, 30);
+        let ex = p.extras.find((e) => e.description.toLowerCase().replace(/\s+/g, " ").startsWith(key.slice(0, 20)));
+        if (!ex) { ex = { id: uid("x"), description: it.description, unit: it.unit, rate: num(it.full_rate) || num(it.paid_rate) }; p.extras.push(ex); }
+        line = { id: ex.id, rate: ex.rate };
+      } else {
+        const same = L.filter((l) => !l.extra && l.s === it.schedule);
+        const full = num(it.full_rate) || num(it.paid_rate);
+        line = same.find((l) => normNo(l.no) === normNo(it.boq_no));
+        // Bill numbering does not always follow the BOQ: fall back to the item with the same agreement rate.
+        if (full && (!line || (line.rate && Math.abs(line.rate - full) > 0.5))) {
+          const byRate = same.filter((l) => Math.abs(l.rate - full) <= 0.5);
+          const pick = byRate.length === 1 ? byRate[0] : byRate.find((l) => normNo(l.no).startsWith(normNo(it.boq_no) + "."));
+          if (pick) line = pick;
+          else if (line && line.rate) line = null;
+        }
+        // "1" in the bill may be "1.01" in the BOQ, and a schedule with a single item needs no number at all.
+        if (!line) line = same.filter((l) => normNo(l.no).startsWith(normNo(it.boq_no) + ".")).length === 1 ? same.find((l) => normNo(l.no).startsWith(normNo(it.boq_no) + ".")) : same.length === 1 ? same[0] : null;
+      }
+      if (!line) { missing.push(`${it.schedule}-${it.boq_no || "?"} ${it.description.slice(0, 40)}`); continue; }
+      if (!groups.has(line.id)) groups.set(line.id, { line, parts: [] });
+      groups.get(line.id).parts.push(it);
+    }
+    for (const { line, parts } of groups.values()) {
+      // H-Schedule items in an item-rate BOQ often have no rate in the BOQ: take the agreement rate from the bill.
+      if (!line.rate && parts[0].full_rate) {
+        const item = p.sections.flatMap((s) => s.items).find((i) => i.id === line.id); if (item) item.rate = num(parts[0].full_rate);
+        line.rate = num(parts[0].full_rate);
+      }
+      if (parts.length === 1) {
+        bill.qty[line.id] = num(parts[0].qty_up_to_date);
+        if (num(parts[0].paid_rate) && Math.abs(num(parts[0].paid_rate) - line.rate) > 0.004) bill.partRate[line.id] = num(parts[0].paid_rate);
+      } else bill.parts[line.id] = parts.map((q) => ({ qty: num(q.qty_up_to_date), rate: Math.abs(num(q.paid_rate) - line.rate) > 0.004 ? num(q.paid_rate) : "" }));
+    }
+    const n = Math.max(1, Math.round(num(x.bill_number)) || p.bills.length + 1);
+    const at = Math.min(p.bills.filter((b) => b.kind !== "final").length, n - 1);
+    p.bills.splice(at, 0, bill);
+    view.billId = bill.id; view.tab = "bill";
+    ctx.saveProject(); renderBills();
+    const got = computeBill(p, bill).total;
+    const diff = round(got - bill.importedTotal, 2);
+    const msg = `${billTitle(p, bill)} read: ${groups.size} items.${missing.length ? ` Not matched to the BOQ: ${missing.join("; ")}.` : ""} ${bill.importedTotal ? (Math.abs(diff) < 1 ? `Total matches the bill (${money(got)}).` : `Total here ${money(got)} vs bill ${money(bill.importedTotal)} (difference ${money(diff)}) — please check.`) : ""}`;
+    docStatus(msg, Math.abs(diff) < 1 && !missing.length ? "ok" : "err");
+    ctx.toast(msg, 9000);
   } catch (e) { console.error(e); docStatus(e.message, "err"); }
 }
