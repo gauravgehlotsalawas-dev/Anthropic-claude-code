@@ -4,6 +4,7 @@ import { uid, round, num, money, qtyFmt, esc, itemQty, amountInWords } from "./s
 import { readNicBoq } from "./nicboq.js";
 import { pdfjsLib } from "./bsr-import.js";
 import { buildDemoProject } from "./demo.js";
+import { readDocument, parseWorkOrder, parseBoqLines, parseBoqRows } from "./docread.js";
 
 /** Dates print as on the department's papers: 29.08.2025. */
 const fd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v).split("-").reverse().join(".") : esc(v || ""));
@@ -146,8 +147,8 @@ export function renderBills() {
 function contractView(p, c) {
   const f = (k, label, type = "text", ph = "") => `<label class="field">${label}<input data-c="${k}" type="${type}" value="${esc(c[k] ?? "")}" placeholder="${ph}"></label>`;
   return `<div class="card upload-card"><h2>Start from the documents</h2>
-    <p class="muted small">Upload the tender BOQ: the GePNIC .xls (G- and H-Schedule tabs) or its printed PDF. Then fill in the work order details below.</p>
-    <div class="row gap wrap"><button class="primary" data-act="loadBOQ">Upload BOQ (.xls / PDF)</button><button class="ghost" data-act="demo" title="A complete fictional work with two running bills, extra items and photos">Load demo (Gaurav Nagar Nigam)</button><span class="status" id="docStatus"></span></div></div>
+    <p class="muted small">Upload the work order and the BOQ as PDF, Excel, Word or photos (several photos for several pages). Scans and photos are read on this computer with OCR, no internet service. You check every value before it is used.</p>
+    <div class="row gap wrap"><button class="primary" data-act="loadWO">Upload work order</button><button class="primary" data-act="loadBOQ">Upload BOQ</button><button class="ghost" data-act="demo" title="A complete fictional work with two running bills, extra items and photos">Load demo (Gaurav Nagar Nigam)</button><span class="status" id="docStatus"></span></div></div>
     <div class="card"><h2>Contract details</h2>
     <p class="muted small">From the work order / agreement. Used on the bill, extra item slip, deviation statement and photo sheets.</p>
     <div class="form-grid">
@@ -329,7 +330,8 @@ function onClick(e) {
     p.bills.push(b); view.billId = b.id;
   }
   if (act === "demo") { const d = buildDemoProject(); view.tab = "bill"; view.billId = d.bills.at(-1).id; ctx.addProject(d); return; }
-  if (act === "loadBOQ") { pickFiles(".xls,.pdf", loadBoq); return; }
+  if (act === "loadBOQ") { pickFiles(".xls,.xlsx,.ods,.csv,.pdf,.docx,image/*", loadBoq); return; }
+  if (act === "loadWO") { pickFiles(".pdf,.xls,.xlsx,.docx,.txt,image/*", loadWorkOrder); return; }
   if (act === "addExtra") { addExtraDialog(p); return; }
   if (act === "delExtra") { const id = e.target.closest("[data-x]").dataset.x; if (!confirm("Remove this extra item?")) return; p.extras = p.extras.filter((x) => x.id !== id); }
   if (act === "excel") { exportExcel(p); return; }
@@ -492,36 +494,115 @@ const docStatus = (t, cls = "") => { const s = $("#docStatus"); if (s) { s.textC
 
 async function loadBoq(files) {
   if (!files.length) return;
-  const p = ctx.project();
-  const hasItems = p.sections.some((s) => s.items.length);
-  if (hasItems && !confirm("Replace the BOQ items of this project with the uploaded BOQ? (Bills already made refer to the old items.)")) return;
   try {
-    const items = [];
-    for (const f of files) {
-      if (/\.xls$/i.test(f.name)) {
-        const buf = await f.arrayBuffer();
-        const first = readNicBoq(buf);
+    let items = [];
+    const nicXls = files.filter((f) => /\.xls$/i.test(f.name));
+    for (const f of nicXls) {
+      try {
+        const buf = await f.arrayBuffer(); const first = readNicBoq(buf);
         for (const n of first.sheetNames) {
-          const info = readNicBoq(buf, n);
-          const sched = info.boqType === "Percentage" ? "G" : "H";
-          info.items.filter((i) => !i.heading).forEach((i) => items.push({ schedule: sched, sno: i.sno, description: i.description, quantity: i.qty || 0, unit: i.unit, rate: i.rate || 0 }));
+          const info = readNicBoq(buf, n); const sched = info.boqType === "Percentage" ? "G" : "H";
+          info.items.filter((i) => !i.heading).forEach((i) => items.push({ schedule: sched, sno: String(i.sno), description: i.description, quantity: i.qty || 0, unit: i.unit, rate: i.rate || 0 }));
         }
-      } else {
-        docStatus(`Reading ${f.name}…`);
-        const got = await parseNicPdf(f);
-        if (!got.length) throw new Error(`${f.name}: no BOQ items found. Use the PDF printed from the GePNIC BOQ (with text, not a scan), or the .xls.`);
-        items.push(...got);
+      } catch { items.push(...parseBoqRows((await readDocument([f])).rows)); }
+    }
+    const rest = files.filter((f) => !nicXls.includes(f));
+    if (rest.length) {
+      const pdfs = rest.filter((f) => /\.pdf$/i.test(f.name));
+      for (const f of pdfs) { docStatus(`Reading ${f.name}…`); const got = await parseNicPdf(f); if (got.length) { items.push(...got); rest.splice(rest.indexOf(f), 1); } }
+      if (rest.length) {
+        const doc = await readDocument(rest, (t) => docStatus(t));
+        items.push(...(doc.rows.length ? parseBoqRows(doc.rows) : []), ...parseBoqLines(doc.lines));
+        if (!items.length) { docStatus("No BOQ items could be found. Check that the photo is straight and readable, or type the items.", "err"); return; }
       }
     }
-    if (!items.length) { docStatus("No items found in the BOQ.", "err"); return; }
-    const mk = (sched) => ({ id: uid("s"), name: `${sched}-Schedule`, items: items.filter((i) => i.schedule === sched).map((i) => ({
-      id: uid("b"), bsrId: "", code: "", description: i.description, unit: i.unit, qty: num(i.quantity), rate: num(i.rate), measurements: [], schedule: sched, sno: i.sno,
-    })) });
-    p.sections = [mk("G"), mk("H")].filter((s) => s.items.length);
-    p.bills = []; view.billId = "";
-    ctx.saveProject(); renderBills();
-    docStatus(`BOQ loaded: ${items.filter((i) => i.schedule === "G").length} G-Schedule and ${items.filter((i) => i.schedule === "H").length} H-Schedule items.`, "ok");
+    docStatus("");
+    reviewBoq(items);
   } catch (e) { console.error(e); docStatus(e.message, "err"); }
+}
+
+/** Let the user correct the items read from the BOQ before they are used. */
+function reviewBoq(items) {
+  const p = ctx.project();
+  const rows = () => items.map((it, i) => `<tr data-i="${i}"><td><select data-k="schedule"><option ${it.schedule === "G" ? "selected" : ""}>G</option><option ${it.schedule === "H" ? "selected" : ""}>H</option></select></td>
+    <td><input data-k="sno" class="w70" value="${esc(it.sno)}"></td><td><textarea data-k="description" rows="2">${esc(it.description)}</textarea></td>
+    <td><input data-k="quantity" type="number" step="any" class="w90 num ${num(it.quantity) ? "" : "need"}" value="${it.quantity}"></td><td><input data-k="unit" class="w70 ${String(it.unit).trim() ? "" : "need"}" value="${esc(it.unit)}" placeholder="unit"></td>
+    <td><input data-k="rate" type="number" step="any" class="w90 num ${num(it.rate) || it.schedule === "H" ? "" : "need"}" value="${it.rate}"></td><td><button class="icon danger-text" data-del>×</button></td></tr>`).join("");
+  const total = () => items.filter((i) => i.schedule === "G").reduce((a, i) => a + round(num(i.quantity) * num(i.rate), 2), 0);
+  ctx.modal(`<h2>Check the BOQ items</h2><p class="muted small">${items.length} items read (${items.filter((i) => i.schedule === "G").length} G-Schedule, ${items.filter((i) => i.schedule === "H").length} H-Schedule). Correct anything read wrongly (empty or doubtful cells are highlighted), delete stray lines, then load. <span id="rvTot"></span></p>
+    <div class="table-wrap tall"><table class="data small"><thead><tr><th>Sch.</th><th>S.No</th><th>Description</th><th>Qty</th><th>Unit</th><th>Rate</th><th></th></tr></thead><tbody id="rvBody">${rows()}</tbody></table></div>
+    <div class="row gap mt"><button class="ghost" id="rvAdd">＋ Add a line</button><button class="primary" id="rvLoad">Load these items</button></div>`, (m) => {
+    const tot = () => { $("#rvTot", m).textContent = `G-Schedule total: ${money(total())}`; };
+    tot();
+    $("#rvBody", m).onchange = (e) => { const tr = e.target.closest("tr"); const k = e.target.dataset.k; if (!k) return; items[+tr.dataset.i][k] = ["quantity", "rate"].includes(k) ? num(e.target.value) : e.target.value; tot(); };
+    $("#rvBody", m).onclick = (e) => { if (!e.target.matches("[data-del]")) return; items.splice(+e.target.closest("tr").dataset.i, 1); $("#rvBody", m).innerHTML = rows(); tot(); };
+    $("#rvAdd", m).onclick = () => { items.push({ schedule: "G", sno: String(items.length + 1), description: "", quantity: 0, unit: "", rate: 0 }); $("#rvBody", m).innerHTML = rows(); };
+    $("#rvLoad", m).onclick = () => {
+      const keep = items.filter((i) => String(i.description).trim());
+      if (p.sections.some((s) => s.items.length) && !confirm("Replace the BOQ items of this project? Bills already made refer to the old items.")) return;
+      const mk = (sched) => ({ id: uid("s"), name: `${sched}-Schedule`, items: keep.filter((i) => i.schedule === sched).map((i) => ({
+        id: uid("b"), bsrId: "", code: "", description: i.description, unit: i.unit, qty: num(i.quantity), rate: num(i.rate), measurements: [], schedule: sched, sno: i.sno,
+      })) });
+      p.sections = [mk("G"), mk("H")].filter((s) => s.items.length);
+      p.bills = []; view.billId = "";
+      applyHRates(p);
+      ctx.closeModal(); ctx.saveProject(); renderBills();
+      docStatus(`BOQ loaded: ${keep.filter((i) => i.schedule === "G").length} G-Schedule and ${keep.filter((i) => i.schedule === "H").length} H-Schedule items.${checkAmount(p)}`, "ok");
+    };
+  });
+}
+
+/** H-Schedule rates from the work order fill H items that have no rate. */
+function applyHRates(p) {
+  const c = contract(p); const hr = c.hRates || [];
+  const H = p.sections.flatMap((s) => s.items).filter((it) => sched(it) === "H");
+  hr.forEach((r, k) => {
+    const it = H.find((x) => String(x.sno).replace(/\.0*1$/, "") === String(r.item)) || H[k];
+    if (it && !num(it.rate)) it.rate = r.rate;
+  });
+}
+const checkAmount = (p) => {
+  const c = contract(p); if (!num(c.woAmount)) return "";
+  const v = contractValue(p), d = round(v - num(c.woAmount), 2);
+  return Math.abs(d) <= Math.max(1, num(c.woAmount) * 0.0005) ? ` Contract value ${money(v)} matches the work order.` : ` Contract value here ${money(v)}, work order ${money(c.woAmount)} (difference ${money(d)}) — check T.P. and rates.`;
+};
+
+async function loadWorkOrder(files) {
+  if (!files.length) return;
+  try {
+    const doc = await readDocument(files, (t) => docStatus(t));
+    docStatus("");
+    reviewWorkOrder(parseWorkOrder(doc.lines), doc.lines);
+  } catch (e) { console.error(e); docStatus(e.message, "err"); }
+}
+
+function reviewWorkOrder(w, lines) {
+  const p = ctx.project(); const c = contract(p);
+  const F = [["contractor", "Name of contractor"], ["workOrderNo", "Work order / agreement No."], ["woDate", "Work order date", "date"], ["office", "Office / department"],
+    ["workName", "Name of work"], ["amount", "Work order amount", "number"], ["tpPct", "Tender premium %", "number"], ["commence", "Date of commencement", "date"],
+    ["stipulated", "Stipulated date of completion", "date"], ["jen", "JEN"], ["aen", "AEN"], ["xen", "XEN"]];
+  ctx.modal(`<h2>Check the work order details</h2><p class="muted small">Read from the document. Correct any value, untick what should not be used, then apply.</p>
+    <div class="form-grid">${F.map(([k, l, t]) => `<label class="field"><span><input type="checkbox" data-use="${k}" ${w[k] ? "checked" : ""}> ${l}</span>${k === "workName" ? `<textarea data-w="${k}" rows="3">${esc(w[k] || "")}</textarea>` : `<input data-w="${k}" type="${t || "text"}" value="${esc(w[k] ?? "")}">`}</label>`).join("")}
+      <label class="field"><span><input type="checkbox" data-use="tpDir" ${w.tpDir ? "checked" : ""}> T.P. below / above</span><select data-w="tpDir">${["below", "above", "par"].map((d) => `<option ${w.tpDir === d ? "selected" : ""}>${d}</option>`).join("")}</select></label></div>
+    ${w.hRates?.length ? `<p class="small"><label class="check"><input type="checkbox" data-use="hRates" checked> H-Schedule rates found: ${w.hRates.map((r) => `item ${esc(r.item)} – ${money(r.rate)}${r.unit ? "/" + esc(r.unit) : ""}`).join(", ")}</label></p>` : ""}
+    ${w.terms?.length ? `<p class="small"><label class="check"><input type="checkbox" data-use="terms" checked> ${w.terms.length} terms found</label></p>` : ""}
+    <details><summary class="small">Text read from the document</summary><pre class="mono small" style="white-space:pre-wrap;max-height:30vh;overflow:auto">${esc(lines.join("\n"))}</pre></details>
+    <button class="primary mt" id="woApply">Apply to this project</button>`, (m) => {
+    $("#woApply", m).onclick = () => {
+      const use = (k) => $(`[data-use="${k}"]`, m)?.checked;
+      const val = (k) => $(`[data-w="${k}"]`, m)?.value ?? "";
+      for (const k of ["contractor", "workOrderNo", "woDate", "office", "commence", "stipulated", "jen", "aen", "xen"]) if (use(k)) c[k] = val(k);
+      if (use("tpPct")) c.tpPct = num(val("tpPct"));
+      if (use("tpDir")) c.tpDir = val("tpDir");
+      if (use("amount")) c.woAmount = num(val("amount"));
+      if (use("workName") && val("workName").trim()) p.name = val("workName").trim();
+      if (use("office") && !p.client) p.client = val("office");
+      if (use("hRates")) { c.hRates = w.hRates; applyHRates(p); }
+      if (use("terms")) c.terms = w.terms;
+      ctx.closeModal(); ctx.saveProject(); renderBills();
+      docStatus(`Work order details applied.${checkAmount(p)}`, "ok");
+    };
+  });
 }
 
 
