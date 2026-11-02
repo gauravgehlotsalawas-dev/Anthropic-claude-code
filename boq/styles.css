@@ -533,3 +533,24 @@ table.dev tr.sub td { font-weight: 700; background: #f7faf8; }
 .d-slip .d-grid td { padding: 3pt 4pt; }
 .d-slip .d-fields { font-size: 11pt; }
 .d-dev .d-grid { font-size: 8.2pt; }
+/* last page fill and blank memorandum, like the printed bills */
+.f-diag { padding: 0 !important; position: relative; }
+.f-diag svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.f-memo2 { font-size: 10.5pt; }
+.m-tab { width: 100%; border-collapse: collapse; }
+.m-tab td { padding: 2pt 3pt; vertical-align: top; }
+.m-title { font-size: 12pt; border-bottom: 0.8pt solid #000; }
+.m-rs { border-left: 0.8pt solid #000; border-right: 0.8pt solid #000; }
+.m-tab tr:first-child td { border-bottom: 0.8pt solid #000; }
+.m-left { border-right: 0.8pt solid #000; }
+.m-abs { font-size: 12.5pt; text-align: center; border-bottom: 0.8pt solid #000; height: 14mm; vertical-align: top; }
+.m-mid { font-size: 9.5pt; }
+.m-top { padding-top: 14mm !important; }
+.m-box { border: 0.8pt solid #000; height: 48mm; }
+.m-box2 { height: 56mm; }
+.m-totrow td { border-top: 0.8pt solid #000; }
+.m-totrow .m-mid { border-left: 0.8pt solid #000; }
+.m-pay { margin: 2pt 0 0 2mm; }
+.m-line { border-bottom: 0.8pt solid #000; padding-bottom: 1pt; }
+.m-box { height: 33mm; } .m-box2 { height: 40mm; } .m-top { padding-top: 6mm !important; }
+.f-memo2 { font-size: 10pt; } .f-memo2 p { margin: 3pt 0; } .f-memo2 .f-small { font-size: 8.8pt; }

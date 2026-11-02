@@ -618,14 +618,14 @@ function form27g(p, c, bill) {
   const seq = [];
   byMb(k.gRows.filter(used)).forEach((r) => seq.push(itemRow(r)));
   // TOTAL … GRAND TOTAL stay together on one page, as in the printed bills.
-  seq.push({ html: [text("&nbsp;"), box("TOTAL", k.gTotal, round(k.gTotal - pk.gTotal, 2)), box(esc(tpLabel(c)), k.tp, round(k.tp - pk.tp, 2)),
+  seq.push({ kind: "totals", html: [text("&nbsp;"), box("TOTAL", k.gTotal, round(k.gTotal - pk.gTotal, 2)), box(esc(tpLabel(c)), k.tp, round(k.tp - pk.tp, 2)),
     box("TOTAL G-SCHEDULE", k.gNet, round(k.gNet - pk.gNet, 2)), box("GRAND TOTAL -", k.gNet, round(k.gNet - pk.gNet, 2), "f-grand")].map((x) => x.html).join("") });
   if (k.hRows.some(used)) {
     seq.push(text("<b>H-Schedule</b>"));
     serial = 0; // H-Schedule items are numbered afresh (1/1, 2/2 …)
     byMb(k.hRows.filter(used)).forEach((r) => seq.push({ ...itemRow(r), a6: 0, a7: 0 }));
   }
-  seq.push(text(`<div class="f-cert"><u><b>Certificate :-</b></u><br>1. Work is satisfactory and as per specifications and G-Schedule.<br>2. Nothing outstanding against contractor regarding this bill.</div>`, 4));
+  seq.push({ kind: "cert", ...text(`<div class="f-cert"><u><b>Certificate :-</b></u><br>1. Work is satisfactory and as per specifications and G-Schedule.<br>2. Nothing outstanding against contractor regarding this bill.</div>`, 4) });
 
   const thead = `<thead><tr><th rowspan="2" class="f-unit">Unit</th><th rowspan="2" class="f-rot"><div>Quantity executed (or supplied) since last certificate</div></th><th rowspan="2" class="f-rot"><div>Quantity executed (or supplied up-to-date as per Measurement Book)</div></th>
     <th rowspan="2">Item of work Supplies (grouped under "sub-heads" and "sub-work" of estimate)</th><th rowspan="2">Rate in Rs.</th><th colspan="2">AMOUNT</th><th rowspan="2" class="f-rot f-rem"><div>Remarks</div></th></tr>
@@ -683,8 +683,14 @@ function form27g(p, c, bill) {
     }
     if (i < seq.length) { carry.push([s6, s7]); pages.push([]); }
   }
+  const filler = (px, diagonal) => px > 2 ? `<tr class="f-fill"><td style="height:${px.toFixed(1)}px"></td><td></td><td></td><td></td><td></td>${diagonal ? `<td colspan="2" class="f-diag"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><line x1="8" y1="0" x2="92" y2="100" stroke="#000" stroke-width="0.6" vector-effect="non-scaling-stroke"/></svg></td>` : "<td></td><td></td>"}<td></td></tr>` : "";
   const out = pages.map((pg, pi) => {
     const last = pi === pages.length - 1;
+    if (last) {
+      const spare = Math.max(0, roomLast(pages.length === 1) - pg.reduce((a, y) => a + y.h, 0) - 4);
+      const ti = pg.findIndex((x) => x.kind === "totals"), ci = pg.findIndex((x) => x.kind === "cert");
+      pg = pg.map((x, i) => ({ ...x, html: (i === ti && ti > 0 ? filler(spare * 0.3, false) : "") + (i === ci ? filler(spare * (ti > 0 ? 0.7 : 1), true) : "") + x.html }));
+    }
     const bf = pi ? `<tr class="f-bf"><td></td><td></td><td></td><td class="r"><b>B/F</b></td><td></td><td class="r">${n2(carry[pi - 1][0])}</td><td class="r">${n2(carry[pi - 1][1])}</td><td></td></tr>` : "";
     const co = !last ? `<tr class="f-co"><td></td><td></td><td></td><td class="c"><b><u>Carried Over..............................</u></b></td><td></td><td class="r"><b>${n2(carry[pi][0])}</b></td><td class="r"><b>${n2(carry[pi][1])}</b></td><td></td></tr>` : "";
     return `<section class="p-page f27">${pi ? (pi === 1 ? `<div class="f-note">be an entry in column 7 also. In no other case should any entries be made in column 7.</div>` : "") : head}
@@ -698,35 +704,36 @@ function form27g(p, c, bill) {
 function certificateBlock(c, bill) {
   const line = (v, w = 160) => `<span class="f-line" style="min-width:${w}px">${esc(v || "")}</span>`;
   return `<div class="f-cert2"><div class="f-acc">II-CERTIFICATE AND SIGNATURE</div>
-    <p>(1) The measurements were made by ${line(bill.jen || c.jen, 170)} on ${line(bill.measured, 170)} and</p>
+    <p>(1) The measurements were made by ${line((bill.jen || c.jen || "") + " JEN", 170)} on ${line(bill.measured, 170)} and</p>
     <p>&nbsp;&nbsp;&nbsp;&nbsp;as recorded at Page ${line(bill.mbPages, 90)} of Measurements Book No ${line(bill.mbNo, 170)} and were checked by</p>
-    <p>&nbsp;&nbsp;&nbsp;&nbsp;(Names) ${line(bill.aen || c.aen, 200)} on ${line("", 120)}.</p>
+    <p>&nbsp;&nbsp;&nbsp;&nbsp;(Names) ${line(`Sh. ${bill.aen || c.aen || ""}&nbsp;&nbsp;&nbsp;&nbsp; AEN`.replace(/&nbsp;/g, " "), 200)} on ${line("", 120)}.</p>
     <p>(2) The connected measurement have been closed of against bill.</p>
     <div class="f-signs"><div><p>Dated Signature of Office Preparing the bill.</p><p class="f-gap">Dated Left-Hand Thumb Impression or</p><p class="c">Dated Signature of</p></div>
       <div class="f-rank"><p>Rank.......................................</p><p>Sub-division..............................</p><p>Division...................................</p></div></div></div>`;
 }
 
 function memorandum(p, c, bill, k, prevBill, pageNo) {
-  const amt = (v) => (v ? n2(v) : "");
-  return `<section class="p-page f27"><table class="f-memo"><colgroup><col style="width:30%"><col style="width:36%"><col style="width:14%"><col style="width:14%"><col style="width:6%"></colgroup>
-    <tr><td colspan="4" class="c f-acc">III-MEMORANDUM OF PAYMENT</td><td class="r">Rs.</td></tr>
-    <tr><td colspan="3">1. Total value of work done as per account 1 Cols 6 or 7.</td><td class="r"><b>${amt(k.total)}</b></td><td></td></tr>
-    <tr><td colspan="2">2. Deduct amount with held..............</td><td class="c">Rs.</td><td></td><td></td></tr>
-    <tr><td class="c f-abs" rowspan="4">FIGURES FOR WORK<br>ABSTRACT</td><td>(a) From previous bills, as per last running account bill ...... .......<br>(b) From this bill .....</td><td class="f-boxcell"></td><td class="f-boxcell"></td><td></td></tr>
-    <tr><td>3. Balance "up-to-date payment items (1 - 2)<br>4. Total amount of payments already made as per last running account Bill No. ${prevBill ? esc(formTitle(p, prevBill)) : ""} Vr.No. ${esc(bill.prevVoucher || "")} Dt. ${esc(prevBill?.date || "")}</td><td class="r">${amt(k.total)}</td><td class="r">${amt(k.prevTotal)}</td><td></td></tr>
-    <tr><td>5. Payments now to be made as detailed below:<br>(a) By recovery of amount creditable this work.<br>(b) By recovery of amount creditable to other work or heads of account.....<br>(c) By cheque ... .... ....<br>(d) By cash ....</td><td class="f-boxcell r">${amt(k.net)}</td><td class="f-boxcell"></td><td></td></tr>
-    <tr><td>Total of 2(b), 5, (a to d)</td><td class="r"><b>${amt(k.net)}</b></td><td></td><td></td></tr></table>
-    <table class="f-pay"><tr><td>Pay Rs. <b>${n2(k.say)}</b></td><td>[in figures</td><td>] in words <i>${esc(amountInWords(k.say))}</i></td></tr></table>
+  // Printed blank, as in the department's bills: the accounts office fills it in.
+  return `<section class="p-page f27 f-memo2">
+    <table class="m-tab"><colgroup><col style="width:30%"><col style="width:31%"><col style="width:13%"><col style="width:13%"><col style="width:3%"><col style="width:10%"></colgroup>
+      <tr><td colspan="5" class="c m-title">III-MEMORANDUM OF PAYMENT</td><td class="m-rs c">Rs.</td></tr>
+      <tr><td colspan="5">1. Total value of work done as per account 1 Cols 6 or 7.</td><td class="m-rs"></td></tr>
+      <tr><td colspan="2">2. Deduct amount with held..............</td><td colspan="2" class="c">Rs.</td><td></td><td class="m-rs"></td></tr>
+      <tr><td class="m-left m-abs">FIGURES FOR WORK<br>ABSTRACT</td><td class="m-mid m-top">(a) From previous bills, as<br>&nbsp;&nbsp;&nbsp;per last running account<br>&nbsp;&nbsp;&nbsp;bill &nbsp;&nbsp;...... &nbsp;&nbsp;&nbsp;.......<br>(b) From this bill .....</td><td class="m-box"></td><td class="m-box"></td><td></td><td class="m-rs"></td></tr>
+      <tr><td class="m-left"></td><td class="m-mid" colspan="3">3. Balance "up-to-date payment items (1__)<br>4. Total amount of payments already made as per last<br>&nbsp;&nbsp;&nbsp;running account Bill No. &nbsp;&nbsp;&nbsp;&nbsp;Vr.No. &nbsp;&nbsp;&nbsp;&nbsp;Dt.<div class="r" style="margin-right:12%">Rs.</div></td><td></td><td class="m-rs"></td></tr>
+      <tr><td class="m-left"></td><td class="m-mid m-bot">(a) By recovery of amount<br>&nbsp;&nbsp;&nbsp;creditable this work.<br>(b) By rcovery of amount<br>&nbsp;&nbsp;&nbsp;creditable to other work<br>&nbsp;&nbsp;&nbsp;or heads of account.....<br>(c) By cheque ... .... ....<br>(d) By cash &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ....</td><td class="m-box m-box2"></td><td class="m-box m-box2"></td><td></td><td class="m-rs"></td></tr>
+      <tr class="m-totrow"><td></td><td class="m-mid">Total of 2(b), 5, (a to d)<br>[in figures</td><td colspan="2">] in words</td><td></td><td class="m-rs"></td></tr></table>
+    <div class="m-pay">Pay Rs.</div>
     <div class="f-r"><span class="f-over">Cheque<br>Cash</span></div>
-    <div class="f-r f-ul">Dated initials of Disbursing Officer</div>
-    <div class="f-row3"><span>Received Rs. ................</span><span>[In figures</span><span>] in words</span><span>Amount in Vernacular</span></div>
-    <p>demand for this work of supplies made</p><p>&nbsp;&nbsp;&nbsp;&nbsp;Dated the..............................</p>
+    <div class="f-r m-line">Dated initials of Disbursing Officer</div>
+    <div class="f-row3 m-line"><span>Received Rs.</span><span>[In figures</span><span>] in words</span><span>Amount in Vernacular</span></div>
+    <p>demand for this work of supplies made</p><p style="margin-left:15mm">Dated the.............................</p>
     <p class="c">Left hand-thumb impression of</p>
-    <div class="f-row2 f-ul"><span>Witness of Identification and Payment</span><span>Full Signature of Contractor</span></div>
+    <div class="f-row2 m-line"><span>Witness of Identification and Payment</span><span>Full Signature of Contractor</span></div>
     <p>Paid by me vide Cheque No.................... Dated the ............... or cash book entry dated........................</p>
-    <div class="f-r"><b>CASHIER</b></div><div class="f-r f-ul">Dated initials of person actually making payment</div>
-    <div class="f-small f-ul">The figures should be tested to see that it agrees with the total of items 4 and 5.<br>Here specify the net amount payable vide item 5 [0] and [d]<br>The payee's acknowledgement should before the gross amount paid as item (I.e. to d).<br>Payment should be attested by some known person when the payee's acknowledgement is given Not required in the cast of bill of suppliers.</div>
-    <div class="f-small c">This space is reserved for any remarks which the Disbursing Officer of the Division Officer may] wish to record in respect of the work check of measurements of the contractor's account.</div>
+    <div class="f-r" style="margin-top:12mm"><b>CASHIER</b></div><div class="c m-line" style="margin-left:30%">Dated initials of person actually making payment</div>
+    <div class="f-small m-line">The figures should be tested to see that it agrees with the total of items 4 and 5.<br>Here specify the net amount payable vide item 5 [0] and &nbsp;[d]<br>The payee's acknowledgement should before the gross amount paid as item (I.e. to d).<br>Payment should be attested by some known person when the payee's acknowledgement is given Not required in the cast of bill of suppliers.</div>
+    <div class="f-small c">This space is reserved for any remarks which the Disbursing Officer of the Division Officer may]<br>wish to record in respect of the work check of measurements of the contractor's account.</div>
     ${(c.terms || []).length ? `<div class="f-acc">TERMS AND CONDITIONS OF THE WORK ORDER</div><ol class="p-terms">${c.terms.map((t) => `<li>${esc(t)}</li>`).join("")}</ol>` : ""}
     <div class="f-pg">${pageNo}</div></section>`;
 }
