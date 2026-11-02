@@ -202,3 +202,37 @@ table.abstract tr.grand td { font-weight: 800; font-size: 1.1rem; background: va
   .p-foot { font-size: 9pt; }
   .p-sign { display: flex; justify-content: space-between; margin-top: 40pt; }
 }
+
+/* ---------- takeoff review ---------- */
+.tf-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .7rem 0 .4rem; }
+.tf-chips .chip { background: #fff; color: var(--ink); border: 1px solid var(--line); font-size: .85rem; padding: .3rem .8rem; }
+.tf-chips .chip.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+.tf-chips .chip b { margin-left: .2rem; }
+.tf-tools { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-bottom: .4rem; }
+.tf-tools input[type="search"] { max-width: 240px; }
+.tf-tools select { width: auto; }
+.tf-foot { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; justify-content: space-between;
+  background: #fff; border-top: 1px solid var(--line); padding: .7rem .2rem .2rem; margin-top: .5rem; }
+table.review tr.grp td { background: #f6f8f6; border-top: 2px solid var(--line); }
+table.review tr.grp .grp-actions { float: right; }
+table.review .sec-in { font-size: .78rem; padding: .2rem .4rem; margin-bottom: .25rem; max-width: 220px; color: var(--muted); }
+table.review td.keepcell { width: 96px; }
+button.keep { font-size: .8rem; padding: .3rem .55rem; border-radius: 999px; background: #fff; color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
+button.keep.on { background: var(--brand-soft); color: var(--brand); border-color: #9bd8bd; font-weight: 600; }
+tr.excluded td { background: #fafafa; }
+tr.excluded textarea, tr.excluded input, tr.excluded select { opacity: .55; }
+tr.is-added td { background: #f3faf6; }
+.badge-added { display: inline-block; background: var(--brand); color: #fff; border-radius: 4px; padding: 0 .35rem; font-size: .72rem; margin-left: .3rem; }
+.issues { display: flex; flex-wrap: wrap; gap: .25rem .6rem; margin-top: .25rem; font-size: .78rem; color: #8a5300; }
+details.notes summary { cursor: pointer; }
+.toast { display: flex; align-items: center; gap: .6rem; }
+.toast-btn { background: #7fd3ae; color: #10201a; border: 0; font-weight: 700; padding: .25rem .7rem; }
+
+/* ---------- BOQ selection ---------- */
+.bulkbar { position: sticky; top: 64px; z-index: 5; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+  background: #17241f; color: #fff; border-radius: 8px; padding: .5rem .8rem; margin-bottom: .7rem; }
+.bulkbar select { width: auto; }
+.bulkbar .ghost { background: #24352e; color: #fff; border-color: #36493f; }
+table.boq tr.selected td { background: #eef7f2; }
+button:disabled.ghost { opacity: .4; cursor: default; }
+.bulkbar .ghost.danger-text { color: #ffb3a8 !important; border-color: #8a3a30; }

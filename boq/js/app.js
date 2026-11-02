@@ -20,7 +20,9 @@ const state = {
   projectId: null,
   index: null,
   drawings: [], // { id, file, status, parts, warning, error, dxf }
-  takeoff: null, // { source, summary, assumptions, questions, lines: [...] }
+  itemById: new Map(),
+  tf: null, // review filters
+  boqSel: new Set(),
 };
 const project = () => state.projects.find((p) => p.id === state.projectId);
 
@@ -51,6 +53,7 @@ async function boot() {
   rebuildIndex();
   bindGlobal();
   renderAll();
+  resetHistory();
 }
 
 function renderAll() {
@@ -59,6 +62,7 @@ function renderAll() {
   renderPick();
   renderQuickForm();
   renderBoq();
+  renderTakeoff();
   renderSettings();
   renderKeyHint();
 }
@@ -66,17 +70,63 @@ function renderAll() {
 const saveSettings = () => idb.put("kv", { ...state.settings, id: "settings" });
 const saveBsr = (b) => idb.put("bsrs", b);
 let saveTimer = null;
-function saveProject() {
+// ---------- undo / redo (whole-project snapshots, bursts of edits coalesced) ----------
+const hist = { undo: [], redo: [], last: null, lastAt: 0 };
+const snap = (p) => JSON.stringify({ ...p, updatedAt: 0 });
+function resetHistory() { hist.undo = []; hist.redo = []; hist.last = project() ? snap(project()) : null; hist.lastAt = 0; updateUndoButtons(); }
+/** coalesce: merge with the previous step when it was less than 0.8 s ago (used while typing numbers). */
+function recordHistory(coalesce = false) {
+  const cur = snap(project());
+  if (cur === hist.last) return;
+  const now = Date.now();
+  if (!coalesce || now - hist.lastAt > 800 || !hist.undo.length) { hist.undo.push(hist.last); if (hist.undo.length > 60) hist.undo.shift(); }
+  hist.lastAt = now; hist.last = cur; hist.redo = [];
+  updateUndoButtons();
+}
+function restoreProject(json) {
+  const p = JSON.parse(json);
+  p.updatedAt = Date.now();
+  state.projects[state.projects.findIndex((x) => x.id === p.id)] = p;
+  hist.last = json; hist.lastAt = 0;
+  idb.put("projects", p);
+  state.boqSel.clear();
+  renderProjectSelect(); renderBoq(); renderTakeoff(); renderSectionOptions(); updateUndoButtons();
+}
+function undo() {
+  if (!hist.undo.length) { toast("Nothing to undo."); return; }
+  hist.redo.push(hist.last);
+  restoreProject(hist.undo.pop());
+  toast("Undone.", 2000);
+}
+function redo() {
+  if (!hist.redo.length) { toast("Nothing to redo."); return; }
+  hist.undo.push(hist.last);
+  restoreProject(hist.redo.pop());
+  toast("Redone.", 2000);
+}
+function updateUndoButtons() {
+  $$("[data-undo]").forEach((b) => (b.disabled = !hist.undo.length));
+  $$("[data-redo]").forEach((b) => (b.disabled = !hist.redo.length));
+}
+
+function saveProject(coalesce = false) {
   const p = project();
   if (!p) return;
+  recordHistory(coalesce);
   p.updatedAt = Date.now();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => idb.put("projects", p), 300);
 }
 
-function toast(msg, ms = 3200) {
+function toast(msg, ms = 3200, action = null) {
   const t = $("#toast");
   t.textContent = msg;
+  if (action) {
+    const b = document.createElement("button");
+    b.className = "toast-btn"; b.textContent = action.label;
+    b.onclick = () => { t.classList.add("hidden"); action.fn(); };
+    t.append(" ", b);
+  }
   t.classList.remove("hidden");
   clearTimeout(t._t);
   t._t = setTimeout(() => t.classList.add("hidden"), ms);
@@ -91,9 +141,10 @@ const closeModal = () => $("#modal").classList.add("hidden");
 
 function rebuildIndex() {
   const items = [];
+  state.itemById = new Map();
   for (const b of state.bsrs) {
-    if (b.enabled === false) continue;
-    for (const it of b.items) items.push(Object.assign(it, { _bsr: b.id }));
+    for (const it of b.items) { it._bsr = b.id; state.itemById.set(it.id, it); }
+    if (b.enabled !== false) items.push(...b.items);
   }
   state.index = new Index(items);
 }
@@ -109,7 +160,19 @@ function bindGlobal() {
   $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   $(".modal-close").addEventListener("click", closeModal);
   $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeModal();
+    const k = e.key.toLowerCase();
+    const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
+    if ((e.ctrlKey || e.metaKey) && !inField && (k === "z" || k === "y")) {
+      e.preventDefault();
+      if (k === "y" || e.shiftKey) redo(); else undo();
+    }
+  });
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("#boqUndo")) undo();
+    if (e.target.closest("#boqRedo")) redo();
+  });
 
   // Project switching
   $("#projectSelect").addEventListener("change", (e) => switchProject(e.target.value));
@@ -334,7 +397,9 @@ function renderProjectSelect() {
 function switchProject(id) {
   state.projectId = id;
   idb.put("kv", { id: "current", value: id });
-  renderProjectSelect(); renderBoq(); renderSectionOptions();
+  state.boqSel.clear(); state.tf = null;
+  renderProjectSelect(); renderBoq(); renderSectionOptions(); renderTakeoff();
+  resetHistory();
 }
 
 // ---------------------------------------------------------------------------
@@ -728,82 +793,6 @@ function renderDrawingChips() {
   };
 }
 
-async function runAiTakeoff() {
-  const st = $("#bpStatus");
-  const ready = state.drawings.filter((d) => d.status === "ready");
-  if (!ready.length) { toast("Upload at least one drawing first."); return; }
-  if (!hasKey()) { toast("Add your Claude or OpenAI API key in Settings."); showTab("settings"); return; }
-  const parts = ready.flatMap((d) => d.parts);
-  const imgCount = parts.filter((p) => p.kind === "image").length;
-  if (imgCount > 90) { toast(`That is ${imgCount} images; please send fewer drawings at a time (max about 90 images).`); return; }
-
-  let rateList = null;
-  const pool = state.index.items;
-  if ($("#bpSendRates").checked && pool.length) {
-    if (pool.length > 4000) toast(`Your rate books have ${pool.length} items; only the local matcher will be used to save cost.`, 5000);
-    else rateList = pool.map((it, i) => ({ ref: "R" + i, code: it.code, description: it.description, unit: it.unit, _it: it }));
-  }
-  $("#bpRunBtn").disabled = true;
-  st.className = "status";
-  const t0 = Date.now();
-  let lastMsg = "Sending…";
-  const tick = setInterval(() => { st.textContent = `${lastMsg} ${Math.round((Date.now() - t0) / 1000)}s`; }, 1000);
-  try {
-    const res = await takeoffFromDrawings({
-      files: parts, notes: $("#bpNotes").value.trim(), rateList, effort: $("#bpEffort").value,
-      onProgress: (m) => { lastMsg = m; st.textContent = `${m} ${Math.round((Date.now() - t0) / 1000)}s`; },
-    });
-    const data = res.data;
-    const lines = data.items.map((it) => {
-      const aiPick = rateList && it.rate_ref ? rateList.find((r) => r.ref === it.rate_ref)?._it : null;
-      return toTakeoffLine({
-        section: it.section, description: it.description, unit: it.unit, notes: it.notes, confidence: it.confidence,
-        measurements: it.measurements.map((m) => ({ label: m.label, nos: m.nos, l: m.length, b: m.breadth, d: m.depth })),
-      }, aiPick);
-    });
-    state.takeoff = { source: `${providerLabel()} drawing takeoff${res.model ? ` (${res.model})` : ""}`, summary: data.summary, scale: data.drawing_scale, assumptions: data.assumptions, questions: data.questions, lines };
-    const u = res.usage || {};
-    st.textContent = `Done in ${Math.round((Date.now() - t0) / 1000)}s · ${lines.length} items · ${((u.input_tokens || 0) / 1000).toFixed(0)}k in / ${((u.output_tokens || 0) / 1000).toFixed(1)}k out tokens`;
-    st.className = "status ok";
-    renderTakeoff();
-  } catch (e) {
-    console.error(e);
-    st.textContent = e.message || String(e);
-    st.className = "status err";
-  } finally {
-    clearInterval(tick);
-    $("#bpRunBtn").disabled = false;
-  }
-}
-
-/** Build a review line with local match candidates. aiPick: rate item chosen by Claude, if any. */
-function toTakeoffLine(l, aiPick = null) {
-  const qty = l.measurements?.length ? l.measurements.reduce((a, m) => a + measurementQty(m), 0) : num(l.qty);
-  const cands = state.index.match(`${l.description} ${l.section}`, l.unit, 6).map((m) => m.item);
-  if (aiPick && !cands.includes(aiPick)) cands.unshift(aiPick);
-  else if (aiPick) { cands.splice(cands.indexOf(aiPick), 1); cands.unshift(aiPick); }
-  const best = cands[0] || null;
-  const compatible = best && (!l.unit || canonUnit(best.unit) === canonUnit(l.unit) || unitFactor(l.unit, best.unit) !== 1);
-  return {
-    id: uid("t"), include: true, ...l, qty: round(qty, 3), candidates: cands,
-    pick: best && (aiPick || compatible) ? best.id : "",
-    aiPicked: !!aiPick, customRate: 0,
-  };
-}
-
-function runQuickTakeoff() {
-  const v = {};
-  for (const [k] of QUICK_FIELDS) v[k] = num($(`#q_${k}`).value);
-  state.settings.quick = v; saveSettings();
-  const lines = quickTakeoff(v).map((l) => toTakeoffLine(l));
-  state.takeoff = {
-    source: "Quick takeoff from building dimensions", summary: `Framed RCC building, ${v.floors} floor(s), ${v.area} sqm per floor.`,
-    assumptions: ["Quantities are approximate, worked out from overall dimensions and typical proportions. Check against drawings before tendering.", "Steel is estimated from kg/cum ratios."],
-    questions: [], lines,
-  };
-  renderTakeoff();
-}
-
 function renderQuickForm() {
   const saved = state.settings.quick || {};
   $("#quickForm").innerHTML = QUICK_FIELDS.map(([k, label, def]) => `<label class="field small">${esc(label)}<input id="q_${k}" type="number" step="any" value="${saved[k] ?? def}"></label>`).join("");
@@ -853,8 +842,7 @@ function renderDxfPanel(dxf, name) {
       lines.push(toTakeoffLine({ section: "From DXF", description: desc, unit, measurements, notes: "Measured from DXF geometry", confidence: "medium" }));
     });
     if (!lines.length) { toast("Choose how to take at least one layer."); return; }
-    state.takeoff = { source: `DXF layer takeoff (${name})`, summary: "", assumptions: ["Wall lengths from DXF are the sum of all drawn lines on the layer; for double-line walls halve the length."], questions: [], lines };
-    renderTakeoff();
+    applyTakeoff({ source: `DXF layer takeoff (${name})`, files: [name], summary: "", assumptions: ["Wall lengths from DXF are the sum of all drawn lines on the layer; for double-line walls halve the length."], questions: [], lines });
   };
 }
 function guessLayerDesc(n) {
@@ -869,70 +857,355 @@ function guessLayerDesc(n) {
   return n;
 }
 
-function renderTakeoff() {
-  const t = state.takeoff;
+// ---------------------------------------------------------------------------
+// Takeoff draft: review, keep/remove, edit and send to the BOQ.
+// The draft lives on the project, so it survives reloads and is covered by undo.
+// ---------------------------------------------------------------------------
+
+const draft = () => project()?.draft || null;
+const lineCands = (l) => (l.candIds || []).map((id) => state.itemById.get(id)).filter(Boolean);
+const pickedItem = (l) => (l.pick ? state.itemById.get(l.pick) || null : null);
+const isKept = (l) => l.status !== "removed";
+
+/** Build a review line with local match candidates. aiPick: rate item chosen by the AI, if any. */
+function toTakeoffLine(l, aiPick = null) {
+  const qty = l.measurements?.length ? l.measurements.reduce((a, m) => a + measurementQty(m), 0) : num(l.qty);
+  const cands = state.index.match(`${l.description} ${l.section}`, l.unit, 6).map((m) => m.item);
+  if (aiPick) { const i = cands.indexOf(aiPick); if (i >= 0) cands.splice(i, 1); cands.unshift(aiPick); }
+  const best = cands[0] || null;
+  const compatible = best && (!l.unit || canonUnit(best.unit) === canonUnit(l.unit) || unitFactor(l.unit, best.unit) !== 1);
+  return {
+    id: uid("t"), status: "keep", added: false,
+    section: l.section || "General", description: l.description || "", unit: l.unit || "", notes: l.notes || "", confidence: l.confidence || "medium",
+    measurements: l.measurements || [], qty: round(qty, 3),
+    candIds: cands.map((c) => c.id), pick: best && (aiPick || compatible) ? best.id : "",
+    aiPicked: !!aiPick, autoPick: !aiPick, customRate: 0,
+  };
+}
+
+/** Refresh match candidates after an edit; lines without a chosen item get the best one with a compatible unit. */
+function rematch(l) {
+  const found = state.index.match(`${l.description} ${l.section}`, l.unit, 6).map((m) => m.item);
+  const cands = found.map((c) => c.id);
+  if (l.pick && !cands.includes(l.pick)) cands.unshift(l.pick);
+  l.candIds = cands;
+  if ((!l.pick || l.autoPick) && !num(l.customRate)) {
+    const ok = found.find((c) => !l.unit || canonUnit(c.unit) === canonUnit(l.unit) || unitFactor(l.unit, c.unit) !== 1);
+    l.pick = ok ? ok.id : "";
+    l.autoPick = true;
+  }
+}
+
+function lineAmount(l) {
+  const it = pickedItem(l);
+  if (!it) return round(l.qty * num(l.customRate), 2);
+  return round(l.qty * unitFactor(l.unit, it.unit) * indexedRate(bsrById(it._bsr), it), 2);
+}
+
+/** Reasons a line needs a second look. */
+function lineIssues(l, all) {
+  const out = [];
+  const it = pickedItem(l);
+  if (!it && !num(l.customRate)) out.push("No rate-book item or rate");
+  if (it && canonUnit(it.unit) !== canonUnit(l.unit) && unitFactor(l.unit, it.unit) === 1) out.push(`Unit "${l.unit}" differs from rate-book unit "${it.unit}"`);
+  if (!l.qty) out.push("Zero quantity");
+  if (l.qty < 0) out.push("Negative quantity");
+  if (l.confidence === "low") out.push("Low confidence");
+  if (it) {
+    const idx = all.indexOf(l);
+    const dup = all.findIndex((o, i) => i < idx && isKept(o) && o.pick === l.pick);
+    if (dup >= 0) out.push(`Same rate-book item as line ${dup + 1}`);
+  }
+  return out;
+}
+
+/** Put a new takeoff into the project's draft, asking whether to append when unfinished lines exist. */
+async function applyTakeoff(next) {
+  const cur = draft();
+  const pending = cur?.lines?.filter((l) => isKept(l) && !l.added).length || 0;
+  let mode = "replace";
+  if (pending) {
+    mode = await new Promise((resolve) => {
+      modal(`<h2>You already have a draft</h2>
+        <p>The current draft has <b>${pending}</b> kept line(s) not yet added to the BOQ. What should happen to the new ${next.lines.length} line(s)?</p>
+        <div class="row gap wrap mt"><button class="primary" data-m="append">Add them to the current draft</button>
+        <button class="ghost" data-m="replace">Replace the current draft</button><button class="ghost" data-m="cancel">Cancel</button></div>`, (m) => {
+        m.onclick = (e) => { const v = e.target.dataset.m; if (v) { closeModal(); resolve(v); } };
+      });
+    });
+  }
+  if (mode === "cancel") return false;
+  if (mode === "append") {
+    cur.lines.push(...next.lines);
+    cur.source = cur.source === next.source ? cur.source : "Combined takeoffs";
+    cur.summary = [cur.summary, next.summary].filter(Boolean).join(" | ");
+    cur.assumptions = [...(cur.assumptions || []), ...(next.assumptions || [])];
+    cur.questions = [...(cur.questions || []), ...(next.questions || [])];
+  } else {
+    project().draft = { createdAt: Date.now(), ...next };
+  }
+  state.tf = { view: "all", conf: "", section: "", q: "" };
+  saveProject();
+  renderTakeoff(true);
+  return true;
+}
+
+async function runAiTakeoff() {
+  const st = $("#bpStatus");
+  const ready = state.drawings.filter((d) => d.status === "ready");
+  if (!ready.length) { toast("Upload at least one drawing first."); return; }
+  if (!hasKey()) { toast("Add your Claude or OpenAI API key in Settings."); showTab("settings"); return; }
+  const parts = ready.flatMap((d) => d.parts);
+  const imgCount = parts.filter((p) => p.kind === "image").length;
+  if (imgCount > 90) { toast(`That is ${imgCount} images; please send fewer drawings at a time (max about 90 images).`); return; }
+
+  let rateList = null;
+  const pool = state.index.items;
+  if ($("#bpSendRates").checked && pool.length) {
+    if (pool.length > 4000) toast(`Your rate books have ${pool.length} items; only the local matcher will be used to save cost.`, 5000);
+    else rateList = pool.map((it, i) => ({ ref: "R" + i, code: it.code, description: it.description, unit: it.unit, _it: it }));
+  }
+  $("#bpRunBtn").disabled = true;
+  st.className = "status";
+  const t0 = Date.now();
+  let lastMsg = "Sending…";
+  const tick = setInterval(() => { st.textContent = `${lastMsg} ${Math.round((Date.now() - t0) / 1000)}s`; }, 1000);
+  try {
+    const res = await takeoffFromDrawings({
+      files: parts, notes: $("#bpNotes").value.trim(), rateList, effort: $("#bpEffort").value,
+      onProgress: (m) => { lastMsg = m; st.textContent = `${m} ${Math.round((Date.now() - t0) / 1000)}s`; },
+    });
+    const data = res.data;
+    const lines = data.items.map((it) => {
+      const aiPick = rateList && it.rate_ref ? rateList.find((r) => r.ref === it.rate_ref)?._it : null;
+      return toTakeoffLine({
+        section: it.section, description: it.description, unit: it.unit, notes: it.notes, confidence: it.confidence,
+        measurements: it.measurements.map((m) => ({ label: m.label, nos: m.nos, l: m.length, b: m.breadth, d: m.depth })),
+      }, aiPick);
+    });
+    const u = res.usage || {};
+    st.textContent = `Done in ${Math.round((Date.now() - t0) / 1000)}s · ${lines.length} items · ${((u.input_tokens || 0) / 1000).toFixed(0)}k in / ${((u.output_tokens || 0) / 1000).toFixed(1)}k out tokens`;
+    st.className = "status ok";
+    await applyTakeoff({
+      source: `${providerLabel()} drawing takeoff${res.model ? ` (${res.model})` : ""}`, files: ready.map((d) => d.file.name),
+      summary: data.summary, scale: data.drawing_scale, assumptions: data.assumptions, questions: data.questions, lines,
+    });
+  } catch (e) {
+    console.error(e);
+    st.textContent = e.message || String(e);
+    st.className = "status err";
+  } finally {
+    clearInterval(tick);
+    $("#bpRunBtn").disabled = false;
+  }
+}
+
+function runQuickTakeoff() {
+  const v = {};
+  for (const [k] of QUICK_FIELDS) v[k] = num($(`#q_${k}`).value);
+  state.settings.quick = v; saveSettings();
+  applyTakeoff({
+    source: "Quick takeoff from building dimensions", summary: `Framed RCC building, ${v.floors} floor(s), ${v.area} sqm per floor.`,
+    assumptions: ["Quantities are approximate, worked out from overall dimensions and typical proportions. Check against drawings before tendering.", "Steel is estimated from kg/cum ratios."],
+    questions: [], lines: quickTakeoff(v).map((l) => toTakeoffLine(l)),
+  });
+}
+
+function renderTakeoff(scroll = false) {
   const el = $("#takeoffResults");
+  const t = draft();
+  if (!t || !t.lines) { el.classList.add("hidden"); el.innerHTML = ""; return; }
   el.classList.remove("hidden");
+  const f = (state.tf ||= { view: "all", conf: "", section: "", q: "" });
+  const all = t.lines;
+  const issues = new Map(all.map((l) => [l.id, lineIssues(l, all)]));
+  const inView = {
+    all: () => true,
+    kept: (l) => isKept(l) && !l.added,
+    removed: (l) => !isKept(l),
+    issues: (l) => isKept(l) && !l.added && issues.get(l.id).length > 0,
+    added: (l) => l.added,
+  };
+  const matches = (l) => inView[f.view](l) && (!f.conf || l.confidence === f.conf) && (!f.section || l.section === f.section) &&
+    (!f.q || `${l.description} ${l.section} ${l.notes}`.toLowerCase().includes(f.q.toLowerCase()));
+  const shown = all.filter(matches);
+  const sections = [...new Set(all.map((l) => l.section || "General"))];
+  const pending = all.filter((l) => isKept(l) && !l.added);
+  const pendingTotal = pending.reduce((a, l) => a + lineAmount(l), 0);
+  const count = (v) => all.filter(inView[v]).length;
+  const chip = (v, label) => `<button class="chip ${f.view === v ? "active" : ""}" data-view="${v}">${label} <b>${count(v)}</b></button>`;
+  const boqSections = project().sections.map((s) => s.name);
+
   const optionsFor = (l) => {
-    const opts = l.candidates.map((c) => {
+    const cands = lineCands(l);
+    const cur = pickedItem(l);
+    if (cur && !cands.includes(cur)) cands.unshift(cur);
+    return `<option value="">Non-schedule item (enter rate)</option>` + cands.map((c) => {
       const b = bsrById(c._bsr);
       return `<option value="${c.id}" ${c.id === l.pick ? "selected" : ""}>${esc(c.code)} · ${esc(c.description.slice(0, 90))} · ${esc(c.unit)} · ${money(indexedRate(b, c), false)}${b && state.bsrs.length > 1 ? ` · ${esc(b.name.slice(0, 20))}` : ""}</option>`;
-    }).join("");
-    return `<option value="">Non-schedule item (enter rate)</option>${opts}<option value="__search">Search all rate books…</option>`;
+    }).join("") + `<option value="__search">Search all rate books…</option>`;
   };
-  const totalAmt = t.lines.filter((l) => l.include).reduce((a, l) => a + lineAmount(l), 0);
-  el.innerHTML = `<div class="row between wrap gap"><div><h2>Review: ${esc(t.source)}</h2>${t.summary ? `<p class="muted">${esc(t.summary)}</p>` : ""}${t.scale ? `<p class="small muted">Scale: ${esc(t.scale)}</p>` : ""}</div>
-      <div class="row gap"><button class="ghost" id="toAll">Select all</button><button class="ghost" id="toNone">Select none</button><button class="primary" id="toAdd">Add selected to BOQ</button></div></div>
-    ${t.assumptions?.length || t.questions?.length ? `<div class="grid-2 notes">
-      ${t.assumptions?.length ? `<div><h3>Assumptions</h3><ul>${t.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}
-      ${t.questions?.length ? `<div><h3>Questions to check</h3><ul>${t.questions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}</div>` : ""}
-    <div class="table-wrap"><table class="data review"><thead><tr><th></th><th>Section</th><th>Work item</th><th class="num">Qty</th><th>Unit</th><th>Rate-book item</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead><tbody>
-    ${t.lines.map((l) => {
-      const it = pickedItem(l);
-      const factor = it ? unitFactor(l.unit, it.unit) : 1;
-      return `<tr data-id="${l.id}" class="${l.include ? "" : "excluded"}">
-        <td><input type="checkbox" data-f="include" ${l.include ? "checked" : ""}></td>
-        <td><input data-f="section" value="${esc(l.section)}" class="w120"></td>
-        <td class="desc"><textarea data-f="description" rows="2">${esc(l.description)}</textarea>
-          <div class="small muted"><span class="conf ${l.confidence}">${esc(l.confidence || "")}</span> ${esc(l.notes || "")}
-          ${l.measurements?.length ? `<details><summary>${l.measurements.length} measurement row(s)</summary>${measTableHtml(l.measurements)}</details>` : ""}</div></td>
-        <td class="num"><input data-f="qty" type="number" step="any" class="w90 num" value="${l.qty}" ${l.measurements?.length ? 'title="Calculated from measurements; editing replaces them"' : ""}>${factor !== 1 ? `<div class="small muted">= ${qtyFmt(l.qty * factor)} ${esc(it.unit)}</div>` : ""}</td>
-        <td>${esc(l.unit)}${it && canonUnit(it.unit) !== canonUnit(l.unit) && factor === 1 ? `<div class="warn small" title="Rate-book unit differs">≠ ${esc(it.unit)}</div>` : ""}</td>
-        <td><select data-f="pick" class="pick">${optionsFor(l)}</select>${l.aiPicked && l.pick === l.candidates[0]?.id ? `<div class="small muted">chosen by AI</div>` : ""}</td>
-        <td class="num">${it ? money(indexedRate(bsrById(it._bsr), it), false) : `<input data-f="customRate" type="number" step="any" class="w90 num" value="${l.customRate || ""}" placeholder="rate">`}</td>
-        <td class="num">${money(lineAmount(l), false)}</td></tr>`;
-    }).join("")}
-    </tbody><tfoot><tr><td colspan="7" class="num"><b>Selected total (before add-ons)</b></td><td class="num"><b>${money(totalAmt)}</b></td></tr></tfoot></table></div>`;
 
-  $("#toAll").onclick = () => { t.lines.forEach((l) => (l.include = true)); renderTakeoff(); };
-  $("#toNone").onclick = () => { t.lines.forEach((l) => (l.include = false)); renderTakeoff(); };
-  $("#toAdd").onclick = addTakeoffToBoq;
-  $("tbody", el).onchange = (e) => {
-    const tr = e.target.closest("tr"); const l = t.lines.find((x) => x.id === tr.dataset.id);
-    const f = e.target.dataset.f;
-    if (f === "include") l.include = e.target.checked;
-    else if (f === "qty") { l.qty = num(e.target.value); l.measurements = []; }
-    else if (f === "customRate") l.customRate = num(e.target.value);
-    else if (f === "pick") {
-      if (e.target.value === "__search") { searchPick(l); return; }
-      l.pick = e.target.value;
-    } else if (f) l[f] = e.target.value;
-    if (f === "description" || f === "section") return;
-    renderTakeoff();
+  const row = (l) => {
+    const n = all.indexOf(l) + 1;
+    const it = pickedItem(l);
+    const factor = it ? unitFactor(l.unit, it.unit) : 1;
+    const iss = issues.get(l.id);
+    const kept = isKept(l);
+    return `<tr data-id="${l.id}" class="${kept ? "" : "excluded"} ${l.added ? "is-added" : ""}">
+      <td class="keepcell"><button class="keep ${kept ? "on" : ""}" data-act="toggle" title="${kept ? "Kept: click to remove from the estimate" : "Removed: click to keep"}">${kept ? "✓ Keep" : "✕ Removed"}</button>
+        <div class="small muted">#${n}</div></td>
+      <td class="desc">
+        <input data-f="section" value="${esc(l.section)}" list="tfSections" class="sec-in" title="Section">
+        <textarea data-f="description" rows="2">${esc(l.description)}</textarea>
+        <div class="small muted"><span class="conf ${esc(l.confidence)}">${esc(l.confidence || "")}</span> ${esc(l.notes || "")}
+          ${l.added ? `<span class="badge-added">In BOQ ✓</span>` : ""}</div>
+        ${iss.length && kept ? `<div class="issues">${iss.map((x) => `<span>⚠ ${esc(x)}</span>`).join("")}</div>` : ""}
+      </td>
+      <td class="num"><input data-f="qty" type="number" step="any" class="w100 num" value="${l.qty}">
+        <div><button class="link small" data-act="meas">${l.measurements?.length ? `${l.measurements.length} measurement row${l.measurements.length > 1 ? "s" : ""}` : "add measurements"}</button></div>
+        ${factor !== 1 ? `<div class="small muted">= ${qtyFmt(l.qty * factor)} ${esc(it.unit)}</div>` : ""}</td>
+      <td><input data-f="unit" value="${esc(l.unit)}" class="w70"></td>
+      <td><select data-f="pick" class="pick">${optionsFor(l)}</select>${l.aiPicked && l.pick === l.candIds?.[0] ? `<div class="small muted">chosen by AI</div>` : ""}</td>
+      <td class="num">${it ? money(indexedRate(bsrById(it._bsr), it), false) : `<input data-f="customRate" type="number" step="any" class="w90 num" value="${l.customRate || ""}" placeholder="rate">`}</td>
+      <td class="num">${money(lineAmount(l), false)}</td>
+      <td class="actions"><button class="icon" data-act="dup" title="Duplicate">⧉</button><button class="icon danger-text" data-act="del" title="Delete permanently">🗑</button></td>
+    </tr>`;
   };
-  el.scrollIntoView({ behavior: "smooth" });
+
+  let body = "";
+  for (const s of sections) {
+    const rows = shown.filter((l) => (l.section || "General") === s);
+    if (!rows.length) continue;
+    const keptRows = rows.filter(isKept);
+    body += `<tr class="grp" data-grp="${esc(s)}"><td colspan="8"><b>${esc(s)}</b>
+      <span class="muted small">${keptRows.length} of ${rows.length} kept · ${money(keptRows.reduce((a, l) => a + lineAmount(l), 0))}</span>
+      <span class="grp-actions"><button class="link small" data-grp-act="keep">keep all</button> · <button class="link small" data-grp-act="remove">remove all</button></span></td></tr>`;
+    body += rows.map(row).join("");
+  }
+
+  el.innerHTML = `<div class="row between wrap gap">
+      <div><h2>Review takeoff: keep, remove or edit before adding to the estimate</h2>
+        <p class="muted small">${esc(t.source || "")}${t.files?.length ? ` · ${t.files.map(esc).join(", ")}` : ""}${t.scale ? ` · Scale: ${esc(t.scale)}` : ""}</p>
+        ${t.summary ? `<p class="muted">${esc(t.summary)}</p>` : ""}</div>
+      <div class="row gap"><button class="ghost" data-undo title="Undo (Ctrl+Z)">↶ Undo</button><button class="ghost" data-redo title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+        <button class="ghost danger-text" id="tfClear">Discard draft</button></div></div>
+    ${t.assumptions?.length || t.questions?.length ? `<details class="notes" open><summary><b>Notes from the takeoff</b> <span class="muted small">(${(t.assumptions?.length || 0) + (t.questions?.length || 0)})</span></summary><div class="grid-2">
+      ${t.assumptions?.length ? `<div><h3>Assumptions</h3><ul>${t.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}
+      ${t.questions?.length ? `<div><h3>Questions to check</h3><ul>${t.questions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}</div></details>` : ""}
+    <div class="tf-chips">${chip("all", "All")}${chip("kept", "To add")}${chip("issues", "⚠ Needs attention")}${chip("removed", "Removed")}${chip("added", "Already in BOQ")}</div>
+    <div class="tf-tools">
+      <input type="search" id="tfQ" placeholder="Search lines" value="${esc(f.q)}">
+      <select id="tfSec"><option value="">All sections</option>${sections.map((s) => `<option ${s === f.section ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
+      <select id="tfConf"><option value="">Any confidence</option>${["high", "medium", "low"].map((c) => `<option value="${c}" ${c === f.conf ? "selected" : ""}>${c[0].toUpperCase() + c.slice(1)} confidence</option>`).join("")}</select>
+      <span class="muted small">On the ${shown.length} shown:</span>
+      <button class="ghost small" data-bulk="keep">Keep</button><button class="ghost small" data-bulk="remove">Remove</button><button class="ghost small danger-text" data-bulk="delete">Delete</button>
+      <button class="ghost small" id="tfAddLine">＋ Add line</button>
+    </div>
+    <datalist id="tfSections">${[...new Set([...sections, ...boqSections])].map((s) => `<option value="${esc(s)}">`).join("")}</datalist>
+    <div class="table-wrap"><table class="data review"><thead><tr><th>Keep?</th><th>Section / work item</th><th class="num">Qty</th><th>Unit</th><th>Rate-book item</th><th class="num">Rate</th><th class="num">Amount</th><th></th></tr></thead>
+      <tbody>${body || `<tr><td colspan="8" class="muted pad">No lines match this filter.</td></tr>`}</tbody></table></div>
+    <div class="tf-foot">
+      <label class="check small"><input type="checkbox" id="tfMerge" ${state.settings.mergeTakeoff === false ? "" : "checked"}> Combine with BOQ lines that use the same rate-book item (adds the measurements to the existing line)</label>
+      <div class="row gap"><span><b>${pending.length}</b> line(s) to add · <b>${money(pendingTotal)}</b></span>
+        <button class="primary" id="tfAdd" ${pending.length ? "" : "disabled"}>Add ${pending.length} kept line(s) to BOQ</button></div>
+    </div>`;
+
+  updateUndoButtons();
+  bindTakeoffEvents(el);
+  if (scroll) el.scrollIntoView({ behavior: "smooth" });
+}
+
+function bindTakeoffEvents(el) {
+  const t = draft();
+  const f = state.tf;
+  const lineOf = (node) => t.lines.find((x) => x.id === node.closest("tr[data-id]")?.dataset.id);
+  const changed = () => { saveProject(); renderTakeoff(); };
+  const shownLines = () => $$("tr[data-id]", el).map((tr) => t.lines.find((l) => l.id === tr.dataset.id)).filter(Boolean);
+
+  el.onclick = (e) => {
+    const view = e.target.closest("[data-view]")?.dataset.view;
+    if (view) { f.view = view; renderTakeoff(); return; }
+    if (e.target.closest("[data-undo]")) { undo(); return; }
+    if (e.target.closest("[data-redo]")) { redo(); return; }
+    const bulk = e.target.dataset.bulk;
+    if (bulk) {
+      const ls = shownLines();
+      if (!ls.length) return;
+      if (bulk === "delete") {
+        if (!confirm(`Delete the ${ls.length} shown line(s) from the draft?`)) return;
+        t.lines = t.lines.filter((l) => !ls.includes(l));
+        saveProject(); renderTakeoff();
+        toast(`Deleted ${ls.length} line(s).`, 6000, { label: "Undo", fn: undo });
+        return;
+      }
+      ls.forEach((l) => (l.status = bulk === "keep" ? "keep" : "removed"));
+      changed(); return;
+    }
+    const ga = e.target.dataset.grpAct;
+    if (ga) {
+      const sec = e.target.closest("tr.grp").dataset.grp;
+      shownLines().filter((l) => (l.section || "General") === sec).forEach((l) => (l.status = ga === "keep" ? "keep" : "removed"));
+      changed(); return;
+    }
+    if (e.target.id === "tfAddLine") {
+      const l = toTakeoffLine({ section: f.section || t.lines.at(-1)?.section || "General", description: "", unit: "cum", qty: 0, notes: "Added manually", confidence: "high" });
+      t.lines.push(l);
+      f.view = "all"; f.q = "";
+      saveProject(); renderTakeoff();
+      const ta = $(`tr[data-id="${l.id}"] textarea`, el);
+      if (ta) { ta.scrollIntoView({ block: "center" }); ta.focus(); }
+      return;
+    }
+    if (e.target.id === "tfAdd") { addTakeoffToBoq(); return; }
+    if (e.target.id === "tfClear") {
+      if (!confirm("Discard this takeoff draft? Lines already added to the BOQ stay in the BOQ.")) return;
+      project().draft = null; saveProject(); renderTakeoff();
+      toast("Draft discarded.", 6000, { label: "Undo", fn: undo });
+      return;
+    }
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (!act) return;
+    const l = lineOf(e.target); if (!l) return;
+    if (act === "toggle") { l.status = isKept(l) ? "removed" : "keep"; changed(); }
+    if (act === "dup") {
+      const copy = { ...structuredClone(l), id: uid("t"), added: false, status: "keep", notes: [l.notes, "copy"].filter(Boolean).join(" · ") };
+      t.lines.splice(t.lines.indexOf(l) + 1, 0, copy); changed();
+    }
+    if (act === "del") {
+      t.lines.splice(t.lines.indexOf(l), 1); changed();
+      toast("Line deleted.", 6000, { label: "Undo", fn: undo });
+    }
+    if (act === "meas") {
+      openMeasurements(l, () => { l.qty = round(itemQty(l), 3); renderTakeoff(); });
+    }
+  };
+
+  el.onchange = (e) => {
+    if (e.target.id === "tfMerge") { state.settings.mergeTakeoff = e.target.checked; saveSettings(); return; }
+    if (e.target.id === "tfSec") { f.section = e.target.value; renderTakeoff(); return; }
+    if (e.target.id === "tfConf") { f.conf = e.target.value; renderTakeoff(); return; }
+    const fld = e.target.dataset.f; if (!fld) return;
+    const l = lineOf(e.target); if (!l) return;
+    if (fld === "qty") { l.qty = num(e.target.value); l.measurements = []; }
+    else if (fld === "customRate") l.customRate = num(e.target.value);
+    else if (fld === "pick") {
+      if (e.target.value === "__search") { searchPick(l); return; }
+      l.pick = e.target.value; l.aiPicked = false; l.autoPick = false;
+    } else if (fld === "description" || fld === "section" || fld === "unit") { l[fld] = e.target.value.trim(); rematch(l); }
+    else l[fld] = e.target.value;
+    changed();
+  };
+  let qT;
+  $("#tfQ", el).oninput = (e) => {
+    clearTimeout(qT);
+    qT = setTimeout(() => { f.q = e.target.value; renderTakeoff(); const q = $("#tfQ"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 250);
+  };
 }
 
 function measTableHtml(ms) {
   const v = (x) => (x === "" || x == null ? "" : qtyFmt(Number(x)));
   return `<table class="meas"><tr><th></th><th>Nos</th><th>L</th><th>B</th><th>D</th><th>Qty</th></tr>${ms.map((m) => `<tr><td>${esc(m.label)}</td><td>${v(m.nos)}</td><td>${v(m.l)}</td><td>${v(m.b)}</td><td>${v(m.d)}</td><td>${qtyFmt(measurementQty(m))}</td></tr>`).join("")}</table>`;
-}
-
-const pickedItem = (l) => (l.pick ? l.candidates.find((c) => c.id === l.pick) || state.index.items.find((c) => c.id === l.pick) : null);
-function lineAmount(l) {
-  const it = pickedItem(l);
-  if (!it) return round(l.qty * num(l.customRate), 2);
-  return round(l.qty * unitFactor(l.unit, it.unit) * indexedRate(bsrById(it._bsr), it), 2);
 }
 
 function searchPick(l) {
@@ -947,22 +1220,24 @@ function searchPick(l) {
     $("#spQ", m).oninput = fill;
     $("#spT", m).onclick = (e) => {
       const id = e.target.dataset.id; if (!id) return;
-      const it = state.index.items.find((x) => x.id === id);
-      if (!l.candidates.includes(it)) l.candidates.unshift(it);
-      l.pick = id;
-      closeModal(); renderTakeoff();
+      if (!l.candIds.includes(id)) l.candIds.unshift(id);
+      l.pick = id; l.aiPicked = false; l.autoPick = false;
+      closeModal(); saveProject(); renderTakeoff();
     };
   });
+  // Keep the select showing the real pick if the dialog is closed without choosing.
+  renderTakeoff();
 }
 
 function addTakeoffToBoq() {
-  const t = state.takeoff;
-  const sel = t.lines.filter((l) => l.include);
-  if (!sel.length) { toast("Nothing selected."); return; }
+  const t = draft();
+  const sel = t.lines.filter((l) => isKept(l) && !l.added);
+  if (!sel.length) { toast("Nothing to add: keep at least one line."); return; }
+  const merge = $("#tfMerge")?.checked !== false;
   const p = project();
+  let added = 0, merged = 0;
   for (const l of sel) {
     const it = pickedItem(l);
-    const sec = ensureSection(l.section || "General");
     let measurements = (l.measurements || []).map((m) => ({ ...m }));
     let qty = l.qty;
     let unit = l.unit;
@@ -973,18 +1248,30 @@ function addTakeoffToBoq() {
         qty = round(qty * f, 3);
       }
       unit = it.unit;
+      const existing = merge ? p.sections.flatMap((s) => s.items).find((x) => x.bsrItemId === it.id) : null;
+      if (existing) {
+        if (!existing.measurements?.length) existing.measurements = num(existing.qty) ? [{ label: "Earlier quantity", nos: num(existing.qty), l: "", b: "", d: "" }] : [];
+        if (!measurements.length) measurements = [{ label: "", nos: qty, l: "", b: "", d: "" }];
+        const tag = l.description.slice(0, 50);
+        existing.measurements.push(...measurements.map((m) => ({ ...m, label: m.label ? `${tag}: ${m.label}` : tag })));
+        existing.qty = round(itemQty(existing), 3);
+        l.added = true; merged++;
+        continue;
+      }
       const b = bsrById(it._bsr);
-      sec.items.push({
+      ensureSection(l.section || "General").items.push({
         id: uid("b"), bsrId: b.id, bsrItemId: it.id, bsrName: b.name, code: it.code, description: it.description, unit,
         baseRate: it.rate, rate: indexedRate(b, it), qty, measurements, remarks: [l.description !== it.description ? `Takeoff: ${l.description}` : "", l.notes].filter(Boolean).join(" · "),
       });
     } else {
-      sec.items.push({ id: uid("b"), bsrId: "", code: "NS", description: l.description, unit, rate: num(l.customRate), qty, measurements, remarks: l.notes || "" });
+      ensureSection(l.section || "General").items.push({ id: uid("b"), bsrId: "", code: "NS", description: l.description, unit, rate: num(l.customRate), qty, measurements, remarks: l.notes || "" });
     }
+    l.added = true; added++;
   }
   saveProject();
   renderSectionOptions();
-  toast(`Added ${sel.length} items to "${p.name}".`);
+  renderTakeoff();
+  toast(`${added} line(s) added${merged ? `, ${merged} combined with existing BOQ lines` : ""} in "${p.name}".`, 6000, { label: "Undo", fn: undo });
   showTab("boq");
 }
 
@@ -997,7 +1284,14 @@ function renderBoq() {
   renderProjectForm();
   const body = $("#boqBody");
   let sNo = 0;
-  body.innerHTML = p.sections.map((s, si) => `
+  const sel = state.boqSel;
+  for (const id of [...sel]) if (!findItem(id).item) sel.delete(id);
+  const bulkBar = sel.size ? `<div class="bulkbar"><b>${sel.size} selected</b>
+      <select data-bulk-move><option value="">Move to section…</option>${p.sections.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}<option value="__new">＋ New section…</option></select>
+      <button class="ghost small" data-bulk="dup">Duplicate</button>
+      <button class="ghost small danger-text" data-bulk="del">Delete</button>
+      <button class="ghost small" data-bulk="clear">Clear selection</button></div>` : "";
+  body.innerHTML = bulkBar + p.sections.map((s, si) => `
     <div class="section" data-sec="${s.id}">
       <div class="section-head">
         <span class="sec-letter">${String.fromCharCode(65 + (si % 26))}</span>
@@ -1007,16 +1301,17 @@ function renderBoq() {
         <button class="icon" data-sec-act="down" title="Move down">↓</button>
         <button class="icon danger-text" data-sec-act="del" title="Delete section">×</button>
       </div>
-      ${s.items.length ? `<div class="table-wrap"><table class="data boq"><thead><tr><th>#</th><th>Code</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th><th></th></tr></thead><tbody>
-      ${s.items.map((it) => { sNo++; return `<tr data-item="${it.id}">
+      ${s.items.length ? `<div class="table-wrap"><table class="data boq"><thead><tr><th><input type="checkbox" data-sel-sec title="Select all in section" ${s.items.every((i) => sel.has(i.id)) ? "checked" : ""}></th><th>#</th><th>Code</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th><th></th></tr></thead><tbody>
+      ${s.items.map((it) => { sNo++; return `<tr data-item="${it.id}" class="${sel.has(it.id) ? "selected" : ""}">
+        <td><input type="checkbox" data-sel ${sel.has(it.id) ? "checked" : ""}></td>
         <td>${sNo}</td>
         <td><input data-f="code" class="w80" value="${esc(it.code)}"><div class="small muted">${esc(it.bsrId ? (bsrById(it.bsrId)?.name || it.bsrName || "").slice(0, 22) : "NS")}</div></td>
         <td class="desc"><textarea data-f="description" rows="2">${esc(it.description)}</textarea>${it.remarks ? `<div class="small muted">${esc(it.remarks)}</div>` : ""}</td>
         <td><input data-f="unit" class="w70" value="${esc(it.unit)}"></td>
-        <td class="num">${it.measurements?.length ? `<button class="link" data-act="meas">${qtyFmt(itemQty(it))}</button><div class="small muted">${it.measurements.length} rows</div>` : `<input data-f="qty" type="number" step="any" class="w90 num" value="${it.qty || ""}"><div><button class="link small" data-act="meas">measure</button></div>`}</td>
+        <td class="num">${it.measurements?.length ? `<button class="link" data-act="meas">${qtyFmt(itemQty(it))}</button><div class="small muted">${it.measurements.length} row${it.measurements.length > 1 ? "s" : ""}</div>` : `<input data-f="qty" type="number" step="any" class="w90 num" value="${it.qty || ""}"><div><button class="link small" data-act="meas">measure</button></div>`}</td>
         <td class="num"><input data-f="rate" type="number" step="0.01" class="w100 num" value="${it.rate}"></td>
         <td class="num" data-amount>${money(itemAmount(it), false)}</td>
-        <td class="actions"><button class="icon" data-act="up" title="Move up">↑</button><button class="icon" data-act="move" title="Move to section">⇄</button><button class="icon danger-text" data-act="del" title="Remove">×</button></td>
+        <td class="actions"><button class="icon" data-act="up" title="Move up">↑</button><button class="icon" data-act="move" title="Move to section">⇄</button><button class="icon" data-act="dup" title="Duplicate">⧉</button><button class="icon danger-text" data-act="del" title="Delete">🗑</button></td>
       </tr>`; }).join("")}
       </tbody></table></div>` : `<p class="muted small pad">No items in this section. Add some from <a href="#" data-goto="pick">Pick items</a> or <a href="#" data-goto="takeoff">Drawing takeoff</a>.</p>`}
     </div>`).join("");
@@ -1032,9 +1327,31 @@ function renderBoq() {
     $("[data-amount]", tr).textContent = money(itemAmount(item), false);
     $(`[data-sec="${sec.id}"] [data-sec-total]`).textContent = money(sectionTotal(sec));
     renderAbstract();
-    saveProject();
+    saveProject(true);
   };
   body.onchange = (e) => {
+    if (e.target.matches("[data-sel]")) {
+      const id = e.target.closest("tr[data-item]").dataset.item;
+      e.target.checked ? sel.add(id) : sel.delete(id);
+      renderBoq(); return;
+    }
+    if (e.target.matches("[data-sel-sec]")) {
+      const sec = p.sections.find((x) => x.id === e.target.closest("[data-sec]").dataset.sec);
+      sec.items.forEach((i) => (e.target.checked ? sel.add(i.id) : sel.delete(i.id)));
+      renderBoq(); return;
+    }
+    if (e.target.matches("[data-bulk-move]")) {
+      let to = e.target.value; if (!to) return;
+      let target;
+      if (to === "__new") { const n = prompt("New section name:"); if (!n) { renderBoq(); return; } target = { id: uid("s"), name: n, items: [] }; p.sections.push(target); }
+      else target = p.sections.find((x) => x.id === to);
+      const moving = p.sections.flatMap((x) => x.items.filter((i) => sel.has(i.id)));
+      p.sections.forEach((x) => (x.items = x.items.filter((i) => !sel.has(i.id))));
+      target.items.push(...moving);
+      sel.clear(); saveProject(); renderBoq(); renderSectionOptions();
+      toast(`Moved ${moving.length} item(s) to "${target.name}".`, 6000, { label: "Undo", fn: undo });
+      return;
+    }
     if (e.target.matches("[data-sec-name]")) {
       const sec = p.sections.find((s) => s.id === e.target.closest("[data-sec]").dataset.sec);
       sec.name = e.target.value.trim() || "Section";
@@ -1048,6 +1365,23 @@ function renderBoq() {
     saveProject();
   };
   body.onclick = (e) => {
+    const bulk = e.target.dataset.bulk;
+    if (bulk) {
+      if (bulk === "clear") sel.clear();
+      if (bulk === "del") {
+        const n = sel.size;
+        p.sections.forEach((x) => (x.items = x.items.filter((i) => !sel.has(i.id))));
+        sel.clear(); saveProject();
+        toast(`Deleted ${n} item(s).`, 6000, { label: "Undo", fn: undo });
+      }
+      if (bulk === "dup") {
+        p.sections.forEach((x) => {
+          x.items = x.items.flatMap((i) => (sel.has(i.id) ? [i, { ...structuredClone(i), id: uid("b") }] : [i]));
+        });
+        sel.clear(); saveProject();
+      }
+      renderBoq(); return;
+    }
     const secEl = e.target.closest("[data-sec]");
     const sa = e.target.dataset.secAct;
     if (sa) {
@@ -1058,6 +1392,7 @@ function renderBoq() {
         if (p.sections[i].items.length && !confirm(`Delete section "${p.sections[i].name}" and its ${p.sections[i].items.length} items?`)) return;
         p.sections.splice(i, 1);
         if (!p.sections.length) p.sections.push({ id: uid("s"), name: "General", items: [] });
+        toast("Section deleted.", 6000, { label: "Undo", fn: undo });
       }
       saveProject(); renderBoq(); renderSectionOptions();
       return;
@@ -1066,7 +1401,8 @@ function renderBoq() {
     const tr = e.target.closest("tr[data-item]");
     const { item, sec } = findItem(tr.dataset.item);
     const idx = sec.items.indexOf(item);
-    if (act === "del") sec.items.splice(idx, 1);
+    if (act === "del") { sec.items.splice(idx, 1); sel.delete(item.id); toast("Item deleted.", 6000, { label: "Undo", fn: undo }); }
+    if (act === "dup") sec.items.splice(idx + 1, 0, { ...structuredClone(item), id: uid("b") });
     if (act === "up" && idx > 0) [sec.items[idx - 1], sec.items[idx]] = [sec.items[idx], sec.items[idx - 1]];
     if (act === "meas") { openMeasurements(item); return; }
     if (act === "move") { moveItem(item, sec); return; }
@@ -1075,6 +1411,7 @@ function renderBoq() {
   renderCharges();
   renderAbstract();
   renderFormatOptions();
+  updateUndoButtons();
 }
 
 function findItem(id) {
@@ -1102,7 +1439,7 @@ function moveItem(item, from) {
   });
 }
 
-function openMeasurements(item) {
+function openMeasurements(item, after = renderBoq) {
   const ms = (item.measurements || []).map((m) => ({ ...m }));
   if (!ms.length) ms.push({ label: "", nos: 1, l: num(item.qty) || "", b: "", d: "" });
   const render = (m) => {
@@ -1131,12 +1468,12 @@ function openMeasurements(item) {
     $("#measSave", m).onclick = () => {
       item.measurements = ms.filter((r) => measurementQty(r) !== 0 || r.label);
       item.qty = round(itemQty(item), 3);
-      saveProject(); closeModal(); renderBoq();
+      saveProject(); closeModal(); after();
     };
     $("#measClear", m).onclick = () => {
       item.qty = round(ms.reduce((a, r) => a + measurementQty(r), 0), 3);
       item.measurements = [];
-      saveProject(); closeModal(); renderBoq();
+      saveProject(); closeModal(); after();
     };
   });
 }
