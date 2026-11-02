@@ -431,22 +431,9 @@ function printHtml(p, c, bill, kind) {
   if (kind === "bill" && bill) {
     html = form27g(p, c, bill);
   } else if (kind === "slip" && bill) {
-    const k = computeBill(p, bill);
-    const ex = k.rows.filter((r) => r.extra);
-    html = `<section class="p-page p-slip"><div class="c"><b>OFFICE OF THE ${esc((c.office || p.client || "").toUpperCase())}</b><h1>EXTRA ITEM SLIP</h1></div>
-      ${fieldsTable([["Name of Work", esc(p.name)], ["Contract Document No.", `${esc(c.workOrderNo)}${c.woDate ? ` Dated ${esc(c.woDate)}` : ""}`], ["Name of Contractor", esc(c.contractor)]])}
-      <table class="p-table"><colgroup><col style="width:7%"><col style="width:45%"><col style="width:14%"><col style="width:11%"><col style="width:13%"><col style="width:10%"></colgroup>
-      <thead><tr><th>S.No.</th><th>Details</th><th>Quantity</th><th>Rate</th><th>Amount</th><th>Remarks</th></tr></thead><tbody>
-      ${ex.map((r, i) => `<tr><td class="c">${i + 1}</td><td class="p-desc">${esc(r.desc)}</td><td class="n">${qtyFmt(r.qty)} ${esc(r.unit)}</td><td class="n">${m2(r.applied)}</td><td class="n">${m2(r.amt)}</td><td></td></tr>`).join("")}
-      <tr class="p-tot"><td></td><td class="n" colspan="3">Total :</td><td class="n">${m2(k.extraGross)}</td><td></td></tr>
-      <tr class="p-tot"><td></td><td class="n" colspan="3">${esc(tpLabel(c))}</td><td class="n">${m2(Math.abs(k.extraNet - k.extraGross))}</td><td></td></tr>
-      <tr class="p-grand"><td></td><td class="n" colspan="3">G/Total :</td><td class="n">${m2(k.extraNet)}</td><td></td></tr></tbody></table>
-      ${signs(["Junior Engineer", "Assistant Engineer", "Executive Engineer"], c.office || p.client)}</section>`;
+    html = extraSlip(p, c, bill);
   } else if (kind === "deviation") {
-    const d = deviationRows(p);
-    html = `<section class="p-page p-landscape p-dev"><h1 class="c">DEVIATION STATEMENT</h1>
-      ${fieldsTable([["Name of Work", esc(p.name)], ["Name of Agency", esc(c.contractor)], ["Agreement No.", `${esc(c.workOrderNo)}${c.woDate ? ` Dated ${esc(c.woDate)}` : ""}`]])}
-      ${devTable(d, "p-table")}${signs(["Junior Engineer", "Assistant Engineer", "Executive Engineer"], c.office || p.client)}</section>`;
+    html = deviationSheet(p, c);
   } else if (kind === "photos") {
     const pages = [];
     for (let i = 0; i < p.photos.length; i += 4) pages.push(p.photos.slice(i, i + 4));
@@ -630,11 +617,9 @@ function form27g(p, c, bill) {
 
   const seq = [];
   byMb(k.gRows.filter(used)).forEach((r) => seq.push(itemRow(r)));
-  seq.push(text("&nbsp;"));
-  seq.push(box("TOTAL", k.gTotal, round(k.gTotal - pk.gTotal, 2)));
-  seq.push(box(esc(tpLabel(c)), k.tp, round(k.tp - pk.tp, 2)));
-  seq.push(box("TOTAL G-SCHEDULE", k.gNet, round(k.gNet - pk.gNet, 2)));
-  seq.push(box("GRAND TOTAL -", k.gNet, round(k.gNet - pk.gNet, 2), "f-grand"));
+  // TOTAL … GRAND TOTAL stay together on one page, as in the printed bills.
+  seq.push({ html: [text("&nbsp;"), box("TOTAL", k.gTotal, round(k.gTotal - pk.gTotal, 2)), box(esc(tpLabel(c)), k.tp, round(k.tp - pk.tp, 2)),
+    box("TOTAL G-SCHEDULE", k.gNet, round(k.gNet - pk.gNet, 2)), box("GRAND TOTAL -", k.gNet, round(k.gNet - pk.gNet, 2), "f-grand")].map((x) => x.html).join("") });
   if (k.hRows.some(used)) {
     seq.push(text("<b>H-Schedule</b>"));
     serial = 0; // H-Schedule items are numbered afresh (1/1, 2/2 …)
@@ -642,20 +627,6 @@ function form27g(p, c, bill) {
   }
   seq.push(text(`<div class="f-cert"><u><b>Certificate :-</b></u><br>1. Work is satisfactory and as per specifications and G-Schedule.<br>2. Nothing outstanding against contractor regarding this bill.</div>`, 4));
 
-  // Room on the last page for the totals below the table and II - Certificate.
-  seq.push({ lines: 10, html: "" });
-  // Pages with Carried Over / B/F
-  const pages = [[]], carry = [];
-  let usedL = 0, cap = 27, s6 = 0, s7 = 0;
-  for (const it of seq) {
-    if (usedL + it.lines > cap && pages.at(-1).length) { carry.push([s6, s7]); pages.push([]); usedL = 0; cap = 49; }
-    pages.at(-1).push(it); usedL += it.lines; s6 += it.a6 || 0; s7 += it.a7 || 0;
-  }
-  // Never leave the totals alone on the last page: bring the H-Schedule / certificate lines with them.
-  if (pages.length > 1 && pages.at(-1).every((x) => !x.html)) {
-    const prev = pages.at(-2); const n = Math.min(3, prev.length - 1);
-    pages.at(-1).unshift(...prev.splice(prev.length - n, n));
-  }
   const thead = `<thead><tr><th rowspan="2" class="f-unit">Unit</th><th rowspan="2" class="f-rot"><div>Quantity executed (or supplied) since last certificate</div></th><th rowspan="2" class="f-rot"><div>Quantity executed (or supplied up-to-date as per Measurement Book)</div></th>
     <th rowspan="2">Item of work Supplies (grouped under "sub-heads" and "sub-work" of estimate)</th><th rowspan="2">Rate in Rs.</th><th colspan="2">AMOUNT</th><th rowspan="2" class="f-rot f-rem"><div>Remarks</div></th></tr>
     <tr><th>% up-to-date</th><th>Since previous bill Total for each sub-head</th></tr>
@@ -681,6 +652,37 @@ function form27g(p, c, bill) {
       <tr><td>Date of actual completion of work</td><td>: ${esc(c.completed || "W.I.P.")}</td></tr>
       <tr><td>Date of measurements</td><td>: ${esc(bill.measured || "")}</td></tr></table>
     <div class="f-acc">A-ACCOUNT OF WORK OR SUPPLIES</div>`;
+  // Measure the real printed height of every part, then fill each A4 page as far as it goes.
+  const MM = 96 / 25.4, PAGE = 268 * MM;
+  const m = document.createElement("div");
+  m.className = "f27 f-measure";
+  const bfRow = `<tr class="f-bf m-bf"><td></td><td></td><td></td><td class="r"><b>B/F</b></td><td></td><td class="r">0.00</td><td class="r">0.00</td><td></td></tr>`;
+  const coRow = `<tr class="f-co m-co"><td></td><td></td><td></td><td class="c"><b><u>Carried Over..............................</u></b></td><td></td><td class="r">0</td><td class="r">0</td><td></td></tr>`;
+  m.innerHTML = `<div class="m-head">${head}</div><table class="f-table">${cols}${thead}<tbody>${bfRow}
+    ${seq.map((x, i) => x.html.replace(/<tr/g, `<tr data-mi="${i}"`)).join("")}${coRow}${tail.replace(/<tr/g, '<tr data-tail="1"')}</tbody></table>
+    <div class="m-foot f-foot">The full Name of the work as given in the estimate should be entered here.<br>If the outlay on the work is recorded by sub-headed should be shown in col. 6 and against this total there should</div>
+    <div class="m-note f-note">be an entry in column 7 also. In no other case should any entries be made in column 7.</div><div class="m-cert">${certificateBlock(c, bill)}</div><div class="f-pg m-pg">1</div>`;
+  document.body.appendChild(m);
+  const h = (sel) => m.querySelector(sel)?.getBoundingClientRect().height || 0;
+  const H = { head: h(".m-head"), thead: h("thead"), bf: h(".m-bf"), co: h(".m-co"), foot: h(".m-foot"), note: h(".m-note"), cert: h(".m-cert"), pg: h(".m-pg") + 8 };
+  H.tail = [...m.querySelectorAll("[data-tail]")].reduce((a, r) => a + r.getBoundingClientRect().height, 0);
+  seq.forEach((x, i) => { x.h = [...m.querySelectorAll(`[data-mi="${i}"]`)].reduce((a, r) => a + r.getBoundingClientRect().height, 0) || 14; });
+  m.remove();
+  // Room for rows on a page: "mid" pages end with Carried Over, the last page with the totals and certificate.
+  const roomMid = (first) => PAGE - (first ? H.head + H.foot : H.note + H.bf) - H.thead - H.co - H.pg;
+  const roomLast = (first) => PAGE - (first ? H.head : H.note + H.bf) - H.thead - H.tail - H.cert - H.pg;
+  const pages = [[]], carry = [];
+  let s6 = 0, s7 = 0, i = 0;
+  while (i < seq.length) {
+    const first = pages.length === 1;
+    const rest = seq.slice(i).reduce((a, y) => a + y.h, 0);
+    if (rest <= roomLast(first)) { pages.at(-1).push(...seq.slice(i)); break; }
+    let used = 0;
+    while (i < seq.length && (used + seq[i].h <= roomMid(first) || !pages.at(-1).length)) {
+      pages.at(-1).push(seq[i]); used += seq[i].h; s6 += seq[i].a6 || 0; s7 += seq[i].a7 || 0; i++;
+    }
+    if (i < seq.length) { carry.push([s6, s7]); pages.push([]); }
+  }
   const out = pages.map((pg, pi) => {
     const last = pi === pages.length - 1;
     const bf = pi ? `<tr class="f-bf"><td></td><td></td><td></td><td class="r"><b>B/F</b></td><td></td><td class="r">${n2(carry[pi - 1][0])}</td><td class="r">${n2(carry[pi - 1][1])}</td><td></td></tr>` : "";
@@ -727,4 +729,53 @@ function memorandum(p, c, bill, k, prevBill, pageNo) {
     <div class="f-small c">This space is reserved for any remarks which the Disbursing Officer of the Division Officer may] wish to record in respect of the work check of measurements of the contractor's account.</div>
     ${(c.terms || []).length ? `<div class="f-acc">TERMS AND CONDITIONS OF THE WORK ORDER</div><ol class="p-terms">${c.terms.map((t) => `<li>${esc(t)}</li>`).join("")}</ol>` : ""}
     <div class="f-pg">${pageNo}</div></section>`;
+}
+
+// ---------------------------------------------------------------------------
+// Extra item slip and deviation statement in the department's printed layout
+// ---------------------------------------------------------------------------
+
+const officeLine = (c, p) => (c.office || p.client || "").toUpperCase();
+const signRow = (c, p) => {
+  const o = officeLine(c, p).replace(/^(THE\s+)?/, "");
+  return `<div class="d-signs">${["JUNIOR ENGINEER", "ASSISTANT ENGINEER", "EXECUTIVE ENGINEER"].map((t) => `<div>${t},<br>${esc(o)}</div>`).join("")}</div>`;
+};
+
+function extraSlip(p, c, bill) {
+  const k = computeBill(p, bill);
+  const ex = k.rows.filter((r) => r.extra);
+  const tpAmt = round(k.extraNet - k.extraGross, 2);
+  return `<section class="p-page f27 d-slip">
+    <div class="d-office">OFFICE OF THE ${esc(officeLine(c, p))}</div>
+    <div class="d-title">EXTRA ITEM SLIP</div>
+    <table class="d-fields"><tr><td>Name of Work</td><td>:</td><td class="d-work">${esc(p.name)}</td></tr>
+      <tr><td>Contract Document No.</td><td>:</td><td>${esc(c.workOrderNo)}${c.woDate ? ` Dated ${esc(c.woDate)}` : ""}</td></tr>
+      <tr><td>Name of Contractor</td><td>:</td><td><b>${esc(c.contractor)}</b></td></tr></table>
+    <table class="d-grid"><colgroup><col style="width:7%"><col style="width:43%"><col style="width:10%"><col style="width:8%"><col style="width:10%"><col style="width:12%"><col style="width:10%"></colgroup>
+      <thead><tr><th>S.No.</th><th>Details</th><th colspan="2">Quantity</th><th>Rate</th><th>Amount</th><th>Remarks</th></tr></thead><tbody>
+      ${ex.map((r, i) => `<tr><td class="c bot">${i + 1}</td><td class="j">${esc(r.desc)}</td><td class="c mid"><b>${n2(r.qty)}</b></td><td class="c mid"><b>${esc(r.unit)}</b></td><td class="c mid"><b>${n2(r.applied)}</b></td><td class="r bot">${n2(r.amt)}</td><td></td></tr>`).join("")}
+      <tr><td></td><td>Total :</td><td></td><td></td><td></td><td class="r">${n2(k.extraGross)}</td><td></td></tr>
+      <tr><td></td><td><b>${esc(tpLabel(c))}</b></td><td></td><td></td><td></td><td class="r">${n2(Math.abs(tpAmt))}</td><td></td></tr>
+      <tr><td></td><td><b>G/Total :</b></td><td></td><td></td><td></td><td class="r"><b>${n2(k.extraNet)}</b></td><td></td></tr></tbody></table>
+    ${signRow(c, p)}</section>`;
+}
+
+function deviationSheet(p, c) {
+  const d = deviationRows(p);
+  const v = (x) => (x ? n2(x) : "");
+  const row = (r, i) => `<tr><td class="c">${i + 1}</td><td class="j">${esc(r.desc)}</td><td class="r">${q3(r.extra ? 0 : r.tqty)}</td><td class="c">${esc(r.unit)}</td><td class="r">${q3(r.rate)}</td><td class="r">${n2(r.tamt)}</td>
+    <td class="r">${q3(r.qty)}</td><td class="c">${esc(r.unit)}</td><td class="r">${q3(r.applied)}</td><td class="r">${n2(r.amt)}</td><td class="r">${v(r.excess)}</td><td class="r">${v(r.extraAmt)}</td><td class="r">${v(r.saving)}</td><td></td></tr>`;
+  const tot = (label, o, bold) => `<tr class="${bold ? "d-b" : ""}"><td></td><td class="r">${label}</td><td></td><td></td><td></td><td class="r">${n2(o.tamt)}</td><td></td><td></td><td></td><td class="r">${n2(o.amt)}</td><td class="r">${n2(o.excess)}</td><td class="r">${n2(o.extraAmt)}</td><td class="r">${n2(o.saving)}</td><td></td></tr>`;
+  return `<section class="p-page p-landscape f27 d-dev">
+    <div class="d-title">DEVIATION STATEMENT</div>
+    <table class="d-fields"><tr><td>Name of Work :</td><td></td><td class="d-work">${esc(p.name)}</td></tr>
+      <tr><td>Name of Agency</td><td></td><td>${esc(c.contractor)}</td></tr>
+      <tr><td>Aggrement No.</td><td></td><td>${esc(c.workOrderNo)}${c.woDate ? ` Dated ${esc(c.woDate)}` : ""}</td></tr></table>
+    <table class="d-grid"><colgroup><col style="width:3%"><col style="width:23%"><col style="width:6%"><col style="width:4%"><col style="width:6.5%"><col style="width:8%"><col style="width:6%"><col style="width:4%"><col style="width:6.5%"><col style="width:8%"><col style="width:6.5%"><col style="width:6.5%"><col style="width:7.5%"><col style="width:4.5%"></colgroup>
+      <thead><tr><th rowspan="2">S.<br>No.</th><th rowspan="2">Particular</th><th colspan="4">As per "G" Schedule</th><th colspan="4">As per Actual Executed of work</th><th colspan="3">Amount</th><th rowspan="2">Remarks</th></tr>
+      <tr><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Excess</th><th>Extra</th><th>Saving</th></tr></thead><tbody>
+      ${d.G.map(row).join("")}
+      ${tot("Total", d.gT, true)}${tot(esc(tpLabel(d.c).replace(/^Less T\.P\. ([\d.]+)% Below$/, "Less: $1% as per T.P.")), d.gTp)}${tot("G. Total", d.gNet, true)}
+      ${d.H.length ? `<tr class="d-b"><td></td><td>H-Schedule</td><td colspan="12"></td></tr>${d.H.map(row).join("")}${tot("Total", d.grand, true)}` : ""}</tbody></table>
+    <div class="d-signs d-signs3">${["Junior Engineer", "Assistant Engineer", "Executive Engineer,"].map((t) => `<div>${t}<br>${esc((c.office || p.client || "").replace(/^.*?(Corporation|Nigam)/i, "Nagar Nigam"))}</div>`).join("")}</div></section>`;
 }

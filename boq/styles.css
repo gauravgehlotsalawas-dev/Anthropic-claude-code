@@ -439,7 +439,7 @@ table.dev tr.sub td { font-weight: 700; background: #f7faf8; }
 @media print { .p-bill { font-size: 8.5pt; } .p-bill th { font-size: 7.5pt; padding: 2pt; } .p-27g .p-pageno { margin-top: 4pt; } }
 
 /* ---------- Form 27G, as printed by the department ---------- */
-@media print {
+@media all {
   .f27 { font-family: "Times New Roman", Times, "Liberation Serif", serif; font-size: 10pt; color: #000; }
   .f27 .r { text-align: right; } .f27 .c { text-align: center; }
   .f-formno { text-align: right; font-size: 9pt; line-height: 1.2; }
@@ -488,7 +488,7 @@ table.dev tr.sub td { font-weight: 700; background: #f7faf8; }
   .f-row3, .f-row2 { display: flex; justify-content: space-between; margin-top: 6pt; }
   .f-small { font-size: 9pt; margin-top: 6pt; }
 }
-@media print {
+@media all {
   .f-table td { font-size: 8.8pt; line-height: 1.18; padding: 0.5pt 2.5pt; }
   .f-desc { line-height: 1.18; }
   .f-item td { padding-top: 2pt; }
@@ -496,4 +496,40 @@ table.dev tr.sub td { font-weight: 700; background: #f7faf8; }
   .f-rot div { font-size: 7.6pt; max-height: 36mm; white-space: normal; }
   .f-table th { font-size: 8.5pt; }
 }
-@media print { .f-memo .f-boxcell { height: 32mm; } .f27 p { margin: 3pt 0; } }
+@media all { .f-memo .f-boxcell { height: 32mm; } .f27 p { margin: 3pt 0; } }
+
+/* Form 27G: compact like the printed department bills */
+.f27 { font-family: "Times New Roman", Times, "Liberation Serif", serif; color: #000; }
+.f27 .f-table td { font-size: 8.4pt; line-height: 1.13; padding: 0 2.5pt; }
+.f27 .f-item td { padding-top: 1.5pt; }
+.f27 .f-head td, .f27 .f-fields td { font-size: 9.6pt; line-height: 1.15; padding: 0; }
+.f27 .f-title { font-size: 16pt; margin: 0; }
+.f27 .f-acc { margin: 2pt 0 1pt; }
+.f27 .f-rot { height: 31mm; }
+.f27 .f-rot div { max-height: 31mm; }
+.f-measure { position: absolute; left: -10000px; top: 0; width: 186mm; visibility: hidden; }
+@media print { .f27.p-page { page-break-after: always; } .f27.p-page:last-child { page-break-after: auto; } }
+
+/* ---------- extra item slip / deviation in the department's layout ---------- */
+.d-office { text-align: center; font-size: 13pt; margin-top: 10mm; }
+.d-title { text-align: center; font-weight: 700; font-size: 13pt; text-decoration: underline; margin: 8mm 0 6mm; }
+.d-dev .d-title { margin: 0 0 3mm; }
+.d-fields { border-collapse: collapse; margin: 0 0 5mm 4mm; font-size: 10pt; }
+.d-fields td { padding: 3pt 4pt; vertical-align: top; }
+.d-slip .d-fields td:first-child { width: 62mm; }
+.d-slip .d-work { font-weight: 700; width: 70mm; }
+.d-dev .d-fields td:first-child { width: 40mm; }
+.d-grid { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9.5pt; }
+.d-grid th, .d-grid td { border: 0.7pt solid #000; padding: 1.5pt 3pt; vertical-align: top; }
+.d-grid th { font-weight: 700; }
+.d-dev .d-grid { font-size: 7.6pt; }
+.d-grid .j { text-align: justify; }
+.d-grid .bot { vertical-align: bottom; } .d-grid .mid { vertical-align: middle; }
+.d-grid tr.d-b td { font-weight: 700; }
+.d-signs { display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; font-size: 7.5pt; margin-top: 22mm; }
+.d-signs3 { font-size: 9pt; margin-top: 12mm; }
+.d-fields td { border: 0 !important; }
+.d-slip .d-grid { font-size: 10.5pt; }
+.d-slip .d-grid td { padding: 3pt 4pt; }
+.d-slip .d-fields { font-size: 11pt; }
+.d-dev .d-grid { font-size: 8.2pt; }
