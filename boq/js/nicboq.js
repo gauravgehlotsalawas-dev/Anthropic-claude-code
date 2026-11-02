@@ -367,14 +367,15 @@ const isStringResult = (res) => res[6] === 0xff && res[7] === 0xff && res[0] ===
 // ---------------------------------------------------------------------------
 
 /** Summarise a NIC BOQ file and list its items. */
-export function readNicBoq(buffer) {
+export function readNicBoq(buffer, sheetName = "BoQ1") {
   const { cfb, stream } = loadContainer(buffer);
   const recs = readRecords(stream);
   const subs = splitSubstreams(recs);
   const globals = subs[0];
   const sheets = sheetsInfo(globals);
-  const si = sheets.findIndex((s) => s.name === "BoQ1");
-  if (si < 0) throw new Error('This file has no "BoQ1" sheet, so it is not a GePNIC BOQ template.');
+  const si = sheets.findIndex((s) => s.name === sheetName);
+  if (si < 0) throw new Error(`This file has no "${sheetName}" sheet, so it is not a GePNIC BOQ template.`);
+  const sheetNames = sheets.map((s) => s.name).filter((n) => /^BoQ\d+$/.test(n));
   const sstAt = globals.findIndex((r) => r.type === R.SST);
   const chunks = [globals[sstAt].data];
   for (let i = sstAt + 1; globals[i]?.type === R.CONTINUE; i++) chunks.push(globals[i].data);
@@ -408,6 +409,7 @@ export function readNicBoq(buffer) {
     version: String(text(1, 0)), boqType: String(text(1, 1)), chartType: String(text(1, 2)), currencyMode: String(text(1, 3)),
     title: String(text(0, 0)), authority: String(text(3, 0)), work: String(text(4, 0)), contract: String(text(5, 0)),
     protected: !!(protect && u16(protect.data, 0)), sheetHidden: sheets[si].hidden,
+    sheetName, sheetNames,
     hasMacros: cfb.FullPaths.some((p) => /_VBA_PROJECT/i.test(p)), items, firstItemRow: 13, footerRow: footer + 1,
   };
 }

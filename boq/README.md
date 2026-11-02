@@ -44,6 +44,16 @@ What changes in the file: only the item rows of `BoQ1`. The `Total in Figures` a
 
 **Import:** "Import items" on a template, or *Import e-tender BOQ (.xls)* in the BOQ tab, turns any GePNIC BOQ into a project. Contractors can use this to price a tender BOQ against their own rates.
 
+## Bills from the measurement book (tab 6)
+
+For contractors, based on the project's BOQ (import the tender BOQ .xls; files with BoQ1 and BoQ2, for H- and G-Schedule, are read together):
+
+- **Contract:** contractor, work order / agreement No. and dates, tender premium (T.P.) % below or above, and the limit for extra items (default 5% of the contract value).
+- **Bill (M.B. entry):** for each running bill, enter the up-to-date quantity of every item from the M.B. Part rates are allowed, and an item paid at two rates is typed as `237.74@384.5 + 409.5@159`. The bill works out amount up-to-date and since previous, G-Schedule total, less or add T.P., H-Schedule at the agreement rates, previous bill, net and SAY. Any bill can be made the final bill. It prints in P.W.A. Form 27G layout and exports to Excel.
+- **Extra items:** items not in the BOQ (picked from a rate book or typed), billed in the G-Schedule with T.P. The extra item slip prints, and the tool warns when extras pass the limit.
+- **Deviation statement:** tender quantity, rate and amount against executed figures, with excess, extra and saving columns, T.P. and G/H totals.
+- **Photos:** drop site photos; they print four to an A4 page with the name of work and work order No. on top and JEN / AEN / XEN signature spaces at the bottom.
+
 ## File format notes
 
 | Format | Handling |

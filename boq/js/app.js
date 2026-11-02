@@ -10,6 +10,7 @@ import { QUICK_FIELDS, quickTakeoff } from "./quick.js";
 import { exportXlsx, exportCsv, printProject, download } from "./export.js";
 import { SAMPLE_BSR } from "./sample.js";
 import { readNicBoq, writeNicBoq, nicNumbering } from "./nicboq.js";
+import { initBills, renderBills } from "./bills.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -57,6 +58,12 @@ async function boot() {
   rebuildIndex();
   bindGlobal();
   bindTender();
+  initBills({
+    project, saveProject, toast, modal, closeModal, download,
+    searchItems: (q) => state.index.search(q, () => true, 200),
+    findItem: (id) => state.itemById.get(id),
+    rateOf: (it) => indexedRate(bsrById(it._bsr), it),
+  });
   renderAll();
   resetHistory();
 }
@@ -380,6 +387,7 @@ function showTab(name) {
   if (name === "pick") renderPick();
   if (name === "boq") renderBoq();
   if (name === "tender") renderTender();
+  if (name === "bills") renderBills();
   window.scrollTo({ top: 0 });
 }
 
@@ -407,7 +415,7 @@ function switchProject(id) {
   state.projectId = id;
   idb.put("kv", { id: "current", value: id });
   state.boqSel.clear(); state.tf = null; if (state.tender) state.tender.scope = "all";
-  renderProjectSelect(); renderBoq(); renderSectionOptions(); renderTakeoff();
+  renderProjectSelect(); renderBoq(); renderSectionOptions(); renderTakeoff(); renderBills();
   resetHistory();
 }
 
@@ -1825,31 +1833,40 @@ function downloadNicBoq() {
   }
 }
 
-/** Create a project from a NIC BOQ: headings become sections, item rows become BOQ items. */
+/** Create a project from a NIC BOQ. Every BoQ sheet is read (e.g. BoQ1 = H-Schedule item rate, BoQ2 = G-Schedule percentage). */
 async function importNicAsProject(tpl, rawInfo) {
-  const info = rawInfo || readNicBoq(tpl.data);
+  const first = rawInfo || readNicBoq(tpl.data);
+  const infos = first.sheetNames.length > 1 ? first.sheetNames.map((n) => readNicBoq(tpl.data, n)) : [first];
   const strip = (s) => String(s || "").replace(/^[^:]*:\s*/, "").trim();
-  const p = newProject(strip(info.work) || tpl?.name || "Imported BOQ");
-  p.client = strip(info.authority);
-  p.reference = strip(info.contract);
+  const p = newProject(strip(first.work) || tpl?.name || "Imported BOQ");
+  p.client = strip(first.authority);
+  p.reference = strip(first.contract);
   p.tender = { authority: p.client, work: p.name, contract: p.reference };
   p.sections = [];
-  let sec = null;
-  const sched = info.boqType === "Percentage" ? "G" : "H";
-  for (const it of info.items) {
-    if (it.heading) { sec = { id: uid("s"), name: it.description.slice(0, 120) || "Section", items: [] }; p.sections.push(sec); continue; }
-    if (!sec) { sec = { id: uid("s"), name: "BOQ", items: [] }; p.sections.push(sec); }
-    sec.items.push({
-      id: uid("b"), bsrId: "", code: /^item\d+$|^BI\d+$/i.test(it.code) ? "" : it.code, description: it.description,
-      unit: it.unit, qty: it.qty || 0, rate: it.rate || 0, measurements: [], schedule: sched, remarks: `Imported from ${tpl?.name || "e-tender BOQ"} (S.No ${it.sno})`,
-    });
+  // G-Schedule (percentage) sheets first, as in bills and deviation statements.
+  infos.sort((a, b) => (a.boqType === "Percentage" ? 0 : 1) - (b.boqType === "Percentage" ? 0 : 1));
+  let count = 0;
+  for (const info of infos) {
+    const sched = info.boqType === "Percentage" ? "G" : "H";
+    const label = `${sched}-Schedule`;
+    let sec = null;
+    for (const it of info.items) {
+      if (it.heading) { sec = { id: uid("s"), name: `${label}: ${it.description.slice(0, 100)}`, items: [] }; p.sections.push(sec); continue; }
+      if (!sec) { sec = { id: uid("s"), name: label, items: [] }; p.sections.push(sec); }
+      sec.items.push({
+        id: uid("b"), bsrId: "", code: /^item\d+$|^BI\d+$/i.test(it.code) ? "" : it.code, description: it.description,
+        unit: it.unit, qty: it.qty || 0, rate: it.rate || 0, measurements: [], schedule: sched, sno: it.sno,
+        remarks: `${info.sheetName} S.No ${it.sno}`,
+      });
+      count++;
+    }
   }
   p.sections = p.sections.filter((s) => s.items.length);
   if (!p.sections.length) p.sections.push({ id: uid("s"), name: "General", items: [] });
   state.projects.unshift(p);
   await idb.put("projects", p);
   switchProject(p.id);
-  toast(`Imported ${info.items.filter((i) => !i.heading).length} items into a new project "${p.name}".`, 5000);
+  toast(`Imported ${count} items (${infos.map((i) => `${i.sheetName}: ${i.boqType}`).join(", ")}) into "${p.name}".`, 6000);
   showTab("boq");
 }
 
