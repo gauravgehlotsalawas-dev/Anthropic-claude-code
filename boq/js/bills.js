@@ -2,8 +2,7 @@
 // extra item slip, deviation statement and site photo sheets.
 import { uid, round, num, money, qtyFmt, esc, itemQty, amountInWords } from "./store.js";
 import { readNicBoq } from "./nicboq.js";
-import { prepareDrawing } from "./blueprint.js";
-import { extractWorkOrder, extractBoqDocument, extractBill, hasKey } from "./ai.js";
+import { pdfjsLib } from "./bsr-import.js";
 
 let ctx; // { project, saveProject, toast, modal, closeModal, searchItems, rateOf, download }
 const $ = (s, el = document) => el.querySelector(s);
@@ -17,6 +16,14 @@ export function initBills(c) {
   const root = $("#billsRoot");
   root.addEventListener("click", onClick);
   root.addEventListener("change", onChange);
+  root.addEventListener("input", (e) => {
+    if (e.target.id !== "billFilter") return;
+    const q = e.target.value.trim().toLowerCase();
+    root.querySelectorAll(".bill-table tr[data-line]").forEach((tr) => {
+      const main = root.querySelector(`.bill-table tr[data-text][data-line="${tr.dataset.line}"]`);
+      tr.style.display = !q || main?.dataset.text.includes(q) ? "" : "none";
+    });
+  });
   root.addEventListener("dragover", (e) => { if (e.target.closest("#photoDrop")) { e.preventDefault(); e.target.closest("#photoDrop").classList.add("over"); } });
   root.addEventListener("drop", (e) => { const d = e.target.closest("#photoDrop"); if (d) { e.preventDefault(); d.classList.remove("over"); addPhotos([...e.dataTransfer.files]); } });
 }
@@ -103,7 +110,13 @@ function computeBill(p, bill) {
   return { rows, gRows, hRows, gTotal, tp, gNet, hTotal, total, prevTotal, net, say: Math.round(net), extraGross, extraNet };
 }
 
-const billTitle = (p, b) => (b.kind === "final" ? "Final Bill" : `${ord(p.bills.filter((x) => x.kind !== "final").indexOf(b) + 1)} Running Bill`);
+/** Bill number: set by the user on a bill (e.g. the 3rd bill entered as the base), otherwise one more than the previous bill. */
+function billNo(p, b) {
+  if (num(b.number) > 0) return Math.round(num(b.number));
+  const i = p.bills.indexOf(b);
+  return i > 0 ? billNo(p, p.bills[i - 1]) + 1 : 1;
+}
+const billTitle = (p, b) => (b.kind === "final" ? "Final Bill" : `${ord(billNo(p, b))} Running Bill`);
 const currentBill = (p) => p.bills.find((b) => b.id === view.billId) || p.bills.at(-1) || null;
 
 // ---------------------------------------------------------------------------
@@ -129,8 +142,8 @@ export function renderBills() {
 function contractView(p, c) {
   const f = (k, label, type = "text", ph = "") => `<label class="field">${label}<input data-c="${k}" type="${type}" value="${esc(c[k] ?? "")}" placeholder="${ph}"></label>`;
   return `<div class="card upload-card"><h2>Start from the documents</h2>
-    <p class="muted small">Upload the work order and the BOQ. The details are filled in for you; check them below. Reading a scanned work order or a PDF BOQ uses your AI key from Settings; a GePNIC BOQ .xls is read directly.</p>
-    <div class="row gap wrap"><button class="primary" data-act="loadWO">Upload work order (PDF / photo)</button><button class="primary" data-act="loadBOQ">Upload BOQ (.xls / PDF)</button><span class="status" id="docStatus"></span></div></div>
+    <p class="muted small">Upload the tender BOQ: the GePNIC .xls (G- and H-Schedule tabs) or its printed PDF. Then fill in the work order details below.</p>
+    <div class="row gap wrap"><button class="primary" data-act="loadBOQ">Upload BOQ (.xls / PDF)</button><span class="status" id="docStatus"></span></div></div>
     <div class="card"><h2>Contract details</h2>
     <p class="muted small">From the work order / agreement. Used on the bill, extra item slip, deviation statement and photo sheets.</p>
     <div class="form-grid">
@@ -158,20 +171,20 @@ function billView(p, c) {
   const head = `<div class="card"><div class="row between wrap gap">
       <div class="row gap wrap"><select id="billSel">${p.bills.map((b) => `<option value="${b.id}" ${b === bill ? "selected" : ""}>${billTitle(p, b)}${b.date ? ` · ${b.date}` : ""}</option>`).join("")}${p.bills.length ? "" : `<option>No bills yet</option>`}</select>
         <button class="primary" data-act="newBill">＋ New running bill</button>
-        <button class="ghost" data-act="loadPrevBill" title="Upload bills already submitted (PDF or photos), oldest first, so later bills and the deviation are exact">⇪ Upload previous bill</button>
+        ${p.bills.length ? "" : `<button class="ghost" data-act="baseBill" title="For the 2nd, 4th or final bill: enter the last bill already submitted, so this tool continues from it">Enter last submitted bill</button>`}
         ${bill && bill.kind !== "final" ? `<button class="ghost" data-act="finalBill">Make this the final bill</button>` : ""}
         ${bill ? `<button class="ghost danger-text" data-act="delBill">Delete bill</button>` : ""}</div>
       ${bill ? `<div class="row gap wrap"><button class="primary" data-print="all" title="Bill with memorandum and terms, extra item slip, deviation and photos">Print complete bill file</button><button class="ghost" data-print="bill">Print bill</button><button class="ghost" data-print="slip">Extra item slip</button><button class="ghost" data-print="deviation">Deviation</button><button class="ghost" data-act="excel">Excel</button></div>` : ""}
     </div></div>`;
   if (!bill) return head + `<div class="card"><p><b>First bill of this work?</b> Press <b>New running bill</b> and enter the up-to-date quantities from the measurement book.</p>
-    <p><b>Making the 2nd, 4th or final bill?</b> First upload every earlier bill with <b>Upload previous bill</b> (oldest first). Their quantities become the starting point, so “since previous bill”, the deviation and the next bill’s draft are exact.</p><span class="status" id="docStatus"></span></div>`;
+    <p><b>Making the 2nd, 4th or final bill?</b> Press <b>Enter last submitted bill</b>, choose its number (for example 3) and type its up-to-date quantities and rates from the bill. Then press <b>New running bill</b> (or make it the final bill): “since previous bill”, “deduct previous bill” and the deviation continue exactly from it.</p></div>`;
   const k = computeBill(p, bill);
   const cv = contractValue(p);
   const extraPct = cv ? (k.extraNet / cv) * 100 : 0;
   const meta = (key, label, type = "text") => `<label class="field small">${label}<input data-b="${key}" type="${type}" value="${esc(bill[key] ?? "")}"></label>`;
   const row = (r, i) => {
     const pct = r.tqty ? (r.qty / r.tqty) * 100 : null;
-    return `<tr data-line="${r.id}" class="${r.extra ? "extra-row" : ""}"><td>${i + 1}/${esc(r.no)}</td>
+    return `<tr data-line="${r.id}" class="${r.extra ? "extra-row" : ""}" data-text="${esc((r.desc + " " + r.no).toLowerCase())}"><td><input data-mbs class="w70" value="${esc(bill.mbs?.[r.id] ?? "")}" placeholder="${i + 1}"></td><td>${esc(r.no)}</td>
       <td class="desc"><div class="clamp">${esc(r.desc)}</div></td><td>${esc(r.unit)}</td>
       <td class="num">${r.extra ? "—" : qtyFmt(r.tqty)}</td><td class="num muted">${qtyFmt(r.prevQty)}</td>
       <td class="num">${r.parts ? `<b>${qtyFmt(r.qty)}</b>` : `<input data-q class="w120 num" value="${esc(bill.qty[r.id] ?? "")}" placeholder="0" title="Up-to-date quantity. For parts at different rates use “Part rate” or type e.g. 237.74@384.5 + 409.5@159">`}<div><button class="link small" data-act="addPart" title="Split this item into quantities paid at different rates">＋ part rate</button></div></td>
@@ -180,21 +193,22 @@ function billView(p, c) {
       <td class="num"><input data-pr type="number" step="any" class="w90 num" value="${bill.partRate?.[r.id] ?? ""}" placeholder="full" title="Part rate for a running bill (leave blank for the full rate)"></td>
       <td class="num">${m2(r.amt)}</td><td class="num">${m2(r.since)}</td>
       <td class="num">${pct == null ? `<span class="badge">extra</span>` : `<span class="${pct > 100 ? "warn" : ""}">${pct.toFixed(0)}%</span>`}</td></tr>
-      ${r.parts ? r.parts.map((x, k) => `<tr class="part-row" data-line="${r.id}" data-pi="${k}"><td></td><td colspan="4" class="small">↳ ${k === 0 ? "Quantity" : "Further quantity"} ${x.part ? `<span class="badge warn-badge">part rate</span>` : `<span class="badge">full rate</span>`}</td>
+      ${r.parts ? r.parts.map((x, k) => `<tr class="part-row" data-line="${r.id}" data-pi="${k}"><td></td><td></td><td colspan="4" class="small">↳ ${k === 0 ? "Quantity" : "Further quantity"} ${x.part ? `<span class="badge warn-badge">part rate</span>` : `<span class="badge">full rate</span>`}</td>
         <td class="num"><input data-pq type="number" step="any" class="w100 num" value="${x.qty || ""}" placeholder="qty"></td><td></td>
         <td class="num"><input data-prr type="number" step="any" class="w100 num" value="${bill.parts[r.id][k].rate ?? ""}" placeholder="${m2(r.rate)}" title="Rate allowed for this quantity (blank = full rate)"></td><td></td>
         <td class="num">${m2(x.amt)}</td><td class="num small muted">${x.part ? `full ${m2(x.full)}` : ""}</td><td><button class="icon danger-text" data-act="delPart" title="Remove this part">×</button></td></tr>`).join("") : ""}
-      ${r.withheld > 0.004 ? `<tr class="part-row"><td></td><td colspan="8" class="small">At full rate ${m2(r.fullAmt)} · allowed ${m2(r.amt)} · <b class="warn">withheld ${m2(r.withheld)}</b></td><td colspan="3"></td></tr>` : ""}`;
+      ${r.withheld > 0.004 ? `<tr class="part-row" data-line="${r.id}"><td></td><td></td><td colspan="8" class="small">At full rate ${m2(r.fullAmt)} · allowed ${m2(r.amt)} · <b class="warn">withheld ${m2(r.withheld)}</b></td><td colspan="3"></td></tr>` : ""}`;
   };
   let i = 0;
   const gRows = k.rows.filter((r) => r.s === "G"), hRows = k.rows.filter((r) => r.s === "H");
   return head + `<div class="card"><h2>${billTitle(p, bill)}</h2>
-    ${bill.imported ? `<p class="small muted">Read from an uploaded bill${bill.importedTotal ? ` (bill total ${money(bill.importedTotal)})` : ""}. Check the quantities against the bill.</p>` : ""}<span class="status" id="docStatus"></span>
-    <div class="form-grid compact">${meta("date", "Bill date", "date")}${meta("measured", "Date of measurement")}${meta("mbNo", "M.B. No.")}${meta("mbPages", "M.B. pages")}${meta("jen", "Measured by (JEN)")}${meta("aen", "Checked by (AEN)")}</div>
-    <div class="table-wrap tall"><table class="data small bill-table"><thead><tr><th>S.No</th><th>Item</th><th>Unit</th><th class="num">Tender qty</th><th class="num">Prev. qty</th><th class="num">Qty up-to-date (M.B.)</th><th class="num">This bill</th><th class="num">Rate</th><th class="num">Part rate</th><th class="num">Amount up-to-date</th><th class="num">Since previous</th><th class="num">Done</th></tr></thead>
-      <tbody><tr class="grp"><td colspan="12"><b>G-Schedule</b> <button class="link small" data-act="addExtra">＋ Extra item</button></td></tr>
+    ${bill.base ? `<p class="check-line warn">This is the last bill already submitted, entered so the next bill continues from it. Type its up-to-date quantities and rates exactly as in that bill.</p>` : ""}
+    <div class="form-grid compact"><label class="field small">Bill No.<input data-b="number" type="number" min="1" value="${billNo(p, bill)}" ${bill.kind === "final" ? "disabled" : ""}></label>${meta("date", "Bill date", "date")}${meta("measured", "Date of measurement")}${meta("mbNo", "M.B. No.")}${meta("mbPages", "M.B. pages")}${meta("jen", "Measured by (JEN)")}${meta("aen", "Checked by (AEN)")}</div>
+    <div class="row gap mt"><input type="search" id="billFilter" placeholder="Find an item (e.g. plaster, RCC, silt)" style="max-width:340px"><span class="muted small">MB S.No: the item's serial number in the measurement book / bill; the bill prints in this order.</span></div>
+    <div class="table-wrap tall"><table class="data small bill-table"><thead><tr><th>MB S.No</th><th>BOQ No.</th><th>Item</th><th>Unit</th><th class="num">Tender qty</th><th class="num">Prev. qty</th><th class="num">Qty up-to-date (M.B.)</th><th class="num">This bill</th><th class="num">Rate</th><th class="num">Part rate</th><th class="num">Amount up-to-date</th><th class="num">Since previous</th><th class="num">Done</th></tr></thead>
+      <tbody><tr class="grp"><td colspan="13"><b>G-Schedule</b> <button class="link small" data-act="addExtra">＋ Extra item</button></td></tr>
       ${gRows.map((r) => row(r, i++)).join("")}
-      ${hRows.length ? `<tr class="grp"><td colspan="12"><b>H-Schedule</b></td></tr>${hRows.map((r) => row(r, i++)).join("")}` : ""}</tbody></table></div>
+      ${hRows.length ? `<tr class="grp"><td colspan="13"><b>H-Schedule</b></td></tr>${hRows.map((r) => row(r, i++)).join("")}` : ""}</tbody></table></div>
     <div class="grid-2 mt"><table class="data abstract"><tbody>
       <tr><td>Total G-Schedule (gross)</td><td class="num">${money(k.gTotal)}</td></tr>
       <tr><td>${esc(tpLabel(c))}</td><td class="num">${money(k.tp)}</td></tr>
@@ -279,7 +293,7 @@ function onClick(e) {
   if (act === "newBill") {
     if (p.bills.some((b) => b.kind === "final")) { ctx.toast("The final bill has already been made."); return; }
     const prev = p.bills.at(-1);
-    const b = { id: uid("bl"), kind: "running", date: new Date().toISOString().slice(0, 10), qty: { ...(prev?.qty || {}) }, partRate: { ...(prev?.partRate || {}) }, parts: structuredClone(prev?.parts || {}), mbNo: prev?.mbNo || "", jen: prev?.jen || c.jen || "", aen: prev?.aen || c.aen || "" };
+    const b = { id: uid("bl"), kind: "running", date: new Date().toISOString().slice(0, 10), mbs: { ...(prev?.mbs || {}) }, qty: { ...(prev?.qty || {}) }, partRate: { ...(prev?.partRate || {}) }, parts: structuredClone(prev?.parts || {}), mbNo: prev?.mbNo || "", jen: prev?.jen || c.jen || "", aen: prev?.aen || c.aen || "" };
     p.bills.push(b); view.billId = b.id; view.tab = "bill";
   }
   if (act === "finalBill" && bill) {
@@ -304,9 +318,13 @@ function onClick(e) {
     list.splice(+tr.dataset.pi, 1);
     if (list.length <= 1) { const x = list[0]; delete bill.parts[id]; if (x) { bill.qty[id] = num(x.qty); if (x.rate !== "" && x.rate != null) (bill.partRate ||= {})[id] = num(x.rate); } }
   }
-  if (act === "loadPrevBill") { pickFiles(".pdf,image/*", importPreviousBills); return; }
-  if (act === "loadWO") { pickFiles(".pdf,image/*", loadWorkOrder); return; }
-  if (act === "loadBOQ") { pickFiles(".xls,.pdf,image/*", loadBoq); return; }
+  if (act === "baseBill") {
+    const n = Math.round(num(prompt("Number of the last bill already submitted (e.g. 3 for the 3rd running bill):", "1")));
+    if (!(n > 0)) return;
+    const b = { id: uid("bl"), kind: "running", number: n, base: true, date: "", qty: {}, partRate: {}, parts: {}, mbs: {}, jen: c.jen || "", aen: c.aen || "" };
+    p.bills.push(b); view.billId = b.id;
+  }
+  if (act === "loadBOQ") { pickFiles(".xls,.pdf", loadBoq); return; }
   if (act === "addExtra") { addExtraDialog(p); return; }
   if (act === "delExtra") { const id = e.target.closest("[data-x]").dataset.x; if (!confirm("Remove this extra item?")) return; p.extras = p.extras.filter((x) => x.id !== id); }
   if (act === "excel") { exportExcel(p); return; }
@@ -324,7 +342,8 @@ function onChange(e) {
   if (el.id === "billSel") { view.billId = el.value; renderBills(); return; }
   if (el.id === "photoFile") { addPhotos([...el.files]); el.value = ""; return; }
   if (el.dataset.c) c[el.dataset.c] = el.type === "number" ? num(el.value) : el.value;
-  else if (el.dataset.b) currentBill(p)[el.dataset.b] = el.value;
+  else if (el.dataset.b) currentBill(p)[el.dataset.b] = el.dataset.b === "number" ? Math.round(num(el.value)) : el.value;
+  else if (el.matches("[data-mbs]")) { const b = currentBill(p); (b.mbs ||= {})[el.closest("[data-line]").dataset.line] = el.value.trim(); ctx.saveProject(); return; }
   else if (el.matches("[data-q], [data-pr]")) {
     const bill = currentBill(p); const id = el.closest("[data-line]").dataset.line;
     if (el.matches("[data-q]")) bill.qty[id] = el.value.includes("@") ? el.value.trim() : el.value === "" ? 0 : num(el.value);
@@ -422,7 +441,10 @@ function printHtml(p, c, bill, kind) {
     };
     const partLines = (r) => r.parts ? `<div class="p-parts">${r.parts.map((x) => `${qtyFmt(x.qty)} ${esc(r.unit)} @ ${m2(x.rate)}${x.part ? ` <i>(part rate; at full rate ${m2(r.rate)} = ${m2(x.full)})</i>` : ""} = ${m2(x.amt)}`).join("<br>")}${r.withheld > 0.004 ? `<br><b>Withheld: ${m2(r.withheld)}</b>` : ""}</div>` : r.withheld > 0.004 ? `<div class="p-parts"><i>At full rate ${m2(r.fullAmt)}; withheld ${m2(r.withheld)}</i></div>` : "";
     let i = 0;
-    const row = (r) => `<tr><td>${esc(r.unit)}</td><td class="n">${qtyFmt(round(r.qty - r.prevQty, 3))}</td><td class="n">${qtyFmt(r.qty)}</td><td class="p-desc">${++i}/${esc(r.no)} ${esc(r.desc)}${partLines(r)}</td><td class="n">${rateCell(r)}</td><td class="n">${m2(r.amt)}</td><td class="n">${m2(r.since)}</td><td></td></tr>`;
+    const mbs = bill.mbs || {};
+    const mbKey = (r) => (mbs[r.id] !== undefined && mbs[r.id] !== "" ? num(mbs[r.id]) : 1e9);
+    const byMb = (arr) => arr.map((r, k) => [r, k]).sort((a, b) => mbKey(a[0]) - mbKey(b[0]) || a[1] - b[1]).map((x) => x[0]);
+    const row = (r) => `<tr><td>${esc(r.unit)}</td><td class="n">${qtyFmt(round(r.qty - r.prevQty, 3))}</td><td class="n">${qtyFmt(r.qty)}</td><td class="p-desc">${mbs[r.id] ? esc(mbs[r.id]) : ++i}/${esc(r.extra ? "Ex" : r.no)} ${esc(r.desc)}${partLines(r)}</td><td class="n">${rateCell(r)}</td><td class="n">${m2(r.amt)}</td><td class="n">${m2(r.since)}</td><td></td></tr>`;
     const tot = (l, a, b = a, cls = "p-tot") => `<tr class="${cls}"><td colspan="5">${l}</td><td class="n">${m2(a)}</td><td class="n">${b === "" ? "" : m2(b)}</td><td></td></tr>`;
     const used = (r) => r.qty || r.prevQty;
     const words = amountInWords(k.say);
@@ -434,13 +456,13 @@ function printHtml(p, c, bill, kind) {
     const add = (html, lines, a6 = 0, a7 = 0) => seq.push({ html, lines, a6, a7 });
     const est = (r) => Math.max(2, Math.ceil((r.desc.length + 8) / 44)) + (r.parts ? r.parts.length + 1 : 0) + (!r.parts && r.withheld > 0.004 ? 1 : 0);
     add(`<tr class="p-sec"><td colspan="8">G-Schedule</td></tr>`, 1);
-    k.gRows.filter(used).forEach((r) => add(row(r), est(r), r.amt, r.since));
+    byMb(k.gRows.filter(used)).forEach((r) => add(row(r), est(r), r.amt, r.since));
     add(tot("TOTAL", k.gTotal, round(k.gTotal - pk.gTotal, 2)), 1);
     add(tot(esc(tpLabel(c)), k.tp, round(k.tp - pk.tp, 2)), 1);
     add(tot("TOTAL G-SCHEDULE", k.gNet, round(k.gNet - pk.gNet, 2)), 1);
     if (k.hRows.some(used)) {
       add(`<tr class="p-sec"><td colspan="8">H-Schedule</td></tr>`, 1);
-      k.hRows.filter(used).forEach((r) => add(row(r), est(r), r.amt, r.since));
+      byMb(k.hRows.filter(used)).forEach((r) => add(row(r), est(r), r.amt, r.since));
       add(tot("TOTAL H-SCHEDULE", k.hTotal, round(k.hTotal - pk.hTotal, 2)), 1);
     }
     add(tot("Total value of work done or supplies made to date", k.total, round(k.total - k.prevTotal, 2), "p-grand"), 2);
@@ -565,34 +587,6 @@ function pickFiles(accept, fn) {
 }
 const docStatus = (t, cls = "") => { const s = $("#docStatus"); if (s) { s.textContent = t; s.className = "status " + cls; } };
 
-async function aiParts(files) {
-  const parts = [];
-  for (const f of files) parts.push(...(await prepareDrawing(f)).parts);
-  return parts;
-}
-
-async function loadWorkOrder(files) {
-  if (!files.length) return;
-  if (!hasKey()) { ctx.toast("Reading a work order needs a Claude or OpenAI key (Settings)."); return; }
-  const p = ctx.project(); const c = contract(p);
-  try {
-    docStatus("Reading the work order…");
-    const w = await extractWorkOrder(await aiParts(files), { onText: (n) => docStatus(`Reading the work order… ${Math.round(n / 100) / 10}k`) });
-    const set = (k, v) => { if (v != null && v !== "" && v !== 0) c[k] = v; };
-    set("office", w.office); set("contractor", w.contractor); set("workOrderNo", w.work_order_no || w.agreement_no); set("woDate", w.work_order_date);
-    set("commence", w.commence_date); set("stipulated", w.completion_date);
-    set("jen", w.engineers.jen); set("aen", w.engineers.aen); set("xen", w.engineers.xen);
-    if (w.tender_premium_direction !== "unknown") { c.tpDir = w.tender_premium_direction; c.tpPct = num(w.tender_premium_percent); }
-    if (w.terms?.length) c.terms = w.terms;
-    if (w.work_name) p.name = w.work_name;
-    if (w.office && !p.client) p.client = w.office;
-    if (w.nit_no && !p.reference) p.reference = w.nit_no;
-    c.woAmount = num(w.contract_amount);
-    ctx.saveProject(); renderBills();
-    docStatus(`Work order read${c.woAmount ? `: contract amount ${money(c.woAmount)}` : ""}. Check the details below.`, "ok");
-  } catch (e) { console.error(e); docStatus(e.message, "err"); }
-}
-
 async function loadBoq(files) {
   if (!files.length) return;
   const p = ctx.project();
@@ -610,9 +604,10 @@ async function loadBoq(files) {
           info.items.filter((i) => !i.heading).forEach((i) => items.push({ schedule: sched, sno: i.sno, description: i.description, quantity: i.qty || 0, unit: i.unit, rate: i.rate || 0 }));
         }
       } else {
-        if (!hasKey()) { ctx.toast("Reading a PDF BOQ needs a Claude or OpenAI key (Settings), or upload the .xls."); return; }
         docStatus(`Reading ${f.name}…`);
-        items.push(...(await extractBoqDocument(await aiParts([f]), { onText: (n) => docStatus(`Reading the BOQ… ${Math.round(n / 100) / 10}k`) })));
+        const got = await parseNicPdf(f);
+        if (!got.length) throw new Error(`${f.name}: no BOQ items found. Use the PDF printed from the GePNIC BOQ (with text, not a scan), or the .xls.`);
+        items.push(...got);
       }
     }
     if (!items.length) { docStatus("No items found in the BOQ.", "err"); return; }
@@ -626,67 +621,52 @@ async function loadBoq(files) {
   } catch (e) { console.error(e); docStatus(e.message, "err"); }
 }
 
-// ---------------------------------------------------------------------------
-// Previous bills (already submitted) so that later bills and the deviation are exact
-// ---------------------------------------------------------------------------
 
-const normNo = (v) => String(v ?? "").trim().replace(/\.0+$/, "").replace(/^0+(\d)/, "$1");
-
-async function importPreviousBills(files) {
-  if (!files.length) return;
-  if (!hasKey()) { ctx.toast("Reading a bill needs a Claude or OpenAI key (Settings). You can also enter the old bill by hand with “New running bill”."); return; }
-  const p = ctx.project(); contract(p);
-  try {
-    docStatus("Reading the bill…");
-    const x = await extractBill(await aiParts(files), { onText: (n) => docStatus(`Reading the bill… ${Math.round(n / 100) / 10}k`) });
-    const L = lines(p);
-    const bill = { id: uid("bl"), kind: x.is_final ? "final" : "running", date: x.bill_date || "", qty: {}, partRate: {}, parts: {}, imported: true, importedTotal: num(x.total_up_to_date) };
-    const groups = new Map(); const missing = [];
-    for (const it of x.items) {
-      let line;
-      if (it.is_extra) {
-        const key = it.description.toLowerCase().replace(/\s+/g, " ").slice(0, 30);
-        let ex = p.extras.find((e) => e.description.toLowerCase().replace(/\s+/g, " ").startsWith(key.slice(0, 20)));
-        if (!ex) { ex = { id: uid("x"), description: it.description, unit: it.unit, rate: num(it.full_rate) || num(it.paid_rate) }; p.extras.push(ex); }
-        line = { id: ex.id, rate: ex.rate };
-      } else {
-        const same = L.filter((l) => !l.extra && l.s === it.schedule);
-        const full = num(it.full_rate) || num(it.paid_rate);
-        line = same.find((l) => normNo(l.no) === normNo(it.boq_no));
-        // Bill numbering does not always follow the BOQ: fall back to the item with the same agreement rate.
-        if (full && (!line || (line.rate && Math.abs(line.rate - full) > 0.5))) {
-          const byRate = same.filter((l) => Math.abs(l.rate - full) <= 0.5);
-          const pick = byRate.length === 1 ? byRate[0] : byRate.find((l) => normNo(l.no).startsWith(normNo(it.boq_no) + "."));
-          if (pick) line = pick;
-          else if (line && line.rate) line = null;
-        }
-        // "1" in the bill may be "1.01" in the BOQ, and a schedule with a single item needs no number at all.
-        if (!line) line = same.filter((l) => normNo(l.no).startsWith(normNo(it.boq_no) + ".")).length === 1 ? same.find((l) => normNo(l.no).startsWith(normNo(it.boq_no) + ".")) : same.length === 1 ? same[0] : null;
-      }
-      if (!line) { missing.push(`${it.schedule}-${it.boq_no || "?"} ${it.description.slice(0, 40)}`); continue; }
-      if (!groups.has(line.id)) groups.set(line.id, { line, parts: [] });
-      groups.get(line.id).parts.push(it);
+/**
+ * Items from a GePNIC BOQ printed to PDF (text, not scanned), without AI.
+ * Columns are found from the row of column numbers ("1 2 4 5 6 53 55") under the header.
+ */
+async function parseNicPdf(file) {
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  let cols = null, sched = "G";
+  const items = [];
+  let cur = null, done = false;
+  for (let pg = 1; pg <= doc.numPages && !done; pg++) {
+    const tc = await (await doc.getPage(pg)).getTextContent();
+    const rows = [];
+    for (const it of tc.items) {
+      const t = it.str.trim(); if (!t) continue;
+      const y = it.transform[5], x = it.transform[4];
+      let r = rows.find((r) => Math.abs(r.y - y) < 3);
+      if (!r) rows.push((r = { y, cells: [] }));
+      r.cells.push({ x, t });
     }
-    for (const { line, parts } of groups.values()) {
-      // H-Schedule items in an item-rate BOQ often have no rate in the BOQ: take the agreement rate from the bill.
-      if (!line.rate && parts[0].full_rate) {
-        const item = p.sections.flatMap((s) => s.items).find((i) => i.id === line.id); if (item) item.rate = num(parts[0].full_rate);
-        line.rate = num(parts[0].full_rate);
+    rows.sort((a, b) => b.y - a.y).forEach((r) => r.cells.sort((a, b) => a.x - b.x));
+    for (const r of rows) {
+      const line = r.cells.map((c) => c.t).join(" ");
+      if (/Item Rate BoQ/i.test(line)) sched = "H";
+      if (/Percentage BoQ/i.test(line)) sched = "G";
+      const nums = r.cells.map((c) => c.t);
+      if (!cols && nums.length >= 5 && nums[0] === "1" && nums[1] === "2" && nums.includes("4") && nums.includes("5")) {
+        const at = (n) => r.cells.find((c) => c.t === n)?.x;
+        const c1 = at("1"), c2 = at("2"), c4 = at("4"), c5 = at("5"), c6 = at("6") ?? at("13") ?? c5 + 60;
+        cols = { sl: (c1 + c2) / 2, desc: (c2 + c4) / 2, qty: (c4 + c5) / 2, unit: (c5 + c6) / 2, rate: c6 + (c6 - c5) / 2 + 10, slLeft: c1 };
+        continue;
       }
-      if (parts.length === 1) {
-        bill.qty[line.id] = num(parts[0].qty_up_to_date);
-        if (num(parts[0].paid_rate) && Math.abs(num(parts[0].paid_rate) - line.rate) > 0.004) bill.partRate[line.id] = num(parts[0].paid_rate);
-      } else bill.parts[line.id] = parts.map((q) => ({ qty: num(q.qty_up_to_date), rate: Math.abs(num(q.paid_rate) - line.rate) > 0.004 ? num(q.paid_rate) : "" }));
+      if (!cols) continue;
+      if (/^Total in Figures/i.test(line)) { if (cur) items.push(cur); cur = null; done = true; break; }
+      const sl = r.cells.find((c) => c.x < cols.slLeft + 25 && /^\d+(\.\d+)*$/.test(c.t));
+      const descCells = r.cells.filter((c) => c !== sl && c.x < cols.desc);
+      const qtyCell = r.cells.find((c) => c.x >= cols.desc && c.x < cols.qty);
+      const unitCell = r.cells.find((c) => c.x >= cols.qty && c.x < cols.unit);
+      const rateCell = r.cells.find((c) => c.x >= cols.unit && c.x < cols.rate);
+      if (sl) {
+        if (cur) items.push(cur);
+        const qm = (qtyCell?.t || "").match(/^([\d.,]+)\s*(.*)$/);
+        cur = { schedule: sched, sno: sl.t, description: descCells.map((c) => c.t).join(" "), quantity: qm ? num(qm[1]) : 0, unit: (qm?.[2] || unitCell?.t || "").trim(), rate: num(rateCell?.t) };
+      } else if (cur && descCells.length) cur.description += " " + descCells.map((c) => c.t).join(" ");
     }
-    const n = Math.max(1, Math.round(num(x.bill_number)) || p.bills.length + 1);
-    const at = Math.min(p.bills.filter((b) => b.kind !== "final").length, n - 1);
-    p.bills.splice(at, 0, bill);
-    view.billId = bill.id; view.tab = "bill";
-    ctx.saveProject(); renderBills();
-    const got = computeBill(p, bill).total;
-    const diff = round(got - bill.importedTotal, 2);
-    const msg = `${billTitle(p, bill)} read: ${groups.size} items.${missing.length ? ` Not matched to the BOQ: ${missing.join("; ")}.` : ""} ${bill.importedTotal ? (Math.abs(diff) < 1 ? `Total matches the bill (${money(got)}).` : `Total here ${money(got)} vs bill ${money(bill.importedTotal)} (difference ${money(diff)}) — please check.`) : ""}`;
-    docStatus(msg, Math.abs(diff) < 1 && !missing.length ? "ok" : "err");
-    ctx.toast(msg, 9000);
-  } catch (e) { console.error(e); docStatus(e.message, "err"); }
+  }
+  if (cur) items.push(cur);
+  return items.map((i) => ({ ...i, description: i.description.replace(/\s+/g, " ").trim() }));
 }
