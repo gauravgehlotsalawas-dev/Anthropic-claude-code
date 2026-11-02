@@ -53,7 +53,7 @@ h3 { font-size: 1rem; margin: .4rem 0; }
 .tabs button.active { background: #7fd3ae; color: #10201a; font-weight: 600; }
 .project-switch { display: flex; gap: .3rem; }
 .project-switch select { max-width: 220px; background: #24352e; color: #fff; border-color: #36493f; }
-.project-switch .ghost { color: #fff; border-color: #36493f; }
+.project-switch .ghost { background: #24352e; color: #fff; border-color: #36493f; }
 
 main { max-width: 1400px; margin: 0 auto; padding: 1rem; }
 .tab { display: none; }
