@@ -429,96 +429,7 @@ function printView(kind) {
 function printHtml(p, c, bill, kind) {
   let html = "";
   if (kind === "bill" && bill) {
-    const k = computeBill(p, bill);
-    const idx = p.bills.indexOf(bill);
-    const prevBill = idx > 0 ? p.bills[idx - 1] : null;
-    const pk = prevBill ? computeBill(p, prevBill) : { gTotal: 0, tp: 0, gNet: 0, hTotal: 0 };
-    const rateCell = (r) => {
-      if (r.parts) return m2(r.rate);
-      const raw = String(bill.qty[r.id] ?? "");
-      if (raw.includes("@")) return raw.split("+").map((x, _, all) => { const [q, rr] = x.split("@"); const rate = rr ? num(rr) : r.rate; return all.length === 1 ? `${m2(rate)}${rate !== r.rate ? `<br><small>(${m2(r.rate)})</small>` : ""}` : `${qtyFmt(num(q))} @ ${m2(rate)}`; }).join("<br>");
-      return r.part ? `${m2(r.applied)}<br><small>(${m2(r.rate)})</small>` : m2(r.rate);
-    };
-    const partLines = (r) => r.parts ? `<div class="p-parts">${r.parts.map((x) => `${qtyFmt(x.qty)} ${esc(r.unit)} @ ${m2(x.rate)}${x.part ? ` <i>(part rate; at full rate ${m2(r.rate)} = ${m2(x.full)})</i>` : ""} = ${m2(x.amt)}`).join("<br>")}${r.withheld > 0.004 ? `<br><b>Withheld: ${m2(r.withheld)}</b>` : ""}</div>` : r.withheld > 0.004 ? `<div class="p-parts"><i>At full rate ${m2(r.fullAmt)}; withheld ${m2(r.withheld)}</i></div>` : "";
-    let i = 0;
-    const mbs = bill.mbs || {};
-    const mbKey = (r) => (mbs[r.id] !== undefined && mbs[r.id] !== "" ? num(mbs[r.id]) : 1e9);
-    const byMb = (arr) => arr.map((r, k) => [r, k]).sort((a, b) => mbKey(a[0]) - mbKey(b[0]) || a[1] - b[1]).map((x) => x[0]);
-    const row = (r) => `<tr><td>${esc(r.unit)}</td><td class="n">${qtyFmt(round(r.qty - r.prevQty, 3))}</td><td class="n">${qtyFmt(r.qty)}</td><td class="p-desc">${mbs[r.id] ? esc(mbs[r.id]) : ++i}/${esc(r.extra ? "Ex" : r.no)} ${esc(r.desc)}${partLines(r)}</td><td class="n">${rateCell(r)}</td><td class="n">${m2(r.amt)}</td><td class="n">${m2(r.since)}</td><td></td></tr>`;
-    const tot = (l, a, b = a, cls = "p-tot") => `<tr class="${cls}"><td colspan="5">${l}</td><td class="n">${m2(a)}</td><td class="n">${b === "" ? "" : m2(b)}</td><td></td></tr>`;
-    const used = (r) => r.qty || r.prevQty;
-    const words = amountInWords(k.say);
-    // I - Account, split into A4 pages with "Carried Over" / "B/F" like the department's bills.
-    const colgroup = `<colgroup><col style="width:6%"><col style="width:8%"><col style="width:8%"><col style="width:41%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col style="width:6%"></colgroup>`;
-    const thead = `<thead><tr><th rowspan="2">Unit</th><th rowspan="2">Quantity executed (or supplied) since last certificate</th><th rowspan="2">Quantity executed (or supplied) up-to-date as per Measurement Book</th><th rowspan="2">Item of work or supplies (grouped under "sub-heads" and "sub-work" of estimate)</th><th rowspan="2">Rate in Rs.</th><th colspan="2">AMOUNT</th><th rowspan="2">Remarks</th></tr>
-      <tr><th>% up-to-date</th><th>Since previous bill Total for each sub-head</th></tr><tr class="p-colno"><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th></tr></thead>`;
-    const seq = [];
-    const add = (html, lines, a6 = 0, a7 = 0) => seq.push({ html, lines, a6, a7 });
-    const est = (r) => Math.max(2, Math.ceil((r.desc.length + 8) / 44)) + (r.parts ? r.parts.length + 1 : 0) + (!r.parts && r.withheld > 0.004 ? 1 : 0);
-    add(`<tr class="p-sec"><td colspan="8">G-Schedule</td></tr>`, 1);
-    byMb(k.gRows.filter(used)).forEach((r) => add(row(r), est(r), r.amt, r.since));
-    add(tot("TOTAL", k.gTotal, round(k.gTotal - pk.gTotal, 2)), 1);
-    add(tot(esc(tpLabel(c)), k.tp, round(k.tp - pk.tp, 2)), 1);
-    add(tot("TOTAL G-SCHEDULE", k.gNet, round(k.gNet - pk.gNet, 2)), 1);
-    if (k.hRows.some(used)) {
-      add(`<tr class="p-sec"><td colspan="8">H-Schedule</td></tr>`, 1);
-      byMb(k.hRows.filter(used)).forEach((r) => add(row(r), est(r), r.amt, r.since));
-      add(tot("TOTAL H-SCHEDULE", k.hTotal, round(k.hTotal - pk.hTotal, 2)), 1);
-    }
-    add(tot("Total value of work done or supplies made to date", k.total, round(k.total - k.prevTotal, 2), "p-grand"), 2);
-    add(tot("Deduct value of work or supplies shown in previous bill", k.prevTotal, ""), 2);
-    add(tot("Net value of work or supplies since previous bill", k.net, ""), 2);
-    add(tot("SAY", k.say, "", "p-grand"), 1);
-    const certHtml = `<p class="p-words">Net value in words: ${esc(words)}</p>
-      <p class="p-foot">* The full name of the work as given in the estimate should be entered here.<br>If the outlay on the work is recorded by sub-heads, the total for each sub-head should be shown in column 6 and against this total there should be an entry in column 7 also. In no other case should any entries be made in column 7.</p>
-      <div class="p-keep"><h3 class="c">II - Certificate and signature</h3>
-      <p>(1) The measurements were made by ${esc(bill.jen || c.jen || "....................")} on ${esc(bill.measured || "..............")} and are recorded at page ${esc(bill.mbPages || "......")} of Measurement Book No. ${esc(bill.mbNo || "..........")}, and were checked by ${esc(bill.aen || c.aen || "....................")} on ..............</p>
-      <p>(2) The connected measurements have been closed against this bill.</p>
-      <p>Certificate: 1. The work is satisfactory and as per specifications and the G-Schedule. 2. Nothing is outstanding against the contractor regarding this bill.</p>
-      <div class="p-sign4"><div>Dated signature of officer preparing the bill<br><b>${esc(c.jen || "")}</b><br>Junior Engineer</div><div><br><b>${esc(c.aen || "")}</b><br>Assistant Engineer</div><div><br><b>${esc(c.xen || "")}</b><br>Executive Engineer</div><div>Dated left-hand thumb impression or dated signature of contractor<br><b>${esc(c.contractor)}</b></div></div></div>`;
-    const pages = [[]]; const carry = [];
-    let usedLines = 0, cap = 17, run6 = 0, run7 = 0;
-    for (const it of seq) {
-      if (usedLines + it.lines > cap && pages.at(-1).length) { carry.push([run6, run7]); pages.push([]); usedLines = 0; cap = 34; }
-      pages.at(-1).push(it); usedLines += it.lines; run6 += it.a6; run7 += it.a7;
-    }
-    const cf = (label, [x, y]) => `<tr class="p-tot"><td colspan="5" class="${label === "B/F" ? "n" : ""}">${label}</td><td class="n">${m2(x)}</td><td class="n">${m2(y)}</td><td></td></tr>`;
-    const accountPages = pages.map((pg, pi) => `${pi ? `<section class="p-page p-27g">` : ""}${pi ? "" : `<h3 class="c">A - ACCOUNT OF WORK OR SUPPLIES</h3>`}
-      <table class="p-table p-bill">${colgroup}${thead}<tbody>${pi ? cf("B/F", carry[pi - 1]) : ""}${pg.map((x) => x.html).join("")}${pi < pages.length - 1 ? cf("Carried Over........................", carry[pi]) : ""}</tbody></table>
-      ${pi < pages.length - 1 ? `<div class="p-pageno c">${pi + 1}</div></section>` : `${certHtml}<div class="p-pageno c">${pi + 1}</div>`}`).join("");
-    html = `<section class="p-page p-27g">
-      <div class="p-form-no">P.W.A. FORM No. 27G<br>Sec. Chap. XIV, Paras 440, 444 &amp; 445</div>
-      <p class="p-note">Final payment must invariably be made on forms printed on yellow paper, which should not be used for intermediate payments.</p>
-      <h1>${esc(billTitle(p, bill))}</h1>
-      <p class="p-note c">(For contractors and suppliers only, for payment for work or supplies actually measured)</p>
-      <table class="p-fields">
-        <tr><td>Cash Book Voucher No.</td><td>: ${esc(bill.voucher || "")}</td><td>Dated : ${esc(bill.date || "")}</td></tr>
-        <tr><td>Name of contractor or supplier</td><td colspan="2">: ${esc(c.contractor)}</td></tr>
-        <tr><td>*Name of work</td><td colspan="2">: ${esc(p.name)}</td></tr>
-        <tr><td>Serial No. of this bill</td><td colspan="2">: ${esc(billTitle(p, bill))}</td></tr>
-        <tr><td>No. and date of the last bill for this work</td><td colspan="2">: ${prevBill ? `${esc(billTitle(p, prevBill))}${prevBill.date ? `, ${esc(prevBill.date)}` : ""}` : "—"}</td></tr>
-        <tr><td>Reference to work order or agreement</td><td colspan="2">: ${esc(c.workOrderNo)}${c.woDate ? ` dated ${esc(c.woDate)}` : ""}</td></tr>
-        <tr><td>Date of written order to commence work</td><td colspan="2">: ${esc(c.commence)}</td></tr>
-        <tr><td>Stipulated date of completion of work</td><td colspan="2">: ${esc(c.stipulated)}</td></tr>
-        <tr><td>Date of actual completion of work</td><td colspan="2">: ${esc(c.completed || "W.I.P.")}</td></tr>
-        <tr><td>Date of measurements</td><td colspan="2">: ${esc(bill.measured || "")}</td></tr></table>
-      ${accountPages}</section>
-      <section class="p-page p-27g"><h3 class="c">III - Memorandum of payment</h3>
-      <table class="p-table p-memo"><tbody>
-        <tr><td>1. Total value of work done, as per account I, column 6</td><td class="n">${m2(k.total)}</td></tr>
-        <tr><td>2. Deduct amount withheld: (a) from previous bills, as per last running account bill<br>&nbsp;&nbsp;&nbsp;&nbsp;(b) from this bill</td><td class="n"><br></td></tr>
-        <tr><td>3. Balance, i.e. up-to-date payments (items 1 − 2)</td><td class="n">${m2(k.total)}</td></tr>
-        <tr><td>4. Total amount of payments already made, as per last running account bill No. ${prevBill ? esc(billTitle(p, prevBill)) : "—"}</td><td class="n">${m2(k.prevTotal)}</td></tr>
-        <tr><td>5. Payments now to be made, as detailed below:<br>&nbsp;&nbsp;(a) by recovery of amounts creditable to this work<br>&nbsp;&nbsp;(b) by recovery of amounts creditable to other works or heads of account<br>&nbsp;&nbsp;(c) by cheque<br>&nbsp;&nbsp;(d) by cash</td><td class="n">${m2(k.net)}</td></tr>
-        <tr class="p-grand"><td>Total of 2(b) and 5 (a to d)</td><td class="n">${m2(k.net)}</td></tr></tbody></table>
-      <p>Pay Rs. ${m2(k.say)} (${esc(words)}) by cheque / cash.</p>
-      <div class="p-sign"><div>Dated initials of disbursing officer</div><div>Full signature of contractor</div></div>
-      <p>Received Rs. ................ (in words ........................................................) in final / part payment of the demand for this work or supplies made. Dated the ................</p>
-      <div class="p-sign"><div>Witness of identification and payment</div><div>Left-hand thumb impression or signature of contractor</div></div>
-      <p>Paid by me vide cheque No. ................ dated ................ or cash book entry dated ................</p>
-      <div class="p-sign"><div></div><div>Cashier — dated initials of the person actually making the payment</div></div>
-      <p class="p-foot">The figures should be tested to see that they agree with the total of items 4 and 5. Here specify the net amount payable vide item 5 (c) and (d). The payee's acknowledgement should be for the gross amount paid as item 5 (a to d). Payment should be attested by some known person when the payee's acknowledgement is given by a mark, seal or thumb impression. This space is reserved for any remarks which the disbursing officer or the divisional officer may wish to record in respect of the execution of the work, check of measurements or the state of the contractor's account.</p>
-      ${(c.terms || []).length ? `<h3>Terms and conditions of the work order</h3><ol class="p-terms">${c.terms.map((t) => `<li>${esc(t)}</li>`).join("")}</ol>` : ""}</section>`;
+    html = form27g(p, c, bill);
   } else if (kind === "slip" && bill) {
     const k = computeBill(p, bill);
     const ex = k.rows.filter((r) => r.extra);
@@ -669,4 +580,151 @@ async function parseNicPdf(file) {
   }
   if (cur) items.push(cur);
   return items.map((i) => ({ ...i, description: i.description.replace(/\s+/g, " ").trim() }));
+}
+
+// ---------------------------------------------------------------------------
+// P.W.A. Form 27G, laid out like the department's printed bills
+// ---------------------------------------------------------------------------
+
+const ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX"];
+const romanOrd = (n) => (ROMAN[n] || String(n)) + (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
+const formTitle = (p, b) => (b.kind === "final" ? "Final Bill" : `${romanOrd(billNo(p, b))} Running Bill`);
+const n2 = (v) => (Math.round(v * 100) / 100).toFixed(2);
+const q3 = (v) => (Math.round(v * 1000) / 1000).toFixed(3);
+
+function form27g(p, c, bill) {
+  const k = computeBill(p, bill);
+  const idx = p.bills.indexOf(bill);
+  const prevBill = idx > 0 ? p.bills[idx - 1] : null;
+  const pk = prevBill ? computeBill(p, prevBill) : { gTotal: 0, tp: 0, gNet: 0, hTotal: 0, total: 0 };
+  const mbs = bill.mbs || {};
+  const mbKey = (r) => (mbs[r.id] !== undefined && mbs[r.id] !== "" ? num(mbs[r.id]) : 1e9);
+  const byMb = (arr) => arr.map((r, i) => [r, i]).sort((a, b) => mbKey(a[0]) - mbKey(b[0]) || a[1] - b[1]).map((x) => x[0]);
+  const used = (r) => r.qty || r.prevQty;
+  let serial = 0;
+
+  // One item: unit, quantities, rate and amounts sit at the foot of the description, as in the printed bills.
+  const itemRow = (r) => {
+    const boqNo = r.extra ? "Ex" : r.s === "H" ? esc(String(r.no).replace(/\.0*1$/, "")) : esc(r.no);
+    const no = `${mbs[r.id] ? esc(mbs[r.id]) : ++serial}/${boqNo}`;
+    const raw = String(bill.qty[r.id] ?? "");
+    let parts = r.parts ? r.parts.map((x) => ({ qty: x.qty, rate: x.rate, amt: x.amt }))
+      : raw.includes("@") ? raw.split("+").map((x) => { const [q, rr] = x.split("@"); const rate = rr && rr.trim() ? num(rr) : r.rate; return { qty: num(q), rate, amt: round(num(q) * rate, 2) }; })
+      : [{ qty: r.qty, rate: r.applied, amt: r.amt }];
+    const prevShare = r.prevQty; // since-last quantity shown on the first line
+    const showFull = parts.some((x) => Math.abs(x.rate - r.rate) > 0.004);
+    const sinceAmt = r.since;
+    const units = parts.map(() => esc(r.unit)).join("<br>");
+    const qSince = parts.map((x, i) => (parts.length === 1 ? q3(round(r.qty - prevShare, 3)) : q3(x.qty))).join("<br>");
+    const qUpto = parts.map((x) => q3(x.qty)).join("<br>");
+    const rates = parts.map((x) => n2(x.rate)).join("<br>") + (showFull ? `<div class="f-full">${n2(r.rate)}</div>` : "");
+    const amts = parts.map((x) => n2(x.amt)).join("<br>");
+    const since = parts.length > 1 && !r.prevQty ? amts : n2(sinceAmt);
+    return { lines: Math.max(2, Math.ceil((r.desc.length + 8) / 52)) + parts.length - 1, a6: r.amt, a7: sinceAmt,
+      html: `<tr class="f-item"><td class="b">${units}</td><td class="b r">${qSince}</td><td class="b r">${qUpto}</td>
+        <td class="f-desc"><span class="f-no">${no}</span><span class="f-text">${esc(r.desc)}</span></td>
+        <td class="b r">${rates}</td><td class="b r">${amts}</td><td class="b r">${since}</td><td></td></tr>` };
+  };
+  const box = (label, a, b, cls = "") => ({ lines: 2, html: `<tr class="f-tot ${cls}"><td></td><td></td><td></td><td class="f-lbl">${label}</td><td></td><td class="r f-box">${n2(a)}</td><td class="r f-box">${b === "" ? "" : n2(b)}</td><td></td></tr>` });
+  const text = (h, lines = 1) => ({ lines, html: `<tr><td></td><td></td><td></td><td class="f-desc">${h}</td><td></td><td></td><td></td><td></td></tr>` });
+
+  const seq = [];
+  byMb(k.gRows.filter(used)).forEach((r) => seq.push(itemRow(r)));
+  seq.push(text("&nbsp;"));
+  seq.push(box("TOTAL", k.gTotal, round(k.gTotal - pk.gTotal, 2)));
+  seq.push(box(esc(tpLabel(c)), k.tp, round(k.tp - pk.tp, 2)));
+  seq.push(box("TOTAL G-SCHEDULE", k.gNet, round(k.gNet - pk.gNet, 2)));
+  seq.push(box("GRAND TOTAL -", k.gNet, round(k.gNet - pk.gNet, 2), "f-grand"));
+  if (k.hRows.some(used)) {
+    seq.push(text("<b>H-Schedule</b>"));
+    serial = 0; // H-Schedule items are numbered afresh (1/1, 2/2 …)
+    byMb(k.hRows.filter(used)).forEach((r) => seq.push({ ...itemRow(r), a6: 0, a7: 0 }));
+  }
+  seq.push(text(`<div class="f-cert"><u><b>Certificate :-</b></u><br>1. Work is satisfactory and as per specifications and G-Schedule.<br>2. Nothing outstanding against contractor regarding this bill.</div>`, 4));
+
+  // Room on the last page for the totals below the table and II - Certificate.
+  seq.push({ lines: 10, html: "" });
+  // Pages with Carried Over / B/F
+  const pages = [[]], carry = [];
+  let usedL = 0, cap = 27, s6 = 0, s7 = 0;
+  for (const it of seq) {
+    if (usedL + it.lines > cap && pages.at(-1).length) { carry.push([s6, s7]); pages.push([]); usedL = 0; cap = 49; }
+    pages.at(-1).push(it); usedL += it.lines; s6 += it.a6 || 0; s7 += it.a7 || 0;
+  }
+  // Never leave the totals alone on the last page: bring the H-Schedule / certificate lines with them.
+  if (pages.length > 1 && pages.at(-1).every((x) => !x.html)) {
+    const prev = pages.at(-2); const n = Math.min(3, prev.length - 1);
+    pages.at(-1).unshift(...prev.splice(prev.length - n, n));
+  }
+  const thead = `<thead><tr><th rowspan="2" class="f-unit">Unit</th><th rowspan="2" class="f-rot"><div>Quantity executed (or supplied) since last certificate</div></th><th rowspan="2" class="f-rot"><div>Quantity executed (or supplied up-to-date as per Measurement Book)</div></th>
+    <th rowspan="2">Item of work Supplies (grouped under "sub-heads" and "sub-work" of estimate)</th><th rowspan="2">Rate in Rs.</th><th colspan="2">AMOUNT</th><th rowspan="2" class="f-rot f-rem"><div>Remarks</div></th></tr>
+    <tr><th>% up-to-date</th><th>Since previous bill Total for each sub-head</th></tr>
+    <tr class="f-colno"><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td><td>8</td></tr></thead>`;
+  const cols = `<colgroup><col style="width:6%"><col style="width:8%"><col style="width:8%"><col style="width:41%"><col style="width:9%"><col style="width:12%"><col style="width:12%"><col style="width:4%"></colgroup>`;
+  const tail = `<tr class="f-sum"><td colspan="5">Total value of work done or supplies made to date.........</td><td class="r"><b>${n2(k.total)}</b></td><td class="r"><b>${n2(round(k.total - k.prevTotal, 2))}</b></td><td></td></tr>
+    <tr class="f-sum"><td colspan="5">Deduct value of work of supplies shown in previous bill</td><td class="r">${k.prevTotal ? n2(k.prevTotal) : ""}</td><td></td><td></td></tr>
+    <tr class="f-sum"><td colspan="5">Net value of work or supplies since previous bill figures in words.</td><td class="r"><b>${n2(k.net)}</b></td><td></td><td></td></tr>
+    <tr class="f-sum"><td colspan="5" class="r">SAY</td><td class="r"><b>${n2(k.say)}</b></td><td></td><td></td></tr>`;
+  const head = `<div class="f-formno">P.W.A. FORM No. 27G<br>Sec. Chap. XIV. Paras 440, 444 &amp; 445</div>
+    <div class="f-note">Final Payment must invariably be made on forms Printed on yellow paper which should not be used to intermediated Payment</div>
+    <div class="f-title">${esc(formTitle(p, bill))}</div>
+    <div class="f-sub">(For contractors &amp; Suppliers only for Payment for works or suppliers actually measured)</div>
+    <table class="f-head"><tr><td><b>Cash Book Voucher No. :</b> ${esc(bill.voucher || "")}</td><td class="r"><b>Dated :</b> ${esc(bill.date || "")}<span class="f-blank"></span></td></tr>
+      <tr><td colspan="2">Name of Contractor or supplier : <b>${esc((c.contractor || "").toUpperCase())}</b></td></tr>
+      <tr><td colspan="2">*Name of Work :- ${esc(p.name)}</td></tr></table>
+    <table class="f-fields">
+      <tr><td>Serial No. of this Bill</td><td>: ${esc(formTitle(p, bill))}</td></tr>
+      <tr><td>No. &amp; date of his last Bill for this work</td><td>: ${prevBill ? `${esc(formTitle(p, prevBill))}${prevBill.date ? ` dt. ${esc(prevBill.date)}` : ""}` : ""}</td></tr>
+      <tr><td>Reference to work Order of Agreement</td><td>: ${esc(c.workOrderNo)}${c.woDate ? ` date ${esc(c.woDate)}` : ""}</td></tr>
+      <tr><td>Date of written order to commence work</td><td>: ${esc(c.commence || "")}</td></tr>
+      <tr><td>Stipulated date of completion of work</td><td>: ${esc(c.stipulated || "")}</td></tr>
+      <tr><td>Date of actual completion of work</td><td>: ${esc(c.completed || "W.I.P.")}</td></tr>
+      <tr><td>Date of measurements</td><td>: ${esc(bill.measured || "")}</td></tr></table>
+    <div class="f-acc">A-ACCOUNT OF WORK OR SUPPLIES</div>`;
+  const out = pages.map((pg, pi) => {
+    const last = pi === pages.length - 1;
+    const bf = pi ? `<tr class="f-bf"><td></td><td></td><td></td><td class="r"><b>B/F</b></td><td></td><td class="r">${n2(carry[pi - 1][0])}</td><td class="r">${n2(carry[pi - 1][1])}</td><td></td></tr>` : "";
+    const co = !last ? `<tr class="f-co"><td></td><td></td><td></td><td class="c"><b><u>Carried Over..............................</u></b></td><td></td><td class="r"><b>${n2(carry[pi][0])}</b></td><td class="r"><b>${n2(carry[pi][1])}</b></td><td></td></tr>` : "";
+    return `<section class="p-page f27">${pi ? (pi === 1 ? `<div class="f-note">be an entry in column 7 also. In no other case should any entries be made in column 7.</div>` : "") : head}
+      <table class="f-table">${cols}${thead}<tbody>${bf}${pg.map((x) => x.html).join("")}${co}${last ? tail : ""}</tbody></table>
+      ${pi === 0 && !last ? `<div class="f-foot">The full Name of the work as given in the estimate should be entered here.<br>If the outlay on the work is recorded by sub-headed should be shown in col. 6 and against this total there should</div>` : ""}
+      ${last ? certificateBlock(c, bill) : ""}<div class="f-pg">${pi + 1}</div></section>`;
+  }).join("");
+  return out + memorandum(p, c, bill, k, prevBill, pages.length + 1);
+}
+
+function certificateBlock(c, bill) {
+  const line = (v, w = 160) => `<span class="f-line" style="min-width:${w}px">${esc(v || "")}</span>`;
+  return `<div class="f-cert2"><div class="f-acc">II-CERTIFICATE AND SIGNATURE</div>
+    <p>(1) The measurements were made by ${line(bill.jen || c.jen, 170)} on ${line(bill.measured, 170)} and</p>
+    <p>&nbsp;&nbsp;&nbsp;&nbsp;as recorded at Page ${line(bill.mbPages, 90)} of Measurements Book No ${line(bill.mbNo, 170)} and were checked by</p>
+    <p>&nbsp;&nbsp;&nbsp;&nbsp;(Names) ${line(bill.aen || c.aen, 200)} on ${line("", 120)}.</p>
+    <p>(2) The connected measurement have been closed of against bill.</p>
+    <div class="f-signs"><div><p>Dated Signature of Office Preparing the bill.</p><p class="f-gap">Dated Left-Hand Thumb Impression or</p><p class="c">Dated Signature of</p></div>
+      <div class="f-rank"><p>Rank.......................................</p><p>Sub-division..............................</p><p>Division...................................</p></div></div></div>`;
+}
+
+function memorandum(p, c, bill, k, prevBill, pageNo) {
+  const amt = (v) => (v ? n2(v) : "");
+  return `<section class="p-page f27"><table class="f-memo"><colgroup><col style="width:30%"><col style="width:36%"><col style="width:14%"><col style="width:14%"><col style="width:6%"></colgroup>
+    <tr><td colspan="4" class="c f-acc">III-MEMORANDUM OF PAYMENT</td><td class="r">Rs.</td></tr>
+    <tr><td colspan="3">1. Total value of work done as per account 1 Cols 6 or 7.</td><td class="r"><b>${amt(k.total)}</b></td><td></td></tr>
+    <tr><td colspan="2">2. Deduct amount with held..............</td><td class="c">Rs.</td><td></td><td></td></tr>
+    <tr><td class="c f-abs" rowspan="4">FIGURES FOR WORK<br>ABSTRACT</td><td>(a) From previous bills, as per last running account bill ...... .......<br>(b) From this bill .....</td><td class="f-boxcell"></td><td class="f-boxcell"></td><td></td></tr>
+    <tr><td>3. Balance "up-to-date payment items (1 - 2)<br>4. Total amount of payments already made as per last running account Bill No. ${prevBill ? esc(formTitle(p, prevBill)) : ""} Vr.No. ${esc(bill.prevVoucher || "")} Dt. ${esc(prevBill?.date || "")}</td><td class="r">${amt(k.total)}</td><td class="r">${amt(k.prevTotal)}</td><td></td></tr>
+    <tr><td>5. Payments now to be made as detailed below:<br>(a) By recovery of amount creditable this work.<br>(b) By recovery of amount creditable to other work or heads of account.....<br>(c) By cheque ... .... ....<br>(d) By cash ....</td><td class="f-boxcell r">${amt(k.net)}</td><td class="f-boxcell"></td><td></td></tr>
+    <tr><td>Total of 2(b), 5, (a to d)</td><td class="r"><b>${amt(k.net)}</b></td><td></td><td></td></tr></table>
+    <table class="f-pay"><tr><td>Pay Rs. <b>${n2(k.say)}</b></td><td>[in figures</td><td>] in words <i>${esc(amountInWords(k.say))}</i></td></tr></table>
+    <div class="f-r"><span class="f-over">Cheque<br>Cash</span></div>
+    <div class="f-r f-ul">Dated initials of Disbursing Officer</div>
+    <div class="f-row3"><span>Received Rs. ................</span><span>[In figures</span><span>] in words</span><span>Amount in Vernacular</span></div>
+    <p>demand for this work of supplies made</p><p>&nbsp;&nbsp;&nbsp;&nbsp;Dated the..............................</p>
+    <p class="c">Left hand-thumb impression of</p>
+    <div class="f-row2 f-ul"><span>Witness of Identification and Payment</span><span>Full Signature of Contractor</span></div>
+    <p>Paid by me vide Cheque No.................... Dated the ............... or cash book entry dated........................</p>
+    <div class="f-r"><b>CASHIER</b></div><div class="f-r f-ul">Dated initials of person actually making payment</div>
+    <div class="f-small f-ul">The figures should be tested to see that it agrees with the total of items 4 and 5.<br>Here specify the net amount payable vide item 5 [0] and [d]<br>The payee's acknowledgement should before the gross amount paid as item (I.e. to d).<br>Payment should be attested by some known person when the payee's acknowledgement is given Not required in the cast of bill of suppliers.</div>
+    <div class="f-small c">This space is reserved for any remarks which the Disbursing Officer of the Division Officer may] wish to record in respect of the work check of measurements of the contractor's account.</div>
+    ${(c.terms || []).length ? `<div class="f-acc">TERMS AND CONDITIONS OF THE WORK ORDER</div><ol class="p-terms">${c.terms.map((t) => `<li>${esc(t)}</li>`).join("")}</ol>` : ""}
+    <div class="f-pg">${pageNo}</div></section>`;
 }
