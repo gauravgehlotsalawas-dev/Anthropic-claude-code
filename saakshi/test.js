@@ -281,6 +281,19 @@ async function main() {
   assert.equal((await nj('POST', `/api/works/${pid}/dispute`, { note: 'Yeh mera kshetra nahi' })).status, 201);
   assert.ok((await hq('GET', '/api/flags')).data.some((f) => f.type === 'assignment_disputed'));
 
+  // ---- public portal: works and stats for citizens, with no person's name or mobile ----
+  r = await anon('GET', '/api/public/overview');
+  assert.equal(r.status, 200); assert.equal(r.data.enabled, true);
+  assert.ok(r.data.works.length >= 3); assert.ok(r.data.stats.bills_paid >= 1);
+  const pub = JSON.stringify(r.data);
+  for (const leak of ['9000000004', '9800000001', 'JEN Sanganer', 'M/s Demo Constructions', 'M/s Ram Builders', 'mobile']) assert.ok(!pub.includes(leak), 'public data leaks ' + leak);
+  assert.ok(r.data.works.find((x) => x.name === 'Awarded only').wo_date);
+  await admin('PUT', '/api/settings', { public_board: false });
+  await new Promise((ok) => setTimeout(ok, 10));
+  assert.equal((await anon('GET', '/api/public/overview')).data.enabled, false);
+  const home = await anon('GET', '/');
+  assert.equal(home.status, 200);
+
   console.log('All tests passed');
 }
 

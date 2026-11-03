@@ -1,0 +1,26 @@
+# साइट साक्षी: एक सर्वर पर पूरा पोर्टल, अपने-आप HTTPS (Let's Encrypt) के साथ।
+#   1. .env फ़ाइल में DOMAIN, ADMIN_MOBILE, ADMIN_PIN (और SMS_WEBHOOK_URL) लिखें
+#   2. docker compose up -d
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      - ADMIN_MOBILE=${ADMIN_MOBILE}
+      - ADMIN_PIN=${ADMIN_PIN}
+      - SMS_WEBHOOK_URL=${SMS_WEBHOOK_URL:-}
+    volumes:
+      - saakshi_data:/data
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [app]
+volumes:
+  saakshi_data:
+  caddy_data:

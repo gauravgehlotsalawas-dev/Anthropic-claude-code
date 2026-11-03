@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node server.js",
     "demo": "node server.js --demo",
-    "test": "node test.js"
+    "test": "node test.js",
+    "backup": "node backup.js"
   }
 }

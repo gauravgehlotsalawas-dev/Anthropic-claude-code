@@ -56,3 +56,27 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .timeline div { margin-bottom: 10px; }
 .notice { background: var(--warn-bg); color: var(--ink); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; }
 @media print { .top, .tabs, button { display: none !important; } .card { border: 0; } }
+
+/* ---------- public portal ---------- */
+.pubnav { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.pubnav a { color: var(--brand-ink); text-decoration: none; font-size: 14px; padding: 6px 8px; }
+.pubnav a.btn { border-color: rgb(255 255 255 / .5); background: transparent; color: var(--brand-ink); }
+.pubnav a.btn.primary { background: var(--brand-ink); color: var(--brand); }
+.hero { padding: 28px 4px 18px; }
+.hero h1 { font-size: clamp(24px, 5vw, 36px); line-height: 1.25; margin: 0 0 10px; }
+.hero p { font-size: 17px; color: var(--muted); max-width: 720px; }
+section { margin: 22px 0; }
+.steps { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.step { position: relative; } .stepno { position: absolute; top: 10px; right: 12px; color: var(--muted); font-weight: 700; } .stepicon { font-size: 26px; }
+.bar { height: 7px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 2px 0 8px; } .bar > div { height: 100%; }
+.foot { border-top: 1px solid var(--line); padding: 16px 0 30px; margin-top: 30px; }
+a { color: var(--brand); }
+
+/* ---------- logged-in portal: sidebar on wide screens ---------- */
+@media (min-width: 900px) {
+  body.app { display: grid; grid-template-columns: 220px 1fr; grid-template-rows: auto 1fr; min-height: 100vh; }
+  body.app .top { grid-column: 1 / -1; }
+  body.app .tabs { flex-direction: column; overflow: visible; position: sticky; top: 52px; align-self: start; height: calc(100vh - 52px); overflow-y: auto; border-bottom: 0; border-right: 1px solid var(--line); padding: 12px 8px; }
+  body.app .tabs button { text-align: left; border-radius: 8px; }
+  body.app main { width: 100%; max-width: 1100px; margin: 0; padding: 20px 28px; }
+}

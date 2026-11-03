@@ -45,6 +45,7 @@ const DEFAULT_SETTINGS = {
   bill_pass_days: 7,            // XEN passes a running bill (quantities are already verified)
   payment_days: 15,             // payment after the bill is passed / approved
   final_approval_days: 15,      // top authority verifies the completed work and approves the final payment
+  public_board: true,           // the public works board on the home page (no names or mobile numbers)
 };
 
 // ---------- database ----------
@@ -537,6 +538,8 @@ function send(res, status, body, headers = {}) {
   res.writeHead(status, {
     'Content-Type': isBuf ? 'application/octet-stream' : typeof body === 'string' ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8',
     'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Permissions-Policy': 'geolocation=(self), camera=(self), microphone=()',
     'Referrer-Policy': 'no-referrer',
     ...headers,
   });
@@ -1448,6 +1451,61 @@ route('POST', '/api/users/import', async (req, res, { user }) => {
   audit(user.id, 'users_imported', { added, skipped: skipped.length });
   send(res, 200, { added, skipped });
 });
+
+// ---- public portal: open to every citizen, no names or mobile numbers of any person ----
+let publicCache = { at: 0, data: null };
+route('GET', '/api/public/overview', async (req, res) => {
+  const s = getSettings();
+  if (!s.public_board) return send(res, 200, { enabled: false, settings: publicSettings(s) });
+  if (Date.now() - publicCache.at > 60e3) {
+    const all = q('SELECT * FROM works ORDER BY id DESC').all();
+    const flags = redFlags(all, s);
+    const flagCount = {};
+    for (const f of flags) if (f.severity !== 'low') flagCount[f.work_id] = (flagCount[f.work_id] || 0) + 1;
+    const works = all.map((w) => {
+      const base = w.wo_amount || boqTotal(w.id);
+      const la = q("SELECT measured_amount FROM verifications WHERE work_id = ? AND status = 'approved' ORDER BY id DESC LIMIT 1").get(w.id);
+      const t = timeline(w, s);
+      const paid = q("SELECT COALESCE(SUM(net_amount),0) AS a FROM bills WHERE work_id = ? AND status = 'paid'").get(w.id).a;
+      return {
+        id: w.id, name: w.name, department: w.department || '', office: w.office || '', tia: w.tia || '', wo_no: w.wo_no || '', wo_amount: base ? Math.round(base) : null,
+        lat: w.lat, lng: w.lng,
+        stage: w.status === 'closed' ? 'closed' : w.completed_ts ? 'completed' : !w.wo_date && w.award_date ? 'awarded' : 'in_progress',
+        claimed_pct: base ? Math.min(100, Math.round(claimedAmount(w.id) / base * 1000) / 10) : 0,
+        verified_pct: base && la ? Math.min(100, Math.round(la.measured_amount / base * 1000) / 10) : 0,
+        paid_amount: Math.round(paid),
+        award_date: t.award_date, wo_date: t.wo_date, stipulated_end: t.stipulated_end || null, revised_end: t.revised_end || null, extension_days: t.extension_days,
+        department_delay_days: t.department_delay_days || 0, contractor_delay_days: t.contractor_delay_days || 0, wo_late_days: t.wo_late_days || 0,
+        red_flags: flagCount[w.id] || 0,
+      };
+    });
+    const byRole = {};
+    for (const f of flags) if (f.severity !== 'low' && f.against_role) byRole[f.against_role] = (byRole[f.against_role] || 0) + 1;
+    const measured = q("SELECT created_ts, jen_ts FROM verifications WHERE jen_ts IS NOT NULL").all();
+    const bills = q("SELECT * FROM bills WHERE status = 'paid'").all();
+    const onTime = bills.filter((b) => { const end = b.is_final ? addDays(istDay(new Date(b.created_ts)), s.final_approval_days + s.payment_days) : addDays(istDay(new Date(b.created_ts)), s.bill_pass_days + s.payment_days); return istDay(new Date(b.paid_ts)) <= end; }).length;
+    publicCache = { at: Date.now(), data: {
+      enabled: true,
+      stats: {
+        works_total: all.length, works_active: works.filter((w) => w.stage === 'in_progress').length, works_completed: works.filter((w) => w.stage === 'completed' || w.stage === 'closed').length,
+        wo_value_total: works.reduce((t, w) => t + (w.wo_amount || 0), 0), paid_total: works.reduce((t, w) => t + w.paid_amount, 0),
+        engineers: q("SELECT COUNT(*) AS n FROM users WHERE role IN ('jen','aen','xen','se') AND active = 1").get().n,
+        contractors: q("SELECT COUNT(*) AS n FROM users WHERE role = 'contractor' AND active = 1").get().n,
+        verifications_done: measured.length,
+        avg_measure_hours: measured.length ? Math.round(measured.reduce((t, v) => t + hoursBetween(v.created_ts, v.jen_ts), 0) / measured.length) : null,
+        bills_paid: bills.length, bills_paid_on_time_pct: bills.length ? Math.round(onTime / bills.length * 100) : null,
+        red_flags_by_role: byRole,
+        departments: [...new Set(works.map((w) => w.department).filter(Boolean))].sort(),
+      },
+      works,
+    } };
+  }
+  send(res, 200, { ...publicCache.data, settings: publicSettings(s) });
+}, { public: true });
+function publicSettings(s) {
+  const keys = ['visits_per_week', 'milestone_percent', 'milestone_max_amount', 'jen_verify_hours', 'aen_approve_hours', 'wo_issue_days', 'start_within_days', 'hindrance_response_days', 'hindrance_decision_days', 'bill_pass_days', 'payment_days', 'final_approval_days', 'sla_days'];
+  return Object.fromEntries(keys.map((k) => [k, s[k]]));
+}
 
 route('GET', '/api/settings', async (req, res) => send(res, 200, getSettings()));
 route('PUT', '/api/settings', async (req, res, { user }) => {
