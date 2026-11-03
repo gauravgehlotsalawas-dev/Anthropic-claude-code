@@ -1656,6 +1656,26 @@ route('GET', '/api/public/photo/:hash', async (req, res, { params }) => {
   send(res, 200, fs.readFileSync(f), { 'Content-Type': { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }[f.split('.').pop()], 'Cache-Control': 'public, max-age=86400' });
 }, { public: true });
 
+// ---- RSS: anyone (newspapers, citizens, the department) can follow updates in a feed reader, no sign-up ----
+const xmlEsc = (t) => String(t ?? '').replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
+function rss(req, title, link, events) {
+  const base = `${req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http')}://${req.headers.host}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0"><channel><title>${xmlEsc(title)}</title><link>${xmlEsc(base + link)}</link><description>${xmlEsc(title)}</description><language>hi</language>
+${events.map((e, i) => `<item><title>${xmlEsc(e.work + ': ' + e.text.slice(0, 120))}</title><link>${xmlEsc(`${base}/#work/${e.work_id}`)}</link><guid isPermaLink="false">${xmlEsc(`${e.work_id}-${e.kind}-${e.ts}-${i}`)}</guid><pubDate>${new Date(e.ts).toUTCString()}</pubDate><description>${xmlEsc(e.text + (e.by ? ` (${e.by})` : ''))}</description></item>`).join('\n')}
+</channel></rss>`;
+}
+route('GET', '/feed.xml', async (req, res) => {
+  const s = getSettings(); publicGuard(s);
+  const events = cached('updates', () => q('SELECT * FROM works').all().flatMap((w) => workEvents(w, s, 30)).sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 60));
+  send(res, 200, rss(req, 'साइट साक्षी: सभी कामों के अपडेट', '/#updates', events), { 'Content-Type': 'application/rss+xml; charset=utf-8' });
+}, { public: true });
+route('GET', '/feed/work/:id', async (req, res, { params }) => {
+  const s = getSettings(); publicGuard(s);
+  const w = q('SELECT * FROM works WHERE id = ?').get(Number(String(params.id).replace(/\.xml$/, '')));
+  if (!w) throw httpErr(404, 'काम नहीं मिला');
+  send(res, 200, rss(req, `साइट साक्षी: ${w.name}`, `/#work/${w.id}`, workEvents(w, s, 60)), { 'Content-Type': 'application/rss+xml; charset=utf-8' });
+}, { public: true });
+
 route('GET', '/api/settings', async (req, res) => send(res, 200, getSettings()));
 route('PUT', '/api/settings', async (req, res, { user }) => {
   need(user, ['admin']);
@@ -1692,7 +1712,7 @@ function serveStatic(req, res, pathname) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   try {
-    if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/photo/')) {
+    if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/photo/') && !url.pathname.startsWith('/feed')) {
       if (req.method !== 'GET') return send(res, 405, 'Method not allowed');
       return serveStatic(req, res, url.pathname);
     }

@@ -194,7 +194,9 @@ async function show() {
 async function boot() {
   try {
     const r = await api('/api/me'); me = r.user; settings = r.settings; today = r.today;
-    tab = location.hash.slice(1) || ''; if (!VIEWS[tab]) tab = ''; renderShell();
+    const h = location.hash.slice(1);
+    if (isPublicHash(h)) return route();
+    tab = VIEWS[h] ? h : ''; renderShell();
   } catch { route(); }
 }
 
@@ -759,7 +761,8 @@ async function openWork(id) {
     <p class="small">JEN: ${esc(w.jen)} · AEN: ${esc(w.aen)} · XEN: ${esc(w.xen) || '—'} · ठेकेदार: ${esc(w.contractor)}</p>
     <h3 style="margin-top:12px">समय-रेखा</h3>${timelineHtml(w.timeline)}
     ${!w.wo_date && ['xen', 'aen', 'se', 'admin', 'hq'].includes(me.role) ? `<div class="row" style="margin:8px 0"><input id="wono" placeholder="वर्क ऑर्डर नं." style="flex:1"><input id="wodt" type="date" value="${today}" style="flex:1"><button class="primary" id="woiss">वर्क ऑर्डर जारी करें</button></div>` : ''}
-    <div class="row">${me.role !== 'hq' ? '<button class="danger" id="wdisp">⚠ आपत्ति: यह काम/जानकारी गलत है</button>' : ''}<button onclick="dlg.close()">बंद करें</button></div>`, () => {
+    <div class="row"><button id="wqr">🖨 साइट बोर्ड (QR)</button><a class="btn" href="#work/${w.id}" target="_blank">जनता पेज</a>${me.role !== 'hq' ? '<button class="danger" id="wdisp">⚠ आपत्ति: यह काम/जानकारी गलत है</button>' : ''}<button onclick="dlg.close()">बंद करें</button></div>`, () => {
+    $('#wqr').onclick = () => printSiteBoard(w.id);
     if ($('#woiss')) $('#woiss').onclick = () => busy($('#woiss'), async () => { await api(`/api/works/${w.id}/issue-wo`, { wo_no: $('#wono').value, wo_date: $('#wodt').value }); $('#dlg').close(); toast('वर्क ऑर्डर जारी ✓'); show(); });
     if ($('#wdisp')) $('#wdisp').onclick = () => {
       const note = prompt('आपत्ति का कारण (यह S.E. और मुख्यालय को दिखेगी):');
@@ -899,7 +902,7 @@ const crore = (n) => n >= 1e7 ? `₹ ${(n / 1e7).toLocaleString('en-IN', { maxim
 function publicHeader() {
   document.body.classList.remove('app');
   $('#tabs').hidden = true;
-  $('#who').innerHTML = `<nav class="pubnav"><a href="#home">होम</a><a href="#board">जनता बोर्ड</a><a href="#updates">ताज़ा अपडेट</a><a href="#contractors">ठेकेदार</a><a href="#officers">अधिकारी</a><a href="#login" class="btn">लॉगिन</a><a href="#register" class="btn primary">पंजीकरण</a></nav>`;
+  $('#who').innerHTML = `<nav class="pubnav"><a href="#home">होम</a><a href="#board">जनता बोर्ड</a><a href="#updates">ताज़ा अपडेट</a><a href="#contractors">ठेकेदार</a><a href="#officers">अधिकारी</a>${me ? '<a href="#dash" class="btn primary">मेरा डैशबोर्ड</a>' : '<a href="#login" class="btn">लॉगिन</a><a href="#register" class="btn primary">पंजीकरण</a>'}</nav>`;
 }
 async function renderHome(scrollTo) {
   publicHeader();
@@ -924,6 +927,7 @@ async function renderHome(scrollTo) {
     <p>साइट साक्षी पर हर साइट-विज़िट, हर नाप, हर बिल और हर देरी तारीख़, समय और GPS के साथ दर्ज होती है। ठेकेदार का शोषण न हो, अधिकारी पर झूठा आरोप न लगे: नियम सबके लिए एक।</p>
     <div class="row"><a href="#register" class="btn primary">नया पंजीकरण</a><a href="#login" class="btn">लॉगिन</a><a href="#board" class="btn">जनता बोर्ड देखें</a></div>
   </section>
+  <div id="hfol"></div>
   ${d.enabled ? `<div class="stats">
     <div class="stat"><b>${st.works_total}</b><span>कुल काम (${st.works_active} जारी, ${st.works_completed} पूरे)</span></div>
     <div class="stat"><b>${crore(st.wo_value_total)}</b><span>वर्क ऑर्डर की कुल राशि</span></div>
@@ -952,6 +956,11 @@ async function renderHome(scrollTo) {
       <div id="blist" class="grid"></div>` : '<p class="muted">विभाग ने जनता बोर्ड अभी चालू नहीं किया है।</p>'}
   </section>
   ${d.enabled ? '<section><div class="spread"><h2>ताज़ा अपडेट</h2><a href="#updates">सभी देखें →</a></div><div class="card" id="hupd">…</div></section>' : ''}
+  <section><h2>अपडेट कैसे पाएँ (बिना नंबर दिए)</h2><div class="grid">
+    <div class="card"><h3>📱 साइट पर QR</h3><p class="small">हर काम की साइट पर लगे सूचना-पट्ट का QR स्कैन करें। उस काम की पूरी जानकारी और अपडेट खुल जाएँगे।</p></div>
+    <div class="card"><h3>⭐ फ़ॉलो</h3><p class="small">किसी काम के पेज पर "फ़ॉलो करें" दबाएँ। होम पेज पर दिखेगा कि उसमें कितने नए अपडेट आए। यह सिर्फ़ आपके फ़ोन में याद रहता है।</p></div>
+    <div class="card"><h3>📰 RSS</h3><p class="small">अख़बार और पत्रकार <a href="/feed.xml">/feed.xml</a> या किसी एक काम की फ़ीड जोड़ लें। नए अपडेट अपने-आप आते रहेंगे।</p></div>
+  </div></section>
   <section><h2>किसके लिए</h2><div class="grid">
     <div class="card"><h3>👷 ठेकेदार</h3><p class="small">नाप, बिल और भुगतान की हर देरी का पक्का रिकॉर्ड। विभाग की वजह से हुई देरी पर पेनल्टी नहीं। जब चाहें बिल बनाएँ। शिकायत सीधे S.E. और मुख्यालय तक।</p></div>
     <div class="card"><h3>🧑‍💼 अभियंता</h3><p class="small">साइट पर किया हर काम दर्ज, जिससे झूठे आरोप से बचाव होता है। ठेकेदार के ज़्यादा दावे अपने-आप पकड़े जाते हैं। ग़लत नियुक्ति पर आपत्ति का रास्ता है।</p></div>
@@ -977,12 +986,14 @@ async function renderHome(scrollTo) {
     ['bq', 'bd', 'bs'].forEach((id) => ($('#' + id).oninput = draw));
     draw();
   }
+  if (d.enabled) followedHtml().then((h) => { if (h && $('#hfol')) $('#hfol').innerHTML = h; });
   if (d.enabled) api('/api/public/updates').then((u) => { if ($('#hupd')) $('#hupd').innerHTML = eventsHtml(u.slice(0, 8), true); }).catch(() => {});
   if (scrollTo) document.getElementById(scrollTo)?.scrollIntoView();
 }
+const isPublicHash = (h) => h === 'home' || h === 'board' || h === 'updates' || h === 'contractors' || h === 'officers' || h.startsWith('work/');
 function route() {
   const h = location.hash.slice(1);
-  if (me) return;
+  if (me && !isPublicHash(h)) { if (VIEWS[h] && h !== tab) { tab = h; renderShell(); } else if (document.body.classList.contains('app') === false) renderShell(); return; }
   if (h === 'login') { publicHeader(); renderLogin(); }
   else if (h === 'register') { publicHeader(); renderOtp(); }
   else if (h.startsWith('work/')) renderPublicWork(Number(h.slice(5)));
@@ -990,7 +1001,7 @@ function route() {
   else if (h === 'contractors' || h === 'officers') renderPeople(h);
   else renderHome(h === 'board' ? 'board' : null);
 }
-window.addEventListener('hashchange', () => { if (!me) route(); });
+window.addEventListener('hashchange', route);
 
 // ---------- public: one work, updates feed, contractors and officers ----------
 const EV_ICON = { award: '📜', wo: '📄', progress: '📷', verification_due: '⏳', measured: '📏', approved: '✍️', bill: '🧾', bill_passed: '✅', bill_hq: '🏛️', paid: '💰', hindrance: '⛔', hindrance_reply: '💬', hindrance_decided: '⚖️', visit: '📍', dpr: '📝', completed: '🏁' };
@@ -1009,7 +1020,9 @@ async function renderPublicWork(id) {
   try { w = await api('/api/public/works/' + id); } catch (e) { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return; }
   const t = w.timeline, base = w.wo_amount || 1;
   const pct = (x) => Math.min(100, Math.round(x / base * 1000) / 10);
-  main.innerHTML = `<p><a href="#board">← जनता बोर्ड</a></p>
+  const lastTs = w.updates[0]?.ts;
+  main.innerHTML = `<div class="spread"><a href="#board">← जनता बोर्ड</a>
+      <div class="row"><button id="wfol">${isFollowed(w.id) ? '★ फ़ॉलो कर रहे हैं' : '☆ फ़ॉलो करें'}</button><button id="wshare">🔗 शेयर</button><button id="wboard">🖨 साइट बोर्ड (QR)</button><a class="btn" href="/feed/work/${w.id}.xml" title="RSS फ़ीड">RSS</a></div></div>
     <div class="card infoboard"><div class="small muted">सूचना-पट्ट</div><h2>${esc(w.name)}</h2>
       <div class="kv"><span>विभाग / कार्यालय</span><b>${esc(w.department)} ${esc(w.office)}</b><span>निविदा आमंत्रण प्राधिकारी</span><b>${esc(w.tia) || '—'}</b>
       <span>वर्क ऑर्डर</span><b>${esc(w.wo_no) || 'जारी नहीं'}${t.wo_date ? ` · ${fmtDay(t.wo_date)}` : ''}</b><span>राशि</span><b>${w.wo_amount ? crore(w.wo_amount) : '—'}${w.tp_percent ? ` (T.P. ${w.tp_percent}%)` : ''}</b>
@@ -1029,6 +1042,10 @@ async function renderPublicWork(id) {
     </div>
     ${t.hindrances.length ? `<div class="card"><h3>बाधाएँ (विभाग के कारण रुकावट)</h3><table>${t.hindrances.map((h) => `<tr><td>${esc(h.category)}</td><td>${ROLE_SHORT[h.responsible_role]}</td><td>${fmtDay(h.from_day)} – ${h.to_day ? fmtDay(h.to_day) : 'जारी'}</td><td>${h.days} दिन</td><td><span class="pill ${HSTATE[h.state]?.[1] || ''}">${HSTATE[h.state]?.[0] || h.state}</span></td></tr>`).join('')}</table></div>` : ''}
     <div class="card"><h3>सभी अपडेट</h3>${eventsHtml(w.updates, false)}</div>`;
+  markSeen(w.id, lastTs);
+  $('#wfol').onclick = () => { const on = toggleFollow(w.id, lastTs); $('#wfol').textContent = on ? '★ फ़ॉलो कर रहे हैं' : '☆ फ़ॉलो करें'; toast(on ? 'फ़ॉलो किया: होम पेज पर नए अपडेट दिखेंगे' : 'फ़ॉलो हटाया'); };
+  $('#wshare').onclick = () => shareWork(w.id, w.name);
+  $('#wboard').onclick = () => printSiteBoard(w.id);
 }
 async function renderUpdates() {
   publicHeader();
@@ -1066,6 +1083,65 @@ async function renderPeople(kind) {
       ${p.works.length ? `<p class="small">${worksLinks(p)}</p>` : ''}</div>`).join('') || '<p class="muted">कोई नहीं मिला।</p>';
   };
   $('#pq').oninput = draw; draw();
+}
+
+// ---------- follow a work: kept only in this browser, no number, no name, no sign-up ----------
+const followStore = {
+  get() { try { return JSON.parse(localStorage.getItem('ss_follow') || '{}'); } catch { return {}; } },
+  set(v) { try { localStorage.setItem('ss_follow', JSON.stringify(v)); } catch { /* private mode: following just isn't remembered */ } },
+};
+const isFollowed = (id) => !!followStore.get()[id];
+function toggleFollow(id, lastTs) {
+  const f = followStore.get();
+  if (f[id]) delete f[id]; else f[id] = lastTs || new Date().toISOString();
+  followStore.set(f);
+  return !!f[id];
+}
+function markSeen(id, lastTs) { const f = followStore.get(); if (f[id] && lastTs) { f[id] = lastTs; followStore.set(f); } }
+async function followedHtml() {
+  const f = followStore.get();
+  const ids = Object.keys(f).slice(0, 20);
+  if (!ids.length) return '';
+  const works = await Promise.all(ids.map((id) => api('/api/public/works/' + id).catch(() => null)));
+  return `<section><h2>⭐ आपके फ़ॉलो किए काम</h2><div class="grid">${works.filter(Boolean).map((w) => {
+    const fresh = w.updates.filter((e) => e.ts > f[w.id]).length;
+    return `<a class="card followcard" href="#work/${w.id}"><b>${esc(w.name)}</b><span class="small muted">${esc(w.office)}</span>
+      <span>${fresh ? `<span class="pill warn">${fresh} नए अपडेट</span>` : '<span class="pill">कोई नया अपडेट नहीं</span>'}${w.red_flags.length ? ` <span class="pill bad">🚩 ${w.red_flags.length}</span>` : ''}</span></a>`;
+  }).join('')}</div><p class="small muted">फ़ॉलो सिर्फ़ इसी फ़ोन/ब्राउज़र में याद रहता है। कोई नंबर या नाम नहीं लिया जाता।</p></section>`;
+}
+
+// ---------- site board with QR code: put it up at the site, anyone passing by can scan ----------
+function qrSvg(text, cell = 6) {
+  const qr = qrcode(0, 'M'); qr.addData(text); qr.make();
+  return qr.createSvgTag(cell, 2);
+}
+const workUrl = (id) => `${location.origin}/#work/${id}`;
+async function printSiteBoard(id) {
+  let w;
+  try { w = await api('/api/public/works/' + id); } catch (e) { toast('जनता पोर्टल बंद है या काम नहीं मिला: ' + e.message, true); return; }
+  const t = w.timeline, p = w.people;
+  const row = (k, v) => `<tr><th>${k}</th><td>${v || '—'}</td></tr>`;
+  const html = `<!doctype html><html lang="hi"><head><meta charset="utf-8"><title>सूचना-पट्ट: ${esc(w.name)}</title>
+    <style>@page{size:A4;margin:12mm}body{font:15px system-ui,"Noto Sans Devanagari",sans-serif;color:#000;margin:0}
+    .b{border:4px solid #0f5132;padding:18px;min-height:265mm;box-sizing:border-box}h1{margin:0 0 4px;font-size:26px}.sub{color:#0f5132;font-weight:700;letter-spacing:.5px}
+    table{width:100%;border-collapse:collapse;margin:14px 0}th,td{border:1px solid #888;padding:7px 9px;text-align:left;vertical-align:top}th{width:38%;background:#eef5f0}
+    .qr{display:flex;gap:18px;align-items:center;margin-top:10px}.qr svg{width:58mm;height:58mm}.qr p{font-size:17px;margin:4px 0}.url{font-size:12px;word-break:break-all;color:#333}</style></head><body><div class="b">
+    <div class="sub">सूचना-पट्ट · साइट साक्षी</div><h1>${esc(w.name)}</h1>
+    <table>${row('विभाग / कार्यालय', esc(`${w.department} ${w.office}`))}${row('निविदा आमंत्रण प्राधिकारी', esc(w.tia))}
+    ${row('वर्क ऑर्डर नं. / तिथि', esc(w.wo_no) + (t.wo_date ? ' · ' + fmtDay(t.wo_date) : ''))}${row('राशि', w.wo_amount ? crore(w.wo_amount) : '')}
+    ${row('काम शुरू', t.official_start ? fmtDay(t.official_start) : '')}${row('पूरा होने की तिथि', t.revised_end ? fmtDay(t.revised_end) : t.stipulated_end ? fmtDay(t.stipulated_end) : '')}
+    ${row('ठेकेदार', esc(p.contractor?.name) + (p.contractor?.reg_no ? ` (पंजीकरण ${esc(p.contractor.reg_no)})` : ''))}
+    ${row('कनिष्ठ अभियंता (JEN)', esc(p.jen?.name))}${row('सहायक अभियंता (AEN)', esc(p.aen?.name))}${row('अधिशासी अभियंता (XEN)', esc(p.xen?.name))}</table>
+    <div class="qr">${qrSvg(workUrl(w.id), 6)}<div><p><b>📱 स्कैन करें</b></p><p>इस काम की प्रगति, अधिकारियों की साइट-विज़िट, नाप, बिल, भुगतान, देरी: सब कुछ, रोज़ के अपडेट और फ़ोटो के साथ।</p>
+    <p class="url">${esc(workUrl(w.id))}</p></div></div></div><script>window.onload=()=>print()<\/script></body></html>`;
+  const win = window.open('', '_blank');
+  if (!win) { toast('पॉप-अप की अनुमति दें', true); return; }
+  win.document.write(html); win.document.close();
+}
+async function shareWork(id, name) {
+  const url = workUrl(id);
+  try { if (navigator.share) { await navigator.share({ title: name, url }); return; } } catch { return; }
+  try { await navigator.clipboard.writeText(url); toast('लिंक कॉपी हुआ ✓'); } catch { prompt('लिंक:', url); }
 }
 
 window.dlg = $('#dlg');

@@ -94,3 +94,4 @@ details summary { cursor: pointer; list-style: none; }
 }
 
 [hidden] { display: none !important; }
+.followcard { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: inherit; }

@@ -302,10 +302,16 @@ async function main() {
   assert.equal((await anon('GET', '/api/public/photo/' + sitePhoto)).status, 200);
   assert.equal((await anon('GET', '/api/public/photo/' + photoHash)).status, 404);
   assert.ok(r.data.works.find((x) => x.name === 'Awarded only').wo_date);
+  // RSS feeds for anyone, with the same privacy rules
+  const feed = await anon('GET', '/feed.xml');
+  assert.equal(feed.status, 200); assert.ok(String(feed.data).includes('<rss') && String(feed.data).includes('<item>'));
+  const wfeed = String((await anon('GET', `/feed/work/${pid}.xml`)).data);
+  assert.ok(wfeed.includes('Village road Kotputli') && !wfeed.includes('9800000001'));
   await admin('PUT', '/api/settings', { public_board: false });
   await new Promise((ok) => setTimeout(ok, 10));
   assert.equal((await anon('GET', '/api/public/overview')).data.enabled, false);
   assert.equal((await anon('GET', '/api/public/works/' + pid)).status, 404);
+  assert.equal((await anon('GET', '/feed.xml')).status, 404);
   const home = await anon('GET', '/');
   assert.equal(home.status, 200);
 
