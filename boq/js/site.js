@@ -119,7 +119,7 @@ export function newSiteDialog() {
       state.sites.unshift(s); await idb.put("sites", s);
       await saveSiteDocs(s.id, got);
       ctx.closeModal(); switchSite(s.id); ctx.refreshHeader();
-      ctx.toast(`Site created${got.files.length ? ` with ${got.files.length} document(s)` : ""}${s.boqItems ? ` and ${s.boqItems.length} BOQ items` : ""}.`, 5000);
+      ctx.toast(`Site created${got.files.length ? ` with ${got.files.length} document(s)` : ""}${s.boqItems ? ` and ${s.boqItems.length} BOQ items. The STP application for minerals is ready in Site details` : ""}.`, 6000);
     };
   });
 }
@@ -181,8 +181,9 @@ export async function renderSites() {
       <p class="muted small">Required quantities are worked out from the BOQ items (mix, grade, thickness and unit in each item) with common site thumb rules: an approximate guide, not the department's analysis of rates. Received and consumed come from the daily entries.</p>
       ${ms.rows.length ? `<div class="table-wrap"><table class="data"><thead><tr><th>Material</th><th>Unit</th><th class="num">Required (BOQ, approx.)</th><th class="num">Received</th><th class="num">Consumed</th><th class="num">Balance at site</th><th class="num">Still to come</th></tr></thead>
         <tbody>${matTable(ms).map((r) => `<tr>${r.map((c, i) => `<td class="${i > 1 ? "num" : ""}">${typeof c === "number" ? c.toLocaleString("en-IN") : esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<p class="muted">No cement, sand, aggregate, steel or brick items could be recognised in the BOQ.</p>`}
-      ${ms.est.rows.length ? `<details class="mt"><summary>How it was worked out (${ms.est.rows.length} items${ms.est.skipped ? `; ${ms.est.skipped} items such as earthwork need no such material` : ""})</summary><div class="table-wrap"><table class="data small"><thead><tr><th>No.</th><th>Item</th><th class="num">Qty</th><th>Basis</th><th class="num">Cement bags</th><th class="num">Sand cum</th><th class="num">Agg. cum</th><th class="num">Steel kg</th><th class="num">Bricks</th></tr></thead>
-        <tbody>${ms.est.rows.map((r) => `<tr><td>${esc(r.sno || "")}</td><td>${esc(r.description.slice(0, 110))}</td><td class="num">${q3(r.qty)} ${esc(r.unit || "")}</td><td class="small">${esc(r.basis)}</td>${["cement", "sand", "agg", "steel", "bricks"].map((k) => `<td class="num">${r[k] ? round(r[k], k === "sand" || k === "agg" ? 2 : 0) : ""}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>` : ""}</div>`);
+      ${ms.est.rows.length ? `<details class="mt"><summary>How it was worked out (${ms.est.rows.length} items${ms.est.skipped ? `; ${ms.est.skipped} items such as earthwork need no such material` : ""})</summary><div class="table-wrap"><table class="data small"><thead><tr><th>No.</th><th>Item</th><th class="num">Qty</th><th>Basis</th><th class="num">Cement bags</th><th class="num">Sand cum</th><th class="num">Agg. cum</th><th class="num">Steel kg</th><th class="num">Bricks</th><th class="num">Stone cum</th></tr></thead>
+        <tbody>${ms.est.rows.map((r) => `<tr><td>${esc(r.sno || "")}</td><td>${esc(r.description.slice(0, 110))}</td><td class="num">${q3(r.qty)} ${esc(r.unit || "")}</td><td class="small">${esc(r.basis)}</td>${["cement", "sand", "agg", "steel", "bricks", "stone"].map((k) => `<td class="num">${r[k] ? round(r[k], ["sand", "agg", "stone"].includes(k) ? 2 : 0) : ""}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>` : ""}</div>`);
+    body.insertAdjacentHTML("beforeend", await stpCard(s));
     state.detailsGot = bindDocPicker(body);
   }
   if (state.tab === "docs") await rerenderDocs(body);
@@ -361,6 +362,71 @@ async function takePhotos(files, fromCamera, scope) {
 }
 
 // ---------------------------------------------------------------------------
+// Mining permit (STP, option 'C'): the contractor's application, filled from the work order and
+// BOQ, and a record of the permit received with its conditions. The permit itself is issued by
+// the Mining Engineer; this tool only prepares the application and keeps track.
+// ---------------------------------------------------------------------------
+
+const DENSITY = { sand: 1.6, agg: 1.5, stone: 1.6 }; // tonnes per cum, approximate
+const MINERAL_NAMES = { sand: "बजरी / Sand", agg: "गिट्टी / Aggregate", stone: "चिनाई पत्थर / Masonry stone" };
+function stpData(s) {
+  const st = (s.stp ||= {});
+  if (!st.minerals) {
+    const est = s.boqItems?.length ? estimateMaterials(s.boqItems).totals : {};
+    st.minerals = ["sand", "agg", "stone"].filter((k) => num(est[k])).map((k) => ({ name: MINERAL_NAMES[k], cum: round(est[k], 2), t: round(est[k] * DENSITY[k], 2), source: "" }));
+  }
+  return st;
+}
+async function stpCard(s) {
+  const st = stpData(s);
+  const royaltyFiles = (await allFiles()).filter((f) => f.owner === s.id && f.kind === "doc" && /royalty|rawanna|ravanna|रवन्ना|STP/i.test(f.folder)).length;
+  const F = (k, l, t = "text", ph = "") => `<label class="field">${l}<input data-stp="${k}" type="${t}" value="${esc(st[k] ?? "")}" placeholder="${ph}"></label>`;
+  return `<div class="card"><h2>Mining permit (STP) · Vikalp 'C'</h2>
+    <p class="muted small">The application to the Mining Engineer for a short-term permit for the minor minerals used in this work, filled from the work order and the BOQ (quantities approximate: check them). Print, sign and submit it with a copy of the work order. The permit itself is issued by the mining office: keep it and the royalty / rawanna receipts in the <b>STP</b> folder.</p>
+    <div class="form-grid compact">${F("district", "Mining office (district)", "text", "Jodhpur")}${F("appDate", "Application date", "date")}</div>
+    <div class="table-wrap mt"><table class="data diary-tab" data-stplist><thead><tr><th>Mineral</th><th>Qty (cum)</th><th>Qty (tonnes)</th><th>Source / lease (optional)</th><th></th></tr></thead>
+      <tbody>${st.minerals.map((m, i) => `<tr data-i="${i}"><td><input data-mk="name" value="${esc(m.name)}"></td><td><input data-mk="cum" type="number" step="any" class="num w90" value="${m.cum ?? ""}"></td><td><input data-mk="t" type="number" step="any" class="num w90" value="${m.t ?? ""}"></td><td><input data-mk="source" value="${esc(m.source || "")}"></td><td><button class="icon danger-text" data-act="stpDel">×</button></td></tr>`).join("")}</tbody></table></div>
+    <div class="row gap wrap"><button class="ghost small" data-act="stpAdd">＋ Mineral</button><button class="ghost small" data-act="stpReset" title="Work the quantities out again from the BOQ">↻ From BOQ</button><button class="primary" data-act="stpPrint">Print application (Hindi)</button></div>
+    <h3 class="mt">Permit received</h3>
+    <div class="form-grid compact">${F("permitNo", "Permit / letter No.", "text", "खअ/जोध/एसटीपी/2026/610")}${F("permitDate", "Date", "date")}${F("refNo", "Application ref. No.")}${F("royalty", "Royalty paid ₹", "number")}</div>
+    <div class="checks mt">
+      <label class="check"><input type="checkbox" data-stpc="rawanna" ${st.rawanna ? "checked" : ""}> Rawanna / royalty receipts for every load kept (firm name and work written on them) · ${royaltyFiles} file(s) in the STP folder</label>
+      <label class="check"><input type="checkbox" data-stpc="assessed" ${st.assessed ? "checked" : ""}> Royalty assessment done at the mining office</label>
+      <label class="check"><input type="checkbox" data-stpc="noDues" ${st.noDues ? "checked" : ""}> <b>No-dues certificate (ना बकाया प्रमाण पत्र) obtained</b>: needed before the final bill is paid</label>
+    </div>${!st.noDues && st.permitNo ? `<p class="status err">Reminder: get the royalty no-dues certificate before the final bill.</p>` : ""}</div>`;
+}
+function stpChange(t) {
+  const s = site(), st = stpData(s);
+  if (t.matches("[data-stp]")) st[t.dataset.stp] = t.type === "number" ? num(t.value) : t.value;
+  else if (t.matches("[data-mk]")) {
+    const m = st.minerals[+t.closest("tr").dataset.i]; const k = t.dataset.mk;
+    m[k] = ["cum", "t"].includes(k) ? num(t.value) : t.value;
+    if (k === "cum") { const key = Object.keys(MINERAL_NAMES).find((x) => MINERAL_NAMES[x] === m.name); if (key) { m.t = round(m.cum * DENSITY[key], 2); const ti = $('[data-mk="t"]', t.closest("tr")); if (ti) ti.value = m.t; } }
+  } else if (t.matches("[data-stpc]")) st[t.dataset.stpc] = t.checked;
+  else return false;
+  saveSite(s); return true;
+}
+function stpPrintHtml(s) {
+  const st = stpData(s), co = ctx.company() || {};
+  const firm = s.contractor || co.name || "";
+  const hd = (d) => (d ? fd(d) : "....................");
+  return `<section class="p-page stp-letter">
+    <p>सेवा में,<br>&nbsp;&nbsp;&nbsp;&nbsp;खनि अभियन्ता,<br>&nbsp;&nbsp;&nbsp;&nbsp;खान एवं भू विज्ञान विभाग,<br>&nbsp;&nbsp;&nbsp;&nbsp;${esc(st.district || "....................")}</p>
+    <p class="stp-sub"><b>विषय:-</b> विकल्प 'सी' के तहत अल्पावधि अनुज्ञापत्र (STP) जारी करने बाबत।</p>
+    <p class="stp-sub"><b>सन्दर्भ:-</b> ${esc(s.client || "")} का वर्क आर्डर क्रमांक ${esc(s.workOrderNo || "....................")} दिनांक ${hd(s.woDate)}</p>
+    <p class="stp-sub"><b>कार्य का नाम:-</b> ${esc(s.name)}</p>
+    <p>महोदय,</p>
+    <p class="stp-body">उपरोक्त विषयान्तर्गत निवेदन है कि हमारी फर्म <b>${esc(firm)}</b> को ${esc(s.client || "")} द्वारा उपरोक्त कार्य हेतु वर्क आर्डर${num(s.amount) ? ` (राशि ₹ ${num(s.amount).toLocaleString("en-IN")})` : ""} जारी किया गया है।${s.startDate || s.endDate ? ` कार्य की अवधि दिनांक ${hd(s.startDate)} से ${hd(s.endDate)} तक है।` : ""}</p>
+    <p class="stp-body">उक्त कार्य में निम्नलिखित अप्रधान खनिजों का उपयोग होना अनुमानित है। अतः राजस्थान अप्रधान खनिज रियायत नियमावली 2017 के अन्तर्गत विकल्प 'सी' के तहत अल्पावधि अनुज्ञापत्र जारी करने की कृपा करें:-</p>
+    <table class="r-tab stp-tab"><thead><tr><th>क्र.सं.</th><th>खनिज</th><th>अनुमानित मात्रा (घन मीटर)</th><th>अनुमानित मात्रा (टन)</th><th>स्रोत</th></tr></thead>
+      <tbody>${st.minerals.filter((m) => m.name).map((m, i) => `<tr><td>${i + 1}</td><td>${esc(m.name)}</td><td class="r">${m.cum ? q3(m.cum) : ""}</td><td class="r">${m.t ? q3(m.t) : ""}</td><td>${esc(m.source || "")}</td></tr>`).join("")}</tbody></table>
+    <p class="stp-body">हम अनुज्ञापत्र की सभी शर्तों का पालन करेंगे। खनिज केवल वैध रवन्ना / रॉयल्टी रसीद पर ही प्राप्त करेंगे, जिन पर फर्म का नाम एवं कार्य विवरण अंकित होगा, तथा अंतिम रनिंग बिल के भुगतान से पूर्व खनिज प्राप्ति सम्बन्धी रिकॉर्ड प्रस्तुत कर अधिशुल्क निर्धारण करवा लेंगे।</p>
+    <p><b>संलग्न:-</b><br>1. वर्क आर्डर की प्रति<br>2. बी.ओ.क्यू. / स्वीकृत दरों की प्रति<br>3. फर्म का पंजीयन / जी.एस.टी. प्रमाण पत्र<br>4. पहचान पत्र</p>
+    <div class="stp-sign"><div>दिनांक: ${hd(st.appDate)}<br>स्थान: ${esc(st.district || "")}</div>
+      <div>भवदीय,<br><br><br>(हस्ताक्षर)<br><b>${esc(firm)}</b>${co.address ? `<br>${esc(co.address)}` : ""}${co.phone ? `<br>फोन: ${esc(co.phone)}` : ""}${co.gstin ? `<br>GSTIN: ${esc(co.gstin)}` : ""}</div></div></section>`;
+}
+
+// ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
 
@@ -369,6 +435,10 @@ async function onClick(e) {
   const act = t.closest("[data-act]")?.dataset.act;
   if (t.closest("[data-stab]")) { state.tab = t.closest("[data-stab]").dataset.stab; state.report = null; return renderSites(); }
   if (act === "newSite") return newSiteDialog();
+  if (act === "stpPrint") { const s = site(); stpData(s); await saveSite(s); return printNow(stpPrintHtml(s)); }
+  if (act === "stpAdd") { stpData(site()).minerals.push({ name: "", cum: "", t: "", source: "" }); await saveSite(site()); return renderSites(); }
+  if (act === "stpDel") { stpData(site()).minerals.splice(+t.closest("tr").dataset.i, 1); await saveSite(site()); return renderSites(); }
+  if (act === "stpReset") { delete stpData(site()).minerals; stpData(site()); await saveSite(site()); return renderSites(); }
   if (act === "camera") { cameraDialog(); return; }
   if (t.closest("[data-day]")) { state.date = addDays(state.date, +t.closest("[data-day]").dataset.day); return renderSites(); }
   if (act === "saveSite") {
@@ -415,6 +485,7 @@ async function onClick(e) {
 
 function onChange(e) {
   const t = e.target;
+  if (stpChange(t)) { if (t.matches("[data-stpc]")) renderSites(); return; }
   if (t.id === "diaryDate") { state.date = t.value || today(); return renderSites(); }
   if (t.id === "camShot" || t.id === "camPick") { const files = [...t.files]; t.value = ""; if (files.length) takePhotos(files, t.id === "camShot", $("#sitesRoot")); return; }
   if (t.matches("[data-st]")) { const st = stampSettings(); st[t.dataset.st] = t.checked; localStorage.setItem("site.stamp", JSON.stringify(st)); return; }

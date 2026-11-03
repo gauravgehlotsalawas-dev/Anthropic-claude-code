@@ -9,6 +9,7 @@ export const MATS = [
   { key: "agg", label: "Aggregate / grit", unit: "cum", re: /aggregate|grit|gitti|गिट्टी|rodi|stone chips|kapchi/i },
   { key: "steel", label: "Steel", unit: "kg", re: /steel|tmt|saria|sariya|सरिया|\bbar\b|reinforcement/i },
   { key: "bricks", label: "Bricks", unit: "nos", re: /brick|ईंट|eent|\bint\b/i },
+  { key: "stone", label: "Masonry stone", unit: "cum", re: /masonry stone|rubble|khanda|खंडा|पत्थर|patthar|^stone$/i },
 ];
 export const matOf = (name) => MATS.find((m) => m.re.test(String(name || "")))?.key || "";
 
@@ -84,7 +85,7 @@ export function itemMaterials(desc, unit, qty) {
   if (/stone masonry|rubble|r\.?r\.? masonry|stone work/.test(d) && u === "cum") {
     const s = ratio2 ? num(ratio2[1]) : 6;
     const m = mortar(0.42 * q, s);
-    return out({ cement: m.cement, sand: m.sand }, `stone masonry, CM 1:${s} (stone not counted)`);
+    return out({ stone: 1.25 * q, cement: m.cement, sand: m.sand }, `stone masonry, CM 1:${s}, 1.25 cum stone per cum`);
   }
   // Plaster: dry mortar = thickness × 1.33 per sqm.
   if (/plaster|rendering/.test(d) && u === "sqm") {
@@ -103,7 +104,7 @@ export function itemMaterials(desc, unit, qty) {
 
 /** items: [{description, unit, qty, sno}] → { rows, totals, skipped } */
 export function estimateMaterials(items) {
-  const rows = [], totals = { cement: 0, sand: 0, agg: 0, steel: 0, bricks: 0 };
+  const rows = [], totals = { cement: 0, sand: 0, agg: 0, steel: 0, bricks: 0, stone: 0 };
   let skipped = 0;
   for (const it of items || []) {
     const m = itemMaterials(it.description, it.unit, it.qty);
