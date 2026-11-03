@@ -552,7 +552,7 @@ table.dev tr.sub td { font-weight: 700; background: #f7faf8; }
 .m-totrow .m-mid { border-left: 0.8pt solid #000; }
 .m-pay { margin: 2pt 0 0 2mm; }
 .m-line { border-bottom: 0.8pt solid #000; padding-bottom: 1pt; }
-.m-box { height: 33mm; } .m-box2 { height: 40mm; } .m-top { padding-top: 6mm !important; }
+.m-box { height: 27mm; } .m-box2 { height: 33mm; } .m-top { padding-top: 6mm !important; }
 .f-memo2 { font-size: 10pt; } .f-memo2 p { margin: 3pt 0; } .f-memo2 .f-small { font-size: 8.8pt; }
 
 @media print { .d-slip .d-signs { margin-top: 14mm; } #printArea > section:last-child { page-break-after: auto !important; break-after: auto !important; } }
@@ -565,3 +565,11 @@ input.need, textarea.need { border-color: #e0a030; background: #fff7e6; }
 .mb-tab .mb-tot td { font-weight: 700; border-top: 0.6pt solid #000; }
 .mb-tab .f-u { border-top: 0.6pt solid #000; border-bottom: 0.6pt solid #000; }
 .mb-abs .d-title { margin-top: 0; }
+/* Photo sheets: landscape content turned on a portrait A4 sheet, so every browser
+   (Safari/iPad included, which ignores landscape @page rules) prints them horizontally. */
+@media print {
+  .p-photos.p-rot { display: block; position: relative; width: 184mm; height: 262mm; overflow: hidden; }
+  .p-rot > .p-rot-in { position: absolute; top: 0; left: 0; width: 262mm; height: 184mm; transform-origin: 0 0; transform: translateY(262mm) rotate(-90deg); display: flex; flex-direction: column; }
+  .p-rot .p-photo-grid { gap: 4mm; }
+  .p-rot .p-sign { margin-top: 10mm; }
+}

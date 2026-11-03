@@ -178,7 +178,7 @@ function billView(p, c) {
       <div class="row gap wrap"><select id="billSel">${p.bills.map((b) => `<option value="${b.id}" ${b === bill ? "selected" : ""}>${billTitle(p, b)}${b.date ? ` · ${b.date}` : ""}</option>`).join("")}${p.bills.length ? "" : `<option>No bills yet</option>`}</select>
         <button class="primary" data-act="newBill">＋ New running bill</button>
         ${p.bills.length ? "" : `<button class="ghost" data-act="baseBill" title="For the 2nd, 4th or final bill: enter the last bill already submitted, so this tool continues from it">Enter last submitted bill</button>`}
-        ${bill && bill.kind !== "final" ? `<button class="ghost" data-act="finalBill">Make this the final bill</button>` : ""}
+        ${bill && bill.kind !== "final" ? `<button class="ghost" data-act="finalBill">Make this the final bill</button>` : ""}${bill && bill.kind === "final" ? `<button class="ghost" data-act="runningBill">Make it a running bill again</button>` : ""}
         ${bill ? `<button class="ghost danger-text" data-act="delBill">Delete bill</button>` : ""}</div>
       ${bill ? `<div class="row gap wrap"><button class="primary" data-print="all" title="Bill with memorandum and terms, extra item slip, deviation and photos">Print complete bill file</button><button class="ghost" data-print="bill">Print bill</button><button class="ghost" data-print="mb" title="Abstract of cost as written in the measurement book">MB abstract</button><button class="ghost" data-print="slip">Extra item slip</button><button class="ghost" data-print="deviation">Deviation</button><button class="ghost" data-act="excel">Excel</button></div>` : ""}
     </div></div>`;
@@ -303,9 +303,10 @@ function onClick(e) {
     p.bills.push(b); view.billId = b.id; view.tab = "bill";
   }
   if (act === "finalBill" && bill) {
-    if (!confirm("Make this the final bill? Part rates will be cleared so every item is paid at the full rate.")) return;
-    bill.kind = "final"; bill.partRate = {};
+    if (!confirm("Make this the final bill? Everything stays as entered (part rates, previous bill, deductions); only the title becomes “Final Bill”.")) return;
+    bill.kind = "final";
   }
+  if (act === "runningBill" && bill) bill.kind = "running";
   if (act === "delBill" && bill) {
     if (!confirm(`Delete ${billTitle(p, bill)}?`)) return;
     p.bills.splice(p.bills.indexOf(bill), 1); view.billId = p.bills.at(-1)?.id || "";
@@ -432,7 +433,21 @@ function printView(kind) {
   } else html = printHtml(p, c, bill, kind);
   if (!html) { ctx.toast("Make a bill first."); return; }
   $("#printArea").innerHTML = html;
+  fitPages($("#printArea"));
   window.print();
+}
+
+/** A portrait page that would run past one A4 sheet is scaled down to fit, so no page spills a few lines onto a new sheet. */
+function fitPages(area) {
+  const MM = 96 / 25.4, LIMIT = 256 * MM;
+  const m = document.createElement("div"); m.className = "f-measure"; m.innerHTML = area.innerHTML; document.body.appendChild(m);
+  const live = [...area.children], test = [...m.children];
+  test.forEach((sec, i) => {
+    if (!sec.matches(".p-page") || sec.matches(".p-rot, .d-dev, .p-landscape")) return;
+    const h = sec.getBoundingClientRect().height;
+    if (h > LIMIT) live[i].style.zoom = (LIMIT / h).toFixed(3);
+  });
+  m.remove();
 }
 
 function printHtml(p, c, bill, kind) {
@@ -448,10 +463,10 @@ function printHtml(p, c, bill, kind) {
   } else if (kind === "photos") {
     const pages = [];
     for (let i = 0; i < p.photos.length; i += 4) pages.push(p.photos.slice(i, i + 4));
-    html = pages.map((ph, pi) => `<section class="p-page p-photos p-landscape"><header class="p-head"><div class="p-org">${esc(c.office || p.client || "")}</div>
+    html = pages.map((ph, pi) => `<section class="p-page p-photos p-rot"><div class="p-rot-in"><header class="p-head"><div class="p-org">${esc(c.office || p.client || "")}</div>
         <div><b>Name of work:</b> ${esc(p.name)}</div><div><b>Work order No.:</b> ${esc(c.workOrderNo)} ${c.woDate ? `dated ${esc(c.woDate)}` : ""}${bill ? ` · ${esc(billTitle(p, bill))}` : ""}</div></header>
       <div class="p-photo-grid">${ph.map((x) => `<figure><img src="${x.src}" alt="">${x.caption ? `<figcaption>${esc(x.caption)}</figcaption>` : ""}</figure>`).join("")}</div>
-      ${signs(["JEN", "AEN", "XEN"])}<div class="p-pageno">Page ${pi + 1} of ${pages.length}</div></section>`).join("");
+      ${signs(["JEN", "AEN", "XEN"])}<div class="p-pageno">Page ${pi + 1} of ${pages.length}</div></div></section>`).join("");
   }
   return html;
 }
@@ -499,11 +514,14 @@ const docStatus = (t, cls = "") => { const s = $("#docStatus"); if (s) { s.textC
 async function loadBoq(files) {
   if (!files.length) return;
   try {
-    let items = [];
+    let items = [], header = {};
+    const addHeader = (h) => { for (const [k, v] of Object.entries(h || {})) { const t = String(v || "").replace(/\s+/g, " ").replace(/\s*serial number\s*:?\s*$/i, "").trim(); if (t && !header[k]) header[k] = t; } };
     const nicXls = files.filter((f) => /\.xls$/i.test(f.name));
     for (const f of nicXls) {
       try {
         const buf = await f.arrayBuffer(); const first = readNicBoq(buf);
+        const strip = (t) => String(t || "").replace(/^[^:]*:\s*/, "").trim();
+        addHeader({ work: strip(first.work), authority: strip(first.authority), contract: strip(first.contract) });
         for (const n of first.sheetNames) {
           const info = readNicBoq(buf, n); const sched = info.boqType === "Percentage" ? "G" : "H";
           info.items.filter((i) => !i.heading).forEach((i) => items.push({ schedule: sched, sno: String(i.sno), description: i.description, quantity: i.qty || 0, unit: i.unit, rate: i.rate || 0 }));
@@ -513,20 +531,21 @@ async function loadBoq(files) {
     const rest = files.filter((f) => !nicXls.includes(f));
     if (rest.length) {
       const pdfs = rest.filter((f) => /\.pdf$/i.test(f.name));
-      for (const f of pdfs) { docStatus(`Reading ${f.name}…`); const got = await parseNicPdf(f); if (got.length) { items.push(...got); rest.splice(rest.indexOf(f), 1); } }
+      for (const f of pdfs) { docStatus(`Reading ${f.name}…`); const got = await parseNicPdf(f); addHeader(got.header); if (got.length) { items.push(...got); rest.splice(rest.indexOf(f), 1); } }
       if (rest.length) {
         const doc = await readDocument(rest, (t) => docStatus(t));
+        addHeader(boqHeader(doc.lines));
         items.push(...(doc.rows.length ? parseBoqRows(doc.rows) : []), ...parseBoqLines(doc.lines));
         if (!items.length) { docStatus("No BOQ items could be found. Check that the photo is straight and readable, or type the items.", "err"); return; }
       }
     }
     docStatus("");
-    reviewBoq(items);
+    reviewBoq(items, header);
   } catch (e) { console.error(e); docStatus(e.message, "err"); }
 }
 
 /** Let the user correct the items read from the BOQ before they are used. */
-function reviewBoq(items) {
+function reviewBoq(items, header = {}) {
   const p = ctx.project();
   const rows = () => items.map((it, i) => `<tr data-i="${i}"><td><select data-k="schedule"><option ${it.schedule === "G" ? "selected" : ""}>G</option><option ${it.schedule === "H" ? "selected" : ""}>H</option></select></td>
     <td><input data-k="sno" class="w70" value="${esc(it.sno)}"></td><td><textarea data-k="description" rows="2">${esc(it.description)}</textarea></td>
@@ -549,6 +568,12 @@ function reviewBoq(items) {
       })) });
       p.sections = [mk("G"), mk("H")].filter((s) => s.items.length);
       p.bills = []; view.billId = "";
+      // Name of work, department and NIT No. from the BOQ fill the project, unless already typed in.
+      const generic = !p.name || /^(untitled project|my first estimate|imported boq|new project)$/i.test(p.name.trim());
+      if (header.work && generic) p.name = header.work;
+      if (header.authority && !p.client) p.client = header.authority;
+      if (header.contract && !p.reference) p.reference = header.contract;
+      const cc = contract(p); if (header.authority && !cc.office) cc.office = header.authority;
       applyHRates(p);
       ctx.closeModal(); ctx.saveProject(); renderBills();
       docStatus(`BOQ loaded: ${keep.filter((i) => i.schedule === "G").length} G-Schedule and ${keep.filter((i) => i.schedule === "H").length} H-Schedule items.${checkAmount(p)}`, "ok");
@@ -619,6 +644,7 @@ async function parseNicPdf(file) {
   let cols = null, sched = "G";
   const items = [];
   let cur = null, done = false;
+  const pre = [];
   for (let pg = 1; pg <= doc.numPages && !done; pg++) {
     const tc = await (await doc.getPage(pg)).getTextContent();
     const rows = [];
@@ -641,7 +667,7 @@ async function parseNicPdf(file) {
         cols = { sl: (c1 + c2) / 2, desc: (c2 + c4) / 2, qty: (c4 + c5) / 2, unit: (c5 + c6) / 2, rate: c6 + (c6 - c5) / 2 + 10, slLeft: c1 };
         continue;
       }
-      if (!cols) continue;
+      if (!cols) { pre.push(line); continue; }
       if (/^Total in Figures/i.test(line)) { if (cur) items.push(cur); cur = null; done = true; break; }
       const sl = r.cells.find((c) => c.x < cols.slLeft + 25 && /^\d+(\.\d+)*$/.test(c.t));
       const descCells = r.cells.filter((c) => c !== sl && c.x < cols.desc);
@@ -656,7 +682,26 @@ async function parseNicPdf(file) {
     }
   }
   if (cur) items.push(cur);
-  return items.map((i) => ({ ...i, description: i.description.replace(/\s+/g, " ").trim() }));
+  const out = items.map((i) => ({ ...i, description: i.description.replace(/\s+/g, " ").trim() }));
+  out.header = boqHeader(pre);
+  return out;
+}
+
+/** Name of work, tender inviting authority and contract / NIT No. from the lines above a BOQ. */
+function boqHeader(lines) {
+  const h = {};
+  const after = (l) => l.replace(/^[^:]*?(?::-|:|–|-)\s*/, "").trim();
+  for (let i = 0; i < Math.min(lines.length, 60); i++) {
+    const l = String(lines[i] || "").replace(/\s+/g, " ").trim();
+    if (!h.work && /name\s+of\s+(the\s+)?work|कार्य\s*का\s*नाम/i.test(l)) {
+      let w = after(l);
+      if (w.length < 4 && lines[i + 1]) w = String(lines[i + 1]).trim();
+      h.work = w;
+    } else if (!h.authority && /tender\s+inviting\s+authority|^office\s+of\b|department\s*:/i.test(l)) h.authority = /office\s+of/i.test(l) && !/:/.test(l) ? l : after(l);
+    else if (!h.contract && /contract\s*no|n\.?\s*i\.?\s*t\.?\s*no|nit\s*no|tender\s*(id|no)/i.test(l)) h.contract = after(l) || l;
+  }
+  for (const k of Object.keys(h)) if (!h[k] || h[k].length < 3) delete h[k];
+  return h;
 }
 
 // ---------------------------------------------------------------------------
@@ -743,7 +788,7 @@ function form27g(p, c, bill) {
       <tr><td>Date of measurements</td><td>: ${fd(bill.measured)}</td></tr></table>
     <div class="f-acc">A-ACCOUNT OF WORK OR SUPPLIES</div>`;
   // Measure the real printed height of every part, then fill each A4 page as far as it goes.
-  const MM = 96 / 25.4, PAGE = 268 * MM;
+  const MM = 96 / 25.4, PAGE = 258 * MM; // a little under the 269 mm A4 print area, so every browser (Safari too) keeps each page on one sheet
   const m = document.createElement("div");
   m.className = "f27 f-measure";
   const bfRow = `<tr class="f-bf m-bf"><td></td><td></td><td></td><td class="r"><b>B/F</b></td><td></td><td class="r">0.00</td><td class="r">0.00</td><td></td></tr>`;
@@ -782,7 +827,8 @@ function form27g(p, c, bill) {
       pg = pg.map((x, i) => ({ ...x, html: (i === ti && ti > 0 ? filler(spare * 0.3, false) : "") + (i === ci ? filler(spare * (ti > 0 ? 0.7 : 1), true) : "") + x.html }));
     }
     const bf = pi ? `<tr class="f-bf"><td></td><td></td><td></td><td class="r"><b>B/F</b></td><td></td><td class="r">${n2(carry[pi - 1][0])}</td><td class="r">${n2(carry[pi - 1][1])}</td><td></td></tr>` : "";
-    const co = !last ? `<tr class="f-co"><td></td><td></td><td></td><td class="c"><b><u>Carried Over..............................</u></b></td><td></td><td class="r"><b>${n2(carry[pi][0])}</b></td><td class="r"><b>${n2(carry[pi][1])}</b></td><td></td></tr>` : "";
+    const midFill = !last ? filler(Math.max(0, roomMid(pi === 0) - pg.reduce((a, y) => a + y.h, 0) - 4), false) : "";
+    const co = !last ? midFill + `<tr class="f-co"><td></td><td></td><td></td><td class="c"><b><u>Carried Over..............................</u></b></td><td></td><td class="r"><b>${n2(carry[pi][0])}</b></td><td class="r"><b>${n2(carry[pi][1])}</b></td><td></td></tr>` : "";
     return `<section class="p-page f27">${pi ? (pi === 1 ? `<div class="f-note">be an entry in column 7 also. In no other case should any entries be made in column 7.</div>` : "") : head}
       <table class="f-table">${cols}${thead}<tbody>${bf}${pg.map((x) => x.html).join("")}${co}${last ? tail : ""}</tbody></table>
       ${pi === 0 && !last ? `<div class="f-foot">The full Name of the work as given in the estimate should be entered here.<br>If the outlay on the work is recorded by sub-headed should be shown in col. 6 and against this total there should</div>` : ""}
