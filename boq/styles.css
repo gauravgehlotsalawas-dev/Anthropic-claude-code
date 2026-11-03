@@ -568,10 +568,10 @@ input.need, textarea.need { border-color: #e0a030; background: #fff7e6; }
 /* Photo sheets: landscape content turned on a portrait A4 sheet, so every browser
    (Safari/iPad included, which ignores landscape @page rules) prints them horizontally. */
 @media print {
-  .p-photos.p-rot { display: block; position: relative; width: 184mm; height: 262mm; overflow: hidden; }
-  .p-rot > .p-rot-in { position: absolute; top: 0; left: 0; width: 262mm; height: 184mm; transform-origin: 0 0; transform: translateY(262mm) rotate(-90deg); display: flex; flex-direction: column; }
+  .p-photos.p-rot { display: block; position: relative; width: 176mm; height: 242mm; overflow: hidden; margin: 0 auto; }
+  .p-rot > .p-rot-in { position: absolute; top: 0; left: 0; width: 242mm; height: 176mm; transform-origin: 0 0; transform: translateY(242mm) rotate(-90deg); display: flex; flex-direction: column; }
   .p-rot .p-photo-grid { gap: 4mm; }
-  .p-rot .p-sign { margin-top: 10mm; }
+  .p-rot .p-sign { margin-top: 6mm; }
 }
 
 /* ---------- Site diary, gallery, documents, office ---------- */
@@ -666,3 +666,5 @@ input.auto, textarea.auto { background: #eaf7ef; border-color: var(--brand); }
   .stp-sign { display: flex; justify-content: space-between; margin-top: 18pt; }
   .stp-sign > div:last-child { text-align: center; min-width: 70mm; }
 }
+/* Safari prints its own URL and date lines inside the page, so photo sheets keep a safety margin (above). */
+@media print { .fatal, #bootErr { display: none !important; } }

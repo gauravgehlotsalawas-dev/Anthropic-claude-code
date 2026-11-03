@@ -1,7 +1,7 @@
 // Site diary: one folder per construction site with daily entries (labour, work done, materials,
 // machinery, hindrances), a GPS camera, a photo gallery, DPR / WPR / MPR reports and site documents.
 import { idb, uid, num, round, esc } from "./store.js";
-import { saveFile, allFiles, putFile, delFile, readExif, getPosition, reverseGeocode, fmtLatLon, fmtDateTime, stampPhoto, thumbOf, makeZip, safeName } from "./files.js";
+import { saveFile, allFiles, putFile, delFile, readExif, getPosition, reverseGeocode, fmtLatLon, fmtDateTime, stampPhoto, thumbOf, makeZip, safeName, blobToDataUrl } from "./files.js";
 import { docsPanel, SITE_FOLDERS } from "./docs.js";
 import { readDocument, parseWorkOrder } from "./docread.js";
 import { extractBoq } from "./bills.js";
@@ -693,8 +693,8 @@ function photoExportDialog(photos, mode) {
 /** Four photos to a sheet, laid out landscape (turned on the portrait A4 page so every browser prints it the same). */
 export async function photoSheets(photos, s, o = exportSettings()) {
   const pages = []; for (let i = 0; i < photos.length; i += 4) pages.push(photos.slice(i, i + 4));
-  const urls = []; for (const p of photos) urls.push(URL.createObjectURL(await stamped(p, s, o, 1600)));
-  setTimeout(() => urls.forEach(URL.revokeObjectURL), 300000);
+  // Data URLs, not blob: links: Safari on iPad sometimes prints blob: images as broken.
+  const urls = []; for (const p of photos) urls.push(await blobToDataUrl(await stamped(p, s, o, 1400)));
   let k = 0;
   return pages.map((ph, pi) => `<section class="p-page p-photos p-rot"><div class="p-rot-in"><header class="p-head">${s.client ? `<div class="p-org">${esc(s.client)}</div>` : ""}
       <div><b>Name of work:</b> ${esc(s.name)}</div><div><b>Work order No.:</b> ${esc(s.workOrderNo || "")} ${s.woDate ? `dated ${fd(s.woDate)}` : ""}</div></header>
