@@ -39,6 +39,9 @@ export async function initSites(c) {
   root.addEventListener("click", onClick);
   root.addEventListener("change", onChange);
   root.addEventListener("input", onInput);
+  root.addEventListener("pointerdown", (e) => { const b = e.target.closest("[data-acpick], [data-acprev]"); if (b) { e.preventDefault(); pickAc(b); } });
+  root.addEventListener("focusin", (e) => { if (e.target.matches("[data-ac]")) showAc(e.target); });
+  root.addEventListener("focusout", (e) => { if (e.target.matches("[data-ac]")) setTimeout(() => { if (!document.activeElement?.matches?.("[data-ac]")) hideAc(); }, 250); });
 }
 
 export function switchSite(id) {
@@ -209,6 +212,57 @@ const rowTable = (key, cols, rows, addLabel, quick = "") => `<div class="table-w
   }).join("")}<td><button class="icon danger-text" data-delrow>×</button></td></tr>`).join("")}</tbody></table></div>
   <div class="row gap wrap"><button class="ghost small" data-addrow="${key}">＋ ${addLabel}</button>${quick}</div>`;
 
+// ---------------------------------------------------------------------------
+// Work done: pick BOQ items as you type
+// ---------------------------------------------------------------------------
+
+const boqKey = (i) => String(i.sno ?? "");
+const findBoq = (r) => (site().boqItems || []).find((i) => (r.boq != null && r.boq !== "" ? boqKey(i) === String(r.boq) : i.description === r.desc));
+/** Quantity of a BOQ item entered in the diary up to a day (all days when no day is given). */
+function doneUpTo(item, day = "") {
+  return round(entriesOf(state.siteId, "", day).flatMap((d) => d.work).filter((w) => (w.boq != null && w.boq !== "" ? String(w.boq) === boqKey(item) : w.desc === item.description)).reduce((a, w) => a + num(w.qty), 0), 3);
+}
+function workInfo(r) {
+  const it = findBoq(r); if (!it) return "";
+  const done = doneUpTo(it, state.date), bal = round(num(it.qty) - done, 3);
+  return `<b>BOQ ${esc(boqKey(it))}</b> · ${esc(it.unit || "")}${num(it.qty) ? ` · tender ${q3(it.qty)} · done to date ${q3(done)} · <span class="${bal < 0 ? "danger-text" : ""}">balance ${q3(bal)}</span>` : ""}${num(it.rate) ? ` · ₹${round(it.rate, 2)}` : ""}`;
+}
+const workTable = (rows) => `<div class="table-wrap ac-wrap"><table class="data diary-tab" data-list="work"><thead><tr><th>Item of work</th><th>Location / chainage</th><th>Qty</th><th>Unit</th><th></th></tr></thead>
+  <tbody>${rows.map((r, i) => `<tr data-i="${i}"><td class="ac-cell"><input data-k="desc" data-ac autocomplete="off" value="${esc(r.desc ?? "")}" placeholder="Type item name or BOQ No."><div class="ac-info small muted">${workInfo(r)}</div></td>
+    <td><input data-k="loc" value="${esc(r.loc ?? "")}"></td><td><input data-k="qty" type="number" step="any" class="num w90" value="${esc(r.qty ?? "")}"></td>
+    <td><input data-k="unit" list="dlUnit" class="w70" value="${esc(r.unit ?? "")}"></td><td><button class="icon danger-text" data-delrow>×</button></td></tr>`).join("")}</tbody></table></div>
+  <div class="row gap wrap"><button class="ghost small" data-addrow="work">＋ Work item</button></div>`;
+
+function acMatches(q) {
+  const items = site().boqItems || [];
+  const prev = [...new Set([...state.diary.values()].filter((x) => x.siteId === state.siteId).flatMap((x) => x.work).filter((w) => w.desc && !findBoq(w)).map((w) => w.desc))];
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (txt) => words.every((w) => txt.includes(w));
+  const out = [];
+  if (!words.length) items.slice(0, 8).forEach((it, k) => out.push({ k, it }));
+  else {
+    items.forEach((it, k) => { const no = boqKey(it).toLowerCase(); const txt = `${no} ${it.description.toLowerCase()}`; if (no === q.trim().toLowerCase() || hit(txt)) out.push({ k, it, exact: no === q.trim().toLowerCase() }); });
+    out.sort((a, b) => (b.exact ? 1 : 0) - (a.exact ? 1 : 0));
+    prev.filter((p) => p.trim().toLowerCase() !== q.trim().toLowerCase() && p.length > q.trim().length + 3 && hit(p.toLowerCase())).slice(0, 3).forEach((p) => out.push({ prev: p }));
+  }
+  return out.slice(0, 10);
+}
+function showAc(input) {
+  hideAc();
+  const list = acMatches(input.value); if (!list.length) return;
+  const box = document.createElement("div"); box.className = "ac-list"; box.id = "acList";
+  box.innerHTML = list.map((m) => m.it ? `<button type="button" data-acpick="${m.k}"><span class="ac-no">BOQ ${esc(boqKey(m.it))}</span> ${esc(m.it.description.length > 170 ? m.it.description.slice(0, 170) + "…" : m.it.description)}<small> · ${esc(m.it.unit || "")}${num(m.it.qty) ? ` · tender ${q3(m.it.qty)}` : ""}</small></button>`
+    : `<button type="button" data-acprev="${esc(m.prev)}"><span class="ac-no">Used before</span> ${esc(m.prev.slice(0, 170))}</button>`).join("");
+  input.closest(".ac-cell").appendChild(box);
+}
+function hideAc() { $("#acList")?.remove(); }
+function pickAc(btn) {
+  const tr = btn.closest("tr"), d = entry(state.date, true), r = d.work[+tr.dataset.i];
+  if (btn.dataset.acpick != null) { const it = site().boqItems[+btn.dataset.acpick]; r.desc = it.description; r.unit = it.unit || r.unit || ""; r.boq = boqKey(it); }
+  else { r.desc = btn.dataset.acprev; delete r.boq; }
+  saveEntry(d); hideAc(); renderSites().then(() => $(`[data-list="work"] tr[data-i="${tr.dataset.i}"] [data-k="qty"]`)?.focus());
+}
+
 async function todayView() {
   const day = state.date, d = entry(day) || { labour: [], work: [], materials: [], machinery: [], consumed: [] };
   const photos = await photosOf(state.siteId, day, day);
@@ -228,7 +282,7 @@ async function todayView() {
       <div class="card"><h3>Machinery / equipment <span class="muted" data-tot="machinery">(${inr(listTotal("machinery", d.machinery)) || "₹0"})</span></h3>
         <p class="muted small">Rent per hour (start and end time give the hours), per day or per trip.</p>${rowTable("machinery", [["name", "Machine", "", "dlMach"], ["count", "Nos / trips", "number"], ["basis", "Rent per", "sel:hour=Hour|day=Day|trip=Trip"], ["rate", "Rate ₹", "number"], ["start", "Start", "time"], ["end", "End", "time"], ["hours", "Hours", "number"], ["amt", "Amount", "calc"]], d.machinery, "Machine")}</div>
     </div>
-    <div class="card"><h3>Work done today</h3>${rowTable("work", [["desc", "Item of work", "", "dlWork"], ["loc", "Location / chainage"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"]], d.work, "Work item")}</div>
+    <div class="card"><h3>Work done today</h3>${site().boqItems?.length ? `<p class="muted small">Type a few words or the BOQ No. and pick the item: its full description, unit and BOQ No. are filled in.</p>` : ""}${workTable(d.work)}</div>
     <datalist id="dlMat">${MAT_NAMES.map((x) => `<option>${x}</option>`).join("")}</datalist><datalist id="dlMach">${MACHINES.map((x) => `<option>${x}</option>`).join("")}</datalist>
     <div class="card"><h3>Materials received</h3>${rowTable("materials", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["supplier", "Supplier"], ["challan", "Challan No."]], d.materials, "Material")}</div>
     <div class="card"><h3>Materials consumed today</h3>${rowTable("consumed", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["usedFor", "Used for (item / location)", "", "dlWork"]], d.consumed || [], "Material used")}</div>
@@ -374,6 +428,7 @@ function onChange(e) {
 /** Hours from start/end, the row amount and the card total, updated while typing. */
 function updateRow(t, r) {
   const key = t.closest("[data-list]").dataset.list, tr = t.closest("tr");
+  if (key === "work") { const info = $(".ac-info", tr); if (info) info.innerHTML = workInfo(r); return; }
   if (key === "machinery" && (t.dataset.k === "start" || t.dataset.k === "end")) { const h = timeDiff(r.start, r.end); if (h != null) { r.hours = h; const hi = $('[data-k="hours"]', tr); if (hi) hi.value = h; } }
   if (!CALC[key]) return;
   const c = $("[data-calc]", tr); if (c) c.textContent = inr(CALC[key](r));
@@ -385,6 +440,7 @@ function onInput(e) {
   if (t.matches("[data-list] input[data-k]")) {
     const d = entry(state.date, true); const list = d[t.closest("[data-list]").dataset.list]; const i = +t.closest("tr").dataset.i;
     list[i][t.dataset.k] = t.value; updateRow(t, list[i]); saveEntry(d);
+    if (t.matches("[data-ac]")) { if (findBoq(list[i])?.description !== t.value) delete list[i].boq; showAc(t); }
   }
   if (t.matches("textarea[data-f], input[data-f]")) { const d = entry(state.date, true); d[t.dataset.f] = t.value; saveEntry(d); }
 }
@@ -475,7 +531,9 @@ async function printReport(kind, from, to, photoOpt = "8") {
   const labourRows = one ? (d?.labour || []).filter((l) => l.type || num(l.count)).map((l) => [esc(l.type || ""), num(l.count), num(l.rate) ? inr(l.rate) : "", esc(l.agency || ""), inr(CALC.labour(l))])
     : [...A.labour].map(([k, v]) => [esc(k), v, round(v / Math.max(1, A.E.length), 1), inr(A.labourAmt.get(k))]);
   const labourCost = one ? listTotal("labour", d?.labour) : round([...A.labourAmt.values()].reduce((a, v) => a + v, 0), 2);
-  const workRows = [...A.work].map(([k, v]) => { const [desc, unit] = k.split("|"); const locs = one ? (d.work.filter((w) => (w.desc || "").trim() === desc).map((w) => w.loc).filter(Boolean).join(", ")) : ""; return [esc(desc) + (locs ? `<br><small>${esc(locs)}</small>` : ""), esc(unit), v, A.upto.get(k) || v]; });
+  const boqOf = (desc) => (s.boqItems || []).find((i) => i.description.trim() === desc);
+  const workRows = [...A.work].map(([k, v]) => { const [desc, unit] = k.split("|"); const locs = one ? (d.work.filter((w) => (w.desc || "").trim() === desc).map((w) => w.loc).filter(Boolean).join(", ")) : ""; const b = boqOf(desc); const up = A.upto.get(k) || v;
+    return [b ? esc(boqKey(b)) : "", esc(desc) + (locs ? `<br><small>${esc(locs)}</small>` : ""), esc(unit), v, up, b && num(b.qty) ? num(b.qty) : "", b && num(b.qty) ? round(num(b.qty) - up, 3) : ""]; });
   const matRows = one ? (d?.materials || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.supplier || ""), esc(m.challan || "")]) : [...A.materials].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
   const conRows = one ? (d?.consumed || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.usedFor || "")]) : [...A.consumed].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
   const machRows = one ? (d?.machinery || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.count) || 1, `${inr(m.rate)} / ${m.basis || "hour"}`, m.start && m.end ? `${m.start}–${m.end}` : "", num(m.hours) || "", inr(CALC.machinery(m))])
@@ -494,7 +552,7 @@ async function printReport(kind, from, to, photoOpt = "8") {
   const html = `<section class="p-page r-page">${head}
     <h4>1. Labour ${one ? "on site" : "(man-days)"}</h4>${tbl(one ? ["Category", "Nos", "Rate / day", "From", "Amount"] : ["Category", "Man-days", "Average per day", "Amount"], labourRows)}
     ${labourRows.length ? `<p class="r-tot">Total: ${q3(labourRows.reduce((a, r) => a + num(r[1]), 0))} ${one ? "nos" : "man-days"}${labourCost ? ` · ${inr(labourCost)}` : ""}</p>` : ""}
-    <h4>2. Work done</h4>${tbl(["Item of work", "Unit", one ? "Today" : "This period", "Up to date"], workRows)}
+    <h4>2. Work done</h4>${tbl(["BOQ No.", "Item of work", "Unit", one ? "Today" : "This period", "Up to date", "Tender qty", "Balance"], workRows)}
     <h4>3. Materials received</h4>${tbl(one ? ["Material", "Qty", "Unit", "Supplier", "Challan"] : ["Material", "Qty", "Unit"], matRows)}
     <h4>4. Materials consumed</h4>${tbl(one ? ["Material", "Qty", "Unit", "Used for"] : ["Material", "Qty", "Unit"], conRows)}
     <h4>5. Machinery / equipment</h4>${tbl(one ? ["Machine", "Nos", "Rent", "Time", "Hours", "Amount"] : ["Machine", "Hours", "Amount"], machRows)}

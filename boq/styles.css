@@ -648,3 +648,11 @@ button.chip { background: #fff; color: var(--ink); }
 .ns-grid > div { display: flex; flex-direction: column; gap: .35rem; align-items: flex-start; }
 .ns-grid small { word-break: break-all; }
 input.auto, textarea.auto { background: #eaf7ef; border-color: var(--brand); }
+.ac-wrap { overflow: visible; }
+.ac-cell { position: relative; min-width: 340px; width: 45%; }
+.ac-info { margin-top: .2rem; line-height: 1.35; }
+.ac-list { position: absolute; z-index: 30; left: 0; right: -40%; top: 2.6rem; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.15); max-height: 360px; overflow-y: auto; }
+.ac-list button { display: block; width: 100%; text-align: left; background: #fff; color: var(--ink); border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: .55rem .7rem; font-size: .88rem; line-height: 1.35; font-weight: 400; }
+.ac-list button:hover, .ac-list button:focus { background: var(--brand-soft); }
+.ac-no { display: inline-block; background: var(--brand); color: #fff; border-radius: 5px; padding: 0 .35rem; font-size: .75rem; font-weight: 600; margin-right: .3rem; }
+@media (max-width: 700px) { .ac-list { right: -120%; } }
