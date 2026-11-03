@@ -95,3 +95,6 @@ details summary { cursor: pointer; list-style: none; }
 
 [hidden] { display: none !important; }
 .followcard { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: inherit; }
+.penalty { border-color: var(--brand); }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+b.big { font-size: 20px; display: block; margin: 2px 0; } b.big.neg { color: var(--bad); } b.big.pos { color: var(--ok); }

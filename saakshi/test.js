@@ -254,6 +254,16 @@ async function main() {
   assert.ok(demo.extension_days >= 14, 'drawing hindrance 13 days + the JEN late in measuring');
   assert.ok(demo.hindrances.some((h) => h.category === 'measurement_late')); assert.equal(demo.contractor_delay_days, 0); assert.equal(demo.wo_late_days, 2);
   assert.ok(demo.hindrances.some((h) => h.state === 'deemed'));
+  // the same penalty both ways: the department owes the contractor for its delay, split over the officers
+  const pen = (await con('GET', '/api/works/' + w.id)).data.penalties;
+  const dDays = demo.extension_days + demo.wo_late_days;
+  assert.equal(pen.department.days, dDays);
+  assert.equal(pen.department.amount, Math.round(1000000 * Math.min(10, 1.25 * dDays / 7) / 100));
+  assert.ok(pen.department.by_role.xen.amount > pen.department.by_role.jen.amount, 'XEN caused more of it');
+  assert.equal(pen.contractor.amount, 0); assert.equal(pen.net_to_contractor, pen.department.total);
+  const pubPen = (await anon('GET', '/api/public/works/' + w.id)).data.penalties;
+  assert.equal(pubPen.department.by_role.xen.officer, 'XEN Division-II');
+  assert.ok((await anon('GET', '/api/public/people?kind=officers')).data.find((p) => p.name === 'XEN Division-II').compensation_caused > 0);
 
   // ---- award without a work order: red flag on the XEN until it is issued ----
   const award = new Date(Date.now() - 15 * 86400e3).toISOString().slice(0, 10);
@@ -293,6 +303,19 @@ async function main() {
   assert.equal((await xen('POST', `/api/verifications/${dv.id}/approve`, { decision: 'approved' })).status, 200);
   const dtl = (await con('GET', '/api/works/' + w.id)).data.timeline;
   assert.ok(dtl.hindrances.some((h) => h.category === 'measurement_late' && h.days >= 1), 'JEN lateness counted as department delay');
+
+  // final bill on the demo work: the department's compensation is added, no penalty on the contractor
+  r = await con('POST', `/api/works/${w.id}/complete`, {});
+  const fv2 = r.data.verification_id;
+  const fl2 = (await jen('GET', '/api/verifications?work_id=' + w.id)).data.find((v) => v.id === fv2).lines.map((l) => ({ item_id: l.item_id, measured_qty: l.claimed_qty }));
+  assert.equal((await jen('POST', `/api/verifications/${fv2}/measure`, { lines: fl2, photo: fakePhoto(), ...here })).status, 200);
+  assert.equal((await aen('POST', `/api/verifications/${fv2}/approve`, { decision: 'approved' })).status, 200);
+  const penNow = (await con('GET', '/api/works/' + w.id)).data.penalties;
+  r = await con('POST', '/api/bills', { work_id: w.id, final: true });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.penalty_contractor, 0);
+  assert.equal(r.data.compensation_department, penNow.department.total);
+  assert.equal(r.data.net_amount, r.data.work_amount + penNow.department.total);
 
   // ---- instruction register: written-down promises; a denial goes up as a flag ----
   r = await con('POST', '/api/instructions', { work_id: w.id, kind: 'promise', to_role: 'xen', text: 'XEN ne kaha: pehla bill abhi, final baad me, penalty nahi lagegi', said_on: '2026-10-01' });

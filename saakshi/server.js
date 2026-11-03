@@ -50,6 +50,9 @@ const DEFAULT_SETTINGS = {
   escalate_approve_xen_hours: 24,  // AEN this late in approving → the XEN may approve
   instruction_response_days: 3,    // a written-down instruction/promise not denied in this time stands confirmed
   explanation_days: 3,             // reply time for an explanation asked by S.E./HQ/XEN
+  penalty_percent_per_week: 1.25,  // same rate for the contractor's delay and for the department's (set as per the state's contract)
+  penalty_max_percent: 10,         // same cap both ways
+  penalties_in_final_bill: true,   // the final bill deducts the contractor's penalty and adds the department's compensation
   public_board: true,           // public portal: every work, its updates, contractors and officers
   public_names: true,           // names of officers and contractor firms on the public portal (never mobile numbers)
   public_photos: true,          // site photos from contractors' work updates (never attendance selfies)
@@ -140,7 +143,8 @@ CREATE INDEX IF NOT EXISTS visits_photo ON visits(photo);
 // columns added after the first release
 for (const [table, col, def] of [['users', 'verified', 'INTEGER DEFAULT 0'], ['works', 'wo_amount', 'REAL'], ['works', 'tia', "TEXT DEFAULT ''"], ['works', 'created_by', 'INTEGER'],
   ['works', 'award_date', 'TEXT'], ['works', 'wo_date', 'TEXT'], ['works', 'duration_days', 'INTEGER'], ['works', 'tp_percent', 'REAL DEFAULT 0'], ['works', 'completed_ts', 'TEXT'], ['works', 'department', "TEXT DEFAULT ''"],
-  ['users', 'department', "TEXT DEFAULT ''"], ['users', 'reg_no', "TEXT DEFAULT ''"], ['users', 'gstin', "TEXT DEFAULT ''"], ['verifications', 'kind', "TEXT DEFAULT 'milestone'"]]) {
+  ['users', 'department', "TEXT DEFAULT ''"], ['users', 'reg_no', "TEXT DEFAULT ''"], ['users', 'gstin', "TEXT DEFAULT ''"], ['verifications', 'kind', "TEXT DEFAULT 'milestone'"],
+  ['bills', 'penalty_contractor', 'REAL DEFAULT 0'], ['bills', 'compensation_department', 'REAL DEFAULT 0'], ['bills', 'work_amount', 'REAL']]) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
 }
 // Records of attendance, DPRs and request history are append-only: no API updates the facts
@@ -402,7 +406,7 @@ function redFlags(works, s) {
       text: `बाधा "${h.category_label}" पर अधिकारी ने आपत्ति की; S.E./मुख्यालय ने ${s.hindrance_decision_days} दिन में निर्णय नहीं दिया (तब तक समय-वृद्धि ठेकेदार को मिलती रहेगी)` });
     const deptDays = Object.entries(t.department_days_by_role).filter(([, d]) => d > 0);
     if (deptDays.length) add(w, { type: 'department_delay', severity: 'medium', against_role: deptDays.sort((a, b) => b[1] - a[1])[0][0], against_id: w[deptDays[0][0] + '_id'] || null, since: t.stipulated_end || '', days: t.extension_days,
-      text: `विभाग के कारण ${t.extension_days} दिन की बाधा (${deptDays.map(([r, d]) => `${r.toUpperCase()} ${d} दिन`).join(', ')}): इतनी समय-वृद्धि ठेकेदार को, ज़िम्मेदारी अधिकारियों की` });
+      text: `विभाग के कारण ${t.extension_days} दिन की बाधा (${deptDays.map(([r, d]) => `${r.toUpperCase()} ${d} दिन`).join(', ')}): इतनी समय-वृद्धि ठेकेदार को, और विभाग पर क्षतिपूर्ति ₹${penalties(w, s, t).department.total.toLocaleString('en-IN')}` });
     if (t.contractor_delay_days > 0) add(w, { type: 'contractor_delay', severity: 'medium', against_role: 'contractor', against_id: w.contractor_id, since: t.revised_end, days: t.contractor_delay_days,
       text: `संशोधित तिथि ${t.revised_end} (समय-वृद्धि ${t.extension_days} दिन सहित) के बाद ${t.contractor_delay_days} दिन देरी${t.penalty_applicable ? '' : ' (बाधा पर निर्णय बाकी, अभी पेनल्टी नहीं)'}` });
     for (const b of q("SELECT * FROM bills WHERE work_id = ? AND status IN ('submitted','passed','hq_approved')").all(w.id)) {
@@ -558,6 +562,37 @@ function billDetail(b) {
     .map((l) => ({ ...l, since_qty: l.upto_qty - l.prev_qty, upto_amount: l.upto_qty * l.rate, since_amount: (l.upto_qty - l.prev_qty) * l.rate }));
   return { ...b, lines };
 }
+// ---------- the same penalty both ways ----------
+// The contractor pays for his own delay; the department pays the contractor, at the same rate and cap and on the
+// same contract value, for the delay it caused (late work order, hindrances, late measuring/approving) and for late
+// bills and payments. The department's share is split over the officers by the days each one caused.
+function penalties(w, s, t = timeline(w, s)) {
+  const value = w.wo_amount || boqTotal(w.id);
+  const pct = (days) => Math.min(s.penalty_max_percent, s.penalty_percent_per_week * days / 7);
+  const money = (base, days) => Math.round(base * pct(days) / 100);
+  const cDays = t.contractor_delay_days || 0;
+  const roleDays = { ...t.department_days_by_role };
+  if (t.wo_late_days) roleDays.xen = (roleDays.xen || 0) + t.wo_late_days;
+  const dDays = (t.extension_days || 0) + (t.wo_late_days || 0);
+  const dAmount = money(value, dDays);
+  const sumRole = Object.values(roleDays).reduce((a, b) => a + b, 0) || 1;
+  const byRole = Object.fromEntries(Object.entries(roleDays).filter(([, d]) => d > 0).map(([r, d]) => [r, { days: d, amount: Math.round(dAmount * d / sumRole), officer_id: w[r + '_id'] || null }]));
+  // late bills: every day beyond the time allowed to pass/approve and pay
+  const today = istDay();
+  const billDelays = q('SELECT * FROM bills WHERE work_id = ?').all(w.id).map((b) => {
+    const allowed = (b.is_final ? s.final_approval_days : s.bill_pass_days) + s.payment_days;
+    const end = b.paid_ts ? istDay(new Date(b.paid_ts)) : today;
+    const days = Math.max(0, daysBetween(addDays(istDay(new Date(b.created_ts)), allowed), end));
+    return { bill_id: b.id, bill_no: b.bill_no, is_final: !!b.is_final, days, amount: b.net_amount > 0 ? money(b.net_amount, days) : 0, responsible: b.is_final && !b.hq_ts ? 'hq' : 'xen' };
+  }).filter((x) => x.days > 0);
+  for (const b of billDelays) { byRole[b.responsible] ||= { days: 0, amount: 0, officer_id: b.responsible === 'xen' ? w.xen_id : null }; byRole[b.responsible].amount += b.amount; }
+  const payAmount = billDelays.reduce((a, b) => a + b.amount, 0);
+  const contractor = { days: cDays, percent: Math.round(pct(cDays) * 100) / 100, amount: money(value, cDays), applicable: !!t.penalty_applicable };
+  const department = { days: dDays, percent: Math.round(pct(dDays) * 100) / 100, amount: dAmount, bill_delay_amount: payAmount, total: dAmount + payAmount, by_role: byRole, bill_delays: billDelays };
+  return { value: Math.round(value), rate_per_week: s.penalty_percent_per_week, max_percent: s.penalty_max_percent, contractor, department,
+    net_to_contractor: department.total - (contractor.applicable ? contractor.amount : 0) };
+}
+
 function billDue(b, s) {
   if (b.status === 'submitted' && !b.is_final) return { by: 'xen', due: addDays(istDay(new Date(b.created_ts)), s.bill_pass_days), what: 'बिल पास करना' };
   if (b.status === 'submitted' && b.is_final) return { by: 'hq', due: addDays(istDay(new Date(b.created_ts)), s.final_approval_days), what: 'अंतिम बिल का सत्यापन और भुगतान-अनुमोदन' };
@@ -1130,6 +1165,7 @@ route('GET', '/api/works/:id', async (req, res, { user, params }) => {
     verifications: q('SELECT * FROM verifications WHERE work_id = ? ORDER BY id DESC').all(w.id).map((v) => decorateVerification(v, s)),
     flags: redFlags([w], s),
     timeline: timeline(w, s),
+    penalties: penalties(w, s),
     bills: q('SELECT * FROM bills WHERE work_id = ? ORDER BY bill_no').all(w.id),
     can_bill: (() => { const la = latestApproved(w.id); const pb = q('SELECT verification_id, is_final FROM bills WHERE work_id = ? ORDER BY bill_no DESC LIMIT 1').get(w.id);
       return { running: !!la && !pb?.is_final && pb?.verification_id !== la.v.id, final: !!la && !pb?.is_final && !!w.completed_ts && la.v.kind === 'final' }; })(),
@@ -1425,17 +1461,25 @@ route('POST', '/api/bills', async (req, res, { user }) => {
   const gross = its.reduce((t, i) => t + (la.qty[i.id] || 0) * i.rate, 0);
   const prevGross = prev ? prev.gross_upto : 0;
   const tp = w.tp_percent || 0;
-  const net = Math.round((gross - prevGross) * (1 + tp / 100));
+  const workAmount = Math.round((gross - prevGross) * (1 + tp / 100));
+  let penC = 0, compD = 0;
+  const sNow = getSettings();
+  if (final && sNow.penalties_in_final_bill) {
+    const p = penalties(w, sNow);
+    penC = p.contractor.applicable ? p.contractor.amount : 0;
+    compD = p.department.total;
+  }
+  const net = workAmount - penC + compD;
   db.exec('BEGIN');
   try {
-    const id = Number(q(`INSERT INTO bills (work_id, bill_no, is_final, verification_id, created_by, created_ts, gross_upto, prev_upto, tp_percent, net_amount, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(w.id, (prev?.bill_no || 0) + 1, final ? 1 : 0, la.v.id, user.id, nowIso(), Math.round(gross), Math.round(prevGross), tp, net, str(b.note, 1000)).lastInsertRowid);
+    const id = Number(q(`INSERT INTO bills (work_id, bill_no, is_final, verification_id, created_by, created_ts, gross_upto, prev_upto, tp_percent, net_amount, note, work_amount, penalty_contractor, compensation_department) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(w.id, (prev?.bill_no || 0) + 1, final ? 1 : 0, la.v.id, user.id, nowIso(), Math.round(gross), Math.round(prevGross), tp, net, str(b.note, 1000), workAmount, penC, compD).lastInsertRowid);
     for (const i of its) if (la.qty[i.id] || prevQty[i.id]) q('INSERT INTO bill_lines (bill_id, item_id, upto_qty, prev_qty, rate) VALUES (?,?,?,?,?)').run(id, i.id, la.qty[i.id] || 0, prevQty[i.id] || 0, i.rate);
     db.exec('COMMIT');
     const s = getSettings();
     const x = q('SELECT mobile FROM users WHERE id = ?').get(w.xen_id || 0);
     if (x) sendSms(x.mobile, `SiteSaakshi: "${w.name}" का ${final ? 'अंतिम' : (prev?.bill_no || 0) + 1 + 'वाँ'} बिल ₹${net.toLocaleString('en-IN')} जमा। ${final ? `मुख्यालय ${s.final_approval_days}` : `XEN ${s.bill_pass_days}`} दिन में।`);
-    send(res, 201, { id, net_amount: net, bill_no: (prev?.bill_no || 0) + 1 });
+    send(res, 201, { id, net_amount: net, work_amount: workAmount, penalty_contractor: penC, compensation_department: compD, bill_no: (prev?.bill_no || 0) + 1 });
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 });
 route('GET', '/api/bills', async (req, res, { user, query }) => {
@@ -1547,7 +1591,7 @@ route('GET', '/api/public/overview', async (req, res) => {
   send(res, 200, { ...publicCache.data, settings: publicSettings(s) });
 }, { public: true });
 function publicSettings(s) {
-  const keys = ['visits_per_week', 'milestone_percent', 'milestone_max_amount', 'jen_verify_hours', 'aen_approve_hours', 'wo_issue_days', 'start_within_days', 'hindrance_response_days', 'hindrance_decision_days', 'bill_pass_days', 'payment_days', 'final_approval_days', 'sla_days'];
+  const keys = ['penalty_percent_per_week', 'penalty_max_percent', 'visits_per_week', 'milestone_percent', 'milestone_max_amount', 'jen_verify_hours', 'aen_approve_hours', 'wo_issue_days', 'start_within_days', 'hindrance_response_days', 'hindrance_decision_days', 'bill_pass_days', 'payment_days', 'final_approval_days', 'sla_days'];
   return Object.fromEntries(keys.map((k) => [k, s[k]]));
 }
 
@@ -1636,6 +1680,7 @@ function personPerformance(u, s) {
     const a = q('SELECT aen_late_hours FROM verifications WHERE aen_id = ? AND aen_ts IS NOT NULL').all(u.id);
     out.approvals = { count: a.length, late: a.filter((x) => x.aen_late_hours > 0).length };
   }
+  if (['jen', 'aen', 'xen'].includes(u.role)) out.compensation_caused = works.reduce((t, w) => { const r = penalties(w, s).department.by_role[u.role]; return t + (r && r.officer_id === u.id ? r.amount : 0); }, 0);
   if (u.role === 'xen') out.bills_passed = q('SELECT COUNT(*) AS n FROM bills WHERE passed_by = ?').get(u.id).n;
   if (u.role === 'contractor') {
     const v = q(`SELECT claimed_amount, measured_amount FROM verifications WHERE work_id IN (${works.map((w) => w.id).join(',') || 0}) AND measured_amount IS NOT NULL`).all();
@@ -1644,6 +1689,8 @@ function personPerformance(u, s) {
     out.completed = works.filter((w) => w.completed_ts).length;
     out.contractor_delay_days = works.reduce((t, w) => t + (timeline(w, s).contractor_delay_days || 0), 0);
     out.department_delay_days = works.reduce((t, w) => t + (timeline(w, s).extension_days || 0), 0);
+    out.penalty_amount = works.reduce((t, w) => { const p = penalties(w, s); return t + (p.contractor.applicable ? p.contractor.amount : 0); }, 0);
+    out.compensation_due = works.reduce((t, w) => t + penalties(w, s).department.total, 0);
   }
   return out;
 }
@@ -1665,6 +1712,7 @@ route('GET', '/api/public/works/:id', async (req, res, { params }) => {
       items: items(w.id).map((i) => ({ code: i.code, description: i.description, unit: i.unit, qty: i.qty, rate: i.rate, claimed_qty: c[i.id] || 0, verified_qty: la ? la.qty[i.id] || 0 : 0 })),
       claimed_amount: Math.round(claimedAmount(w.id)), verified_amount: la ? Math.round(la.v.measured_amount) : 0,
       paid_amount: Math.round(q("SELECT COALESCE(SUM(net_amount),0) AS a FROM bills WHERE work_id = ? AND status = 'paid'").get(w.id).a),
+      penalties: (({ department: { by_role, ...d }, ...p }) => ({ ...p, department: { ...d, by_role: Object.fromEntries(Object.entries(by_role).map(([r, x]) => [r, { days: x.days, amount: x.amount, officer: s.public_names ? userNames()[x.officer_id] || '' : '' }])) } }))(penalties(w, s, t)),
       timeline: { ...t, hindrances: t.hindrances.map((h) => ({ category: h.category_label, responsible_role: h.responsible_role, from_day: h.from_day, to_day: h.to_day || null, days: h.days, state: h.state })) },
       visits_this_week: compliance([w], thisWeek, s).map((r) => ({ role: r.role, officer: s.public_names ? r.officer : r.role.toUpperCase(), required: r.required, done: r.done, last_visit: r.last_visit })),
       red_flags: redFlags([w], s).filter((f) => f.severity !== 'low').map((f) => ({ type: f.type, severity: f.severity, against_role: f.against_role, against_name: s.public_names ? f.against_name : '', text: f.text, since: f.since })),
@@ -1827,6 +1875,17 @@ function dailyReport(works, s) {
       paid: count("SELECT COUNT(*) AS n FROM bills WHERE work_id IN ($IDS) AND substr(paid_ts,1,10) = ?"),
     },
     explanations_pending: q(`SELECT COUNT(*) AS n FROM explanations WHERE work_id IN (${ids}) AND reply IS NULL`).get().n,
+    money: (() => {
+      const m = { department_total: 0, contractor_total: 0, by_role: {}, top: [] };
+      for (const w of works) {
+        const p = penalties(w, s);
+        m.department_total += p.department.total; if (p.contractor.applicable) m.contractor_total += p.contractor.amount;
+        for (const [r, x] of Object.entries(p.department.by_role)) m.by_role[r] = (m.by_role[r] || 0) + x.amount;
+        if (p.department.total) m.top.push({ work: w.name, amount: p.department.total, days: p.department.days });
+      }
+      m.top.sort((a, b) => b.amount - a.amount); m.top = m.top.slice(0, 10);
+      return m;
+    })(),
   };
 }
 route('GET', '/api/daily-report', async (req, res, { user, query }) => {

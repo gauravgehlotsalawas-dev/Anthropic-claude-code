@@ -487,6 +487,9 @@ VIEWS.admin = async (main) => {
       <div><label>रनिंग बिल पास (दिन)</label><input id="sbp" type="number" min="1" value="${settings.bill_pass_days}"></div>
       <div><label>भुगतान (दिन)</label><input id="spd" type="number" min="1" value="${settings.payment_days}"></div>
       <div><label>काम पूरा: मुख्यालय का सत्यापन व भुगतान-अनुमोदन (दिन)</label><input id="sfa" type="number" min="1" value="${settings.final_approval_days}"></div>
+      <div><label>पेनल्टी दर % प्रति सप्ताह (ठेकेदार और विभाग, दोनों पर)</label><input id="spr" type="number" step="0.01" min="0" value="${settings.penalty_percent_per_week}"></div>
+      <div><label>पेनल्टी अधिकतम % (दोनों पर)</label><input id="spm" type="number" step="0.1" min="0" value="${settings.penalty_max_percent}"></div>
+      <div><label><input type="checkbox" id="spf" ${settings.penalties_in_final_bill ? 'checked' : ''} style="width:auto"> अंतिम बिल में पेनल्टी घटाएँ और क्षतिपूर्ति जोड़ें</label></div>
       <div><label>JEN न आए तो AEN नाप ले (घंटे बाद)</label><input id="sea" type="number" min="1" value="${settings.escalate_measure_aen_hours}"></div>
       <div><label>JEN न आए तो XEN नाप ले (घंटे बाद)</label><input id="sex" type="number" min="1" value="${settings.escalate_measure_xen_hours}"></div>
       <div><label>AEN देर करे तो XEN अनुमोदन (घंटे बाद)</label><input id="sexa" type="number" min="1" value="${settings.escalate_approve_xen_hours}"></div>
@@ -513,7 +516,7 @@ VIEWS.admin = async (main) => {
       sla_days: Object.fromEntries(Object.keys(REQ_TYPE).map((k) => [k, n('#sl_' + k)])),
       max_gps_accuracy_m: n('#sg'), min_visit_minutes: n('#sm'), escalate_after_days: n('#se'),
       milestone_percent: n('#smp'), milestone_max_amount: n('#sma'), jen_verify_hours: n('#sjh'), aen_approve_hours: n('#sah'), overclaim_tolerance_percent: n('#sot'), progress_gap_days: n('#spg'),
-      wo_issue_days: n('#swo'), start_within_days: n('#sst'), hindrance_response_days: n('#shr'), hindrance_decision_days: n('#shd'), bill_pass_days: n('#sbp'), payment_days: n('#spd'), final_approval_days: n('#sfa'), weekly_verification: $('#swv').checked, public_board: $('#spb').checked, escalate_measure_aen_hours: n('#sea'), escalate_measure_xen_hours: n('#sex'), escalate_approve_xen_hours: n('#sexa'), instruction_response_days: n('#sir'), explanation_days: n('#sexd'), public_names: $('#spn').checked, public_photos: $('#spp').checked,
+      wo_issue_days: n('#swo'), start_within_days: n('#sst'), hindrance_response_days: n('#shr'), hindrance_decision_days: n('#shd'), bill_pass_days: n('#sbp'), payment_days: n('#spd'), final_approval_days: n('#sfa'), weekly_verification: $('#swv').checked, public_board: $('#spb').checked, penalty_percent_per_week: n('#spr'), penalty_max_percent: n('#spm'), penalties_in_final_bill: $('#spf').checked, escalate_measure_aen_hours: n('#sea'), escalate_measure_xen_hours: n('#sex'), escalate_approve_xen_hours: n('#sexa'), instruction_response_days: n('#sir'), explanation_days: n('#sexd'), public_names: $('#spn').checked, public_photos: $('#spp').checked,
     }, 'PUT');
     toast('नियम सहेजे गए ✓');
   });
@@ -777,6 +780,7 @@ async function openWork(id) {
     ${w.items.map((i) => `<tr><td>${esc(i.description)}<br><span class="small muted">${rupees(i.rate)}/${esc(i.unit)}</span></td><td>${i.qty}</td><td>${Math.round(i.claimed_qty * 100) / 100}</td><td>${i.measured_qty ?? '—'}</td></tr>`).join('')}</tbody></table></div>
     <p class="small">JEN: ${esc(w.jen)} · AEN: ${esc(w.aen)} · XEN: ${esc(w.xen) || '—'} · ठेकेदार: ${esc(w.contractor)}</p>
     <h3 style="margin-top:12px">समय-रेखा</h3>${timelineHtml(w.timeline)}
+    ${penaltyHtml(w.penalties)}
     ${!w.wo_date && ['xen', 'aen', 'se', 'admin', 'hq'].includes(me.role) ? `<div class="row" style="margin:8px 0"><input id="wono" placeholder="वर्क ऑर्डर नं." style="flex:1"><input id="wodt" type="date" value="${today}" style="flex:1"><button class="primary" id="woiss">वर्क ऑर्डर जारी करें</button></div>` : ''}
     <div class="row"><button id="wqr">🖨 साइट बोर्ड (QR)</button><a class="btn" href="#work/${w.id}" target="_blank">जनता पेज</a>${me.role !== 'hq' ? '<button class="danger" id="wdisp">⚠ आपत्ति: यह काम/जानकारी गलत है</button>' : ''}<button onclick="dlg.close()">बंद करें</button></div>`, () => {
     $('#wqr').onclick = () => printSiteBoard(w.id);
@@ -870,6 +874,7 @@ VIEWS.bills = async (main) => {
       </div></div>`).join('') : ''}
     <div class="list">${bills.map((b) => `<div class="card" style="box-shadow: inset 4px 0 ${b.overdue_days ? 'var(--bad)' : b.status === 'paid' ? 'var(--ok)' : 'var(--warn)'}">
       <div class="spread"><b>${b.is_final ? 'अंतिम बिल' : ordinal(b.bill_no) + ' रनिंग बिल'}: ${esc(b.work)}</b><span class="pill ${BSTATUS[b.status][1]}">${BSTATUS[b.status][0]}</span></div>
+      ${b.is_final && (b.penalty_contractor || b.compensation_department) ? `<p class="small">काम ${rupees(b.work_amount)}${b.penalty_contractor ? ` · ठेकेदार पेनल्टी −${rupees(b.penalty_contractor)}` : ''}${b.compensation_department ? ` · <b>विभाग की क्षतिपूर्ति +${rupees(b.compensation_department)}</b>` : ''}</p>` : ''}
       <p class="small">इस बिल की राशि <b>${rupees(b.net_amount)}</b> · अब तक कुल ${rupees(b.gross_upto)}${b.tp_percent ? ` (T.P. ${b.tp_percent > 0 ? '+' : ''}${b.tp_percent}%)` : ''} · जमा ${fmtTime(b.created_ts)}</p>
       ${b.due ? `<p class="small">${ROLE_SHORT[b.due.by]}: ${b.due.what}, अंतिम तिथि ${fmtDay(b.due.due)} ${b.overdue_days ? `<span class="pill bad">🚩 ${b.overdue_days} दिन देर</span>` : ''}</p>` : ''}
       <p class="small muted">${b.passed_name ? `पास: ${esc(b.passed_name)} ${fmtTime(b.passed_ts)} · ` : ''}${b.hq_name ? `अनुमोदन: ${esc(b.hq_name)} ${fmtTime(b.hq_ts)} · ` : ''}${b.paid_ts ? `भुगतान ${fmtTime(b.paid_ts)} (${esc(b.paid_ref)})` : ''}</p>
@@ -907,6 +912,9 @@ function printBill(b) {
     ${b.lines.map((l, i) => `<tr><td>${esc(l.code) || i + 1}</td><td>${esc(l.description)}</td><td>${esc(l.unit)}</td><td>${n(l.rate)}</td><td>${n(l.upto_qty)}</td><td>${n(l.prev_qty)}</td><td>${n(l.since_qty)}</td><td>${n(l.upto_amount)}</td><td>${n(l.since_amount)}</td></tr>`).join('')}
     <tr><th colspan="7">कुल</th><th>${n(b.gross_upto)}</th><th>${n(since)}</th></tr>
     ${b.tp_percent ? `<tr><th colspan="8">T.P. ${b.tp_percent}%</th><th>${n(Math.round(since * b.tp_percent / 100))}</th></tr>` : ''}
+    ${b.is_final && (b.penalty_contractor || b.compensation_department) ? `<tr><th colspan="8">काम की राशि</th><th>${n(b.work_amount)}</th></tr>
+      ${b.penalty_contractor ? `<tr><th colspan="8">घटाएँ: ठेकेदार की देरी की पेनल्टी</th><th>− ${n(b.penalty_contractor)}</th></tr>` : ''}
+      ${b.compensation_department ? `<tr><th colspan="8">जोड़ें: विभाग की देरी की क्षतिपूर्ति (समान दर से)</th><th>+ ${n(b.compensation_department)}</th></tr>` : ''}` : ''}
     <tr><th colspan="8">इस बिल की देय राशि</th><th>₹ ${n(b.net_amount)}</th></tr></tbody></table>
     <div class="sig"><span>ठेकेदार</span><span>JEN</span><span>AEN</span><span>XEN</span>${b.is_final ? '<span>निविदा प्राधिकारी</span>' : ''}</div>
     <script>print()<\/script></body></html>`;
@@ -965,7 +973,8 @@ async function renderHome(scrollTo) {
     <tr><td>रनिंग बिल पास करना</td><td>XEN</td><td>${s.bill_pass_days} दिन</td></tr>
     <tr><td>काम पूरा: सत्यापन और भुगतान-अनुमोदन</td><td>मुख्यालय / निविदा प्राधिकारी</td><td>${s.final_approval_days} दिन</td></tr>
     <tr><td>बिल पास होने के बाद भुगतान</td><td>XEN / लेखा</td><td>${s.payment_days} दिन</td></tr>
-  </tbody></table></div><p class="small muted">विभाग के कारण हुई देरी (बाधा) के दिन अपने-आप समय-वृद्धि बनते हैं। उन दिनों की देरी पर ठेकेदार पर कोई पेनल्टी नहीं लगती।</p></section>
+  </tbody></table></div><p class="small muted">विभाग के कारण हुई देरी (बाधा) के दिन अपने-आप समय-वृद्धि बनते हैं। उन दिनों की देरी पर ठेकेदार पर कोई पेनल्टी नहीं लगती।</p>
+    <div class="card penalty"><h3>⚖️ पेनल्टी: दोनों तरफ़ बराबर</h3><p class="small">ठेकेदार अपनी वजह से देर करे तो उस पर <b>${s.penalty_percent_per_week}% प्रति सप्ताह (अधिकतम ${s.penalty_max_percent}%)</b> पेनल्टी लगती है। विभाग की वजह से देरी हो (वर्क ऑर्डर देर से, काम न बताना, बाधा, नाप/अनुमोदन/बिल/भुगतान में देरी), तो <b>उसी दर और उसी सीमा तक पूरे टेंडर पर विभाग ठेकेदार को क्षतिपूर्ति देता है</b>। यह राशि ज़िम्मेदार अधिकारियों के नाम दर्ज होती है।</p></div></section>
   <section id="board"><div class="spread"><h2>जनता बोर्ड: सरकारी काम की स्थिति</h2></div>
     ${d.enabled ? `<div class="card row"><input id="bq" placeholder="काम, ठेकेदार, अधिकारी, कार्यालय, वर्क ऑर्डर नं. खोजें…" style="flex:2;min-width:180px">
       <select id="bd" style="flex:1;min-width:140px"><option value="">सभी विभाग</option>${st.departments.map((x) => `<option>${esc(x)}</option>`).join('')}</select>
@@ -1057,6 +1066,7 @@ async function renderPublicWork(id) {
       <div class="card"><h3>इस सप्ताह साइट विज़िट</h3><table>${w.visits_this_week.map((v) => `<tr><td>${ROLE_SHORT[v.role]}</td><td>${esc(v.officer)}</td><td><b>${v.done}</b>/${v.required}</td><td class="small">${v.last_visit ? 'आख़िरी ' + fmtDay(v.last_visit) : '<span class="pill bad">कभी नहीं</span>'}</td></tr>`).join('') || '<tr><td class="muted">—</td></tr>'}</table></div>
       <div class="card"><h3>समय-रेखा</h3>${timelineHtml(t)}</div>
     </div>
+    ${penaltyHtml(w.penalties)}
     ${t.hindrances.length ? `<div class="card"><h3>बाधाएँ (विभाग के कारण रुकावट)</h3><table>${t.hindrances.map((h) => `<tr><td>${esc(h.category)}</td><td>${ROLE_SHORT[h.responsible_role]}</td><td>${fmtDay(h.from_day)} – ${h.to_day ? fmtDay(h.to_day) : 'जारी'}</td><td>${h.days} दिन</td><td><span class="pill ${HSTATE[h.state]?.[1] || ''}">${HSTATE[h.state]?.[0] || h.state}</span></td></tr>`).join('')}</table></div>` : ''}
     <div class="card"><h3>सभी अपडेट</h3>${eventsHtml(w.updates, false)}</div>`;
   markSeen(w.id, lastTs);
@@ -1090,6 +1100,8 @@ async function renderPeople(kind) {
       <div class="spread"><b>${esc(p.name)}</b><span class="pill">${isC ? 'ठेकेदार' : ROLE_SHORT[p.role]}</span></div>
       <div class="small muted">${esc(p.department)} ${esc(p.office)}${p.reg_no ? ` · पंजीकरण ${esc(p.reg_no)}` : ''}${p.verified ? ' · ✓ विभाग से जाँचा' : ''}</div>
       <p class="small">काम: ${p.works_total} (${p.works_active} जारी) · ${crore(p.works_value)}</p>
+      ${!isC && p.compensation_caused ? `<p class="small"><span class="pill bad">इनकी देरी से विभाग पर क्षतिपूर्ति ${crore(p.compensation_caused)}</span></p>` : ''}
+      ${isC && (p.penalty_amount || p.compensation_due) ? `<p class="small">ठेकेदार पर पेनल्टी ${crore(p.penalty_amount)} · विभाग से क्षतिपूर्ति ${crore(p.compensation_due)}</p>` : ''}
       ${isC ? `<p class="small">पूरे काम ${p.completed} · JEN के नाप ${p.measurements} · ज़्यादा दावे <b>${p.overclaims}</b> · ठेकेदार की देरी <b>${p.contractor_delay_days}</b> दिन · विभाग की देरी ${p.department_delay_days} दिन</p>` : ''}
       ${p.visits_4w ? `<p class="small">पिछले 4 सप्ताह साइट विज़िट: <b>${p.visits_4w.done}/${p.visits_4w.required}</b>${p.visits_4w.pct != null ? ` (${p.visits_4w.pct}%)` : ''}</p>` : ''}
       ${p.measurements && !isC ? `<p class="small">नाप ${p.measurements.count} · देर से ${p.measurements.late}${p.measurements.avg_hours != null ? ` · औसत ${p.measurements.avg_hours} घंटे` : ''} · DPR ${p.dpr_count}</p>` : ''}
@@ -1223,12 +1235,32 @@ VIEWS.daily = async (main, day) => {
       <div class="stat"><b>${r.explanations_pending}</b><span>स्पष्टीकरण जवाब बाकी</span></div>
     </div>
     <div class="card"><h3>किस पर कितने झंडे</h3><div class="row">${['jen', 'aen', 'xen', 'se', 'hq', 'contractor'].map((k) => `<span class="pill ${r.flags_by_role[k] ? 'bad' : 'ok'}">${ROLE_SHORT[k]}: ${r.flags_by_role[k] || 0}</span>`).join(' ')}</div></div>
+    <div class="card"><h3>⚖️ विभाग की देरी से बनी क्षतिपूर्ति: ${crore(r.money.department_total)}</h3>
+      <p class="small">किस पद की वजह से: ${Object.entries(r.money.by_role).map(([k, v]) => `${ROLE_SHORT[k]} ${crore(v)}`).join(' · ') || '—'} · ठेकेदारों पर लागू पेनल्टी ${crore(r.money.contractor_total)}</p>
+      ${r.money.top.length ? `<table>${r.money.top.map((x) => `<tr><td>${esc(x.work)}</td><td>${x.days} दिन</td><td><b>${crore(x.amount)}</b></td></tr>`).join('')}</table>` : ''}</div>
     <div class="card"><h3>कल क्या हुआ</h3><p>साइट विज़िट ${r.yesterday.visits} · ठेकेदार अपडेट ${r.yesterday.progress} · DPR ${r.yesterday.dprs} · नाप ${r.yesterday.measured} · बिल जमा ${r.yesterday.bills} · भुगतान ${r.yesterday.paid}</p></div>
     <div class="card"><h3>गंभीर और मध्यम झंडे (पुराने पहले देखें)</h3><div class="table-wrap"><table><thead><tr><th>काम</th><th>किस पर</th><th>क्या</th><th>कितने दिन</th></tr></thead><tbody>
       ${r.flags.map((f) => `<tr class="${f.severity === 'high' ? 'bad' : 'warn'}"><td>${esc(f.work)}</td><td>${esc(f.against_name) || ROLE_SHORT[f.against_role] || ''} <span class="small muted">${ROLE_SHORT[f.against_role] || ''}</span></td><td class="small">${esc(f.text)}</td><td>${f.age_days ?? ''}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">कोई नहीं 👍</td></tr>'}
     </tbody></table></div></div>`;
   if ($('#drd')) $('#drd').onchange = () => VIEWS.daily(main, $('#drd').value || undefined);
 };
+
+// ---------- the same penalty both ways (shown wherever a work is shown) ----------
+function penaltyHtml(p) {
+  if (!p) return '';
+  const d = p.department, c = p.contractor;
+  const roles = Object.entries(d.by_role || {}).filter(([, x]) => x.amount > 0);
+  return `<div class="card penalty"><h3>⚖️ पेनल्टी: दोनों तरफ़ बराबर</h3>
+    <p class="small muted">दर ${p.rate_per_week}% प्रति सप्ताह, अधिकतम ${p.max_percent}%, काम की राशि ${crore(p.value)} पर। यही नियम ठेकेदार पर और यही विभाग पर।</p>
+    <div class="grid two">
+      <div><div class="small muted">ठेकेदार की अपनी देरी</div><b class="big ${c.amount && c.applicable ? 'neg' : ''}">${c.days ? `${c.days} दिन · ${crore(c.amount)}` : 'कोई नहीं'}</b>
+        ${c.days && !c.applicable ? '<div class="small"><span class="pill warn">बाधा पर निर्णय बाकी: अभी लागू नहीं</span></div>' : ''}</div>
+      <div><div class="small muted">विभाग की देरी: ठेकेदार को क्षतिपूर्ति</div><b class="big ${d.total ? 'pos' : ''}">${d.days || d.bill_delay_amount ? crore(d.total) : 'कोई नहीं'}</b>
+        <div class="small">${d.days ? `काम में देरी ${d.days} दिन (${d.percent}%) = ${crore(d.amount)}` : ''}${d.bill_delay_amount ? ` · बिल/भुगतान में देरी ${crore(d.bill_delay_amount)}` : ''}</div></div>
+    </div>
+    ${roles.length ? `<div class="small" style="margin-top:8px"><b>किस अधिकारी की वजह से:</b> ${roles.map(([r, x]) => `${ROLE_SHORT[r]}${x.officer ? ` (${esc(x.officer)})` : ''} ${x.days ? x.days + ' दिन, ' : ''}${crore(x.amount)}`).join(' · ')}</div>` : ''}
+    <p class="small" style="margin-top:8px">अंतिम बिल में अपने-आप: <b>${p.net_to_contractor >= 0 ? '+' : '−'} ${crore(Math.abs(p.net_to_contractor))}</b> ${p.net_to_contractor >= 0 ? '(ठेकेदार को मिलेगा)' : '(ठेकेदार से कटेगा)'}</p></div>`;
+}
 
 window.dlg = $('#dlg');
 boot();
