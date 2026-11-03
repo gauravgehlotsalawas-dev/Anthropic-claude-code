@@ -11,6 +11,8 @@ import { exportXlsx, exportCsv, printProject, download } from "./export.js";
 import { SAMPLE_BSR } from "./sample.js";
 import { readNicBoq, writeNicBoq, nicNumbering } from "./nicboq.js";
 import { initBills, renderBills } from "./bills.js";
+import { initSites, renderSites, siteList, currentSiteId, switchSite, newSiteDialog } from "./site.js";
+import { initOffice, renderOffice, company } from "./office.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -84,6 +86,8 @@ async function boot() {
     findItem: (id) => state.itemById.get(id),
     rateOf: (it) => indexedRate(bsrById(it._bsr), it),
   });
+  await initSites({ toast, modal, closeModal, download, refreshHeader: renderProjectSelect, company });
+  await initOffice({ toast, modal, closeModal, download, sites: siteList, currentSite: currentSiteId });
   renderAll();
   resetHistory();
 }
@@ -218,8 +222,9 @@ function bindGlobal() {
   });
 
   // Project switching
-  $("#projectSelect").addEventListener("change", (e) => (state.tab === "bills" ? switchBillWork : switchProject)(e.target.value));
+  $("#projectSelect").addEventListener("change", (e) => (state.tab === "sites" ? switchSite : state.tab === "bills" ? switchBillWork : switchProject)(e.target.value));
   $("#newProjectBtn").addEventListener("click", async () => {
+    if (state.tab === "sites") { newSiteDialog(); return; }
     if (state.tab === "bills") {
       const name = prompt("Name of the work (for bills):", "New work");
       if (!name) return;
@@ -419,13 +424,15 @@ function renderKeyHint() {
 
 function showTab(name) {
   const was = state.tab; state.tab = name;
-  if ((was === "bills") !== (name === "bills")) renderProjectSelect();
+  if (was !== name) renderProjectSelect();
   $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "pick") renderPick();
   if (name === "boq") renderBoq();
   if (name === "tender") renderTender();
   if (name === "bills") renderBills();
+  if (name === "sites") renderSites();
+  if (name === "office") renderOffice();
   window.scrollTo({ top: 0 });
 }
 
@@ -447,6 +454,13 @@ function guardEmpty() {
 // ---------------------------------------------------------------------------
 
 function renderProjectSelect() {
+  $(".project-switch").classList.toggle("hidden", state.tab === "office");
+  if (state.tab === "sites") {
+    const list = siteList();
+    $("#projectSelect").innerHTML = list.length ? list.map((s) => `<option value="${s.id}" ${s.id === currentSiteId() ? "selected" : ""}>${esc(s.name.slice(0, 70))}</option>`).join("") : `<option value="">No sites yet: press ＋</option>`;
+    $("#projectSelect").title = "Site"; $("#newProjectBtn").title = "New site";
+    return;
+  }
   const bills = state.tab === "bills";
   const list = bills ? billWorks() : estimates(), cur = bills ? state.billId : state.projectId;
   $("#projectSelect").innerHTML = list.map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(p.name)}</option>`).join("");

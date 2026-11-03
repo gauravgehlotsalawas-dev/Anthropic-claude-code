@@ -60,6 +60,23 @@ For contractors, based on the project's BOQ (import the tender BOQ .xls; files w
 - **Deviation statement:** tender quantity, rate and amount against executed figures, with excess, extra and saving columns, T.P. and G/H totals.
 - **Photos:** drop site photos; they print four to a page, laid out landscape (turned on the A4 sheet, so Safari / iPad prints them horizontally too), with the name of work and work order No. on top and JEN / AEN / XEN signature spaces at the bottom.
 
+## Site diary (tab 7)
+
+One folder per construction site (the selector at the top lists sites while this tab is open; **＋** adds one).
+
+- **Daily entry:** labour by category, machinery, work done (item, location, quantity, unit), materials received (supplier, challan), hindrances, instructions and remarks. *Copy last day's labour* saves typing.
+- **GPS camera:** choose the site, write what the photo is about, and choose what is stamped on it: GPS location, address (needs internet), date and time, site name and W.O. No. (or nothing). *Take photo* opens the camera on a phone or tablet; *Choose from gallery* reads the date and GPS position stored in the photo. Photos go to that site's gallery and to that day's DPR.
+- **Gallery:** by date, with captions, search, select, print four to a page (with name of work, W.O. No. and JEN / AEN / XEN), download as ZIP, move to another site.
+- **Reports:** DPR (a day), WPR (a week), MPR (a month) or any period: labour (man-days), work done in the period and up to date, materials, machinery, hindrances and remarks, a day-wise summary and photo sheets. Print / save as PDF, or Excel.
+- **Documents:** folders per site (work order, agreement, BOQ, drawings, MB & bills, letters, challans, your own folders). Upload any file, scan pages with the camera (cleaned up and saved as one PDF), tick documents and merge them into one PDF, or download them as a ZIP.
+
+## Office (tab 8)
+
+- **Purchase bills & accounts:** photograph or upload a bill; the date, bill No., GSTIN, GST and total are read on the device (OCR) for you to check, with the category and site. Filter by month, financial year, site or category. **Excel for CA** gives the purchase register with totals by category, site and vendor; **Excel + bill copies (ZIP)** adds every bill copy, named by date, vendor and amount.
+- **Company documents:** the same folders, upload, scan and merge as for sites (registration, PAN & GST, experience certificates, bank, tender documents…).
+- **Company profile:** printed on the progress reports.
+- **Backup & storage:** all data stays in the browser on that device. **Download full backup (ZIP)** regularly and keep it on Drive or email; **Restore** it on another device to move everything there.
+
 ## File format notes
 
 | Format | Handling |
@@ -94,6 +111,11 @@ boq/
   js/quick.js        dimension-based takeoff
   js/export.js       Excel, print/PDF and CSV output
   js/nicboq.js       reads and writes NIC GePNIC BOQ templates (BIFF8 .xls with macros)
+  js/bills.js        contractor's bills from the measurement book (tab 6)
+  js/site.js         site diary, GPS camera, gallery and DPR / WPR / MPR (tab 7)
+  js/office.js       accounts, company documents and backup (tab 8)
+  js/docs.js         document folders, scan and merge
+  js/files.js        photo stamping, EXIF, ZIP and PDF helpers
   js/sample.js       sample rate book (demo rates only)
-  vendor/            SheetJS 0.18.5, pdf.js 6.4, a browser bundle of @anthropic-ai/sdk 1.3 and fflate
+  vendor/            SheetJS 0.18.5, pdf.js 6.4, pdf-lib 1.17.1 (MIT), a browser bundle of @anthropic-ai/sdk 1.3 and fflate
 ```

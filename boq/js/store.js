@@ -1,7 +1,7 @@
 // Persistence (IndexedDB) and the core data model.
 
 const DB_NAME = "ratebook-boq";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let dbPromise = null;
 
 function db() {
@@ -10,7 +10,8 @@ function db() {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = () => {
         const d = req.result;
-        for (const s of ["bsrs", "projects", "kv"]) {
+        // v2: site diary, files (photos, documents, purchase bills) and accounts
+        for (const s of ["bsrs", "projects", "kv", "sites", "diary", "files", "expenses"]) {
           if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: "id" });
         }
       };
@@ -34,6 +35,7 @@ async function tx(store, mode, fn) {
 
 export const idb = {
   all: (store) => tx(store, "readonly", (s) => s.getAll()),
+  get: (store, id) => tx(store, "readonly", (s) => s.get(id)),
   put: (store, value) => tx(store, "readwrite", (s) => s.put(value)),
   del: (store, id) => tx(store, "readwrite", (s) => s.delete(id)),
   clear: (store) => tx(store, "readwrite", (s) => s.clear()),
