@@ -199,8 +199,9 @@ function progressView(s) {
   const o = overall(s);
   if (!o.n) return `<div class="card empty-state"><h2>BOQ progress</h2><p>Add the BOQ in <b>Site details</b>: each item's progress is then worked out from the daily work entries.</p></div>`;
   return `<div class="card"><div class="row between wrap"><div><h2>BOQ progress</h2><p class="muted small">${o.started} of ${o.n} items started · ${o.done} completed · overall ${o.pct}%${o.byAmount ? " by value" : ""}</p></div>${ring(o.pct, 84)}</div>
-    <div class="prog-list">${o.rows.map(({ it, done }) => { const pct = pctOf(done, it.qty); return `<div class="prog ${pct > 100 ? "over" : ""}"><div class="prog-h"><span class="ac-no">BOQ ${esc(boqKey(it))}</span><span class="prog-d">${esc(it.description.length > 140 ? it.description.slice(0, 140) + "…" : it.description)}</span><b class="pct">${pct}%</b></div>
-      ${bar(pct, "big")}<small class="muted">${q3(done)} of ${q3(it.qty)} ${esc(it.unit || "")} done${pct > 100 ? ` · <span class="danger-text">excess ${q3(done - num(it.qty))}: deviation</span>` : ` · balance ${q3(num(it.qty) - done)}`}</small></div>`; }).join("")}</div></div>`;
+    ${[["G", "G-Schedule (SOR / BSR items)"], ["H", "H-Schedule (non-SOR items)"]].map(([sch, title]) => { const rows = o.rows.filter((r) => (isH(r.it) ? "H" : "G") === sch); return rows.length ? `<h3 class="sch-h ${sch === "H" ? "h" : ""}">${title} <span class="muted">(${rows.length})</span></h3>
+    <div class="prog-list">${rows.map(({ it, done }) => { const pct = pctOf(done, it.qty); return `<div class="prog ${pct > 100 ? "over" : ""}"><div class="prog-h">${boqTag(it)}<span class="prog-d">${esc(it.description.length > 140 ? it.description.slice(0, 140) + "…" : it.description)}</span><b class="pct">${pct}%</b></div>
+      ${bar(pct, "big")}<small class="muted">${q3(done)} of ${q3(it.qty)} ${esc(it.unit || "")} done${pct > 100 ? ` · <span class="danger-text">excess ${q3(done - num(it.qty))}: deviation</span>` : ` · balance ${q3(num(it.qty) - done)}`}</small></div>`; }).join("")}</div>` : ""; }).join("")}</div>`;
 }
 
 export async function renderSites() {
@@ -226,8 +227,8 @@ export async function renderSites() {
     const docs = (await allFiles()).filter((f) => f.owner === s.id && f.kind === "doc");
     const names = (pred) => docs.filter(pred).map((f) => `${f.name}${["Work order", "BOQ"].includes(f.folder) ? "" : ` (${f.folder})`}`);
     body.innerHTML = `${docPicker({ wo: names((f) => f.folder === "Work order"), boq: names((f) => f.folder === "BOQ"), other: names((f) => !["Work order", "BOQ"].includes(f.folder)) })}<div class="card"><h2>Site details</h2>${siteForm(s)}<div class="row gap mt"><button class="primary" data-act="saveSite">Save</button><button class="ghost danger-text" data-act="delSite">Delete this site</button></div></div>
-      ${s.boqItems?.length ? `<div class="card"><h2>BOQ items (${s.boqItems.length})</h2><p class="muted small">Offered as work items in the daily entry.</p><div class="table-wrap tall"><table class="data small"><thead><tr><th>Sch.</th><th>No.</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Rate</th></tr></thead>
-        <tbody>${s.boqItems.map((i) => `<tr><td>${esc(i.schedule || "")}</td><td>${esc(i.sno || "")}</td><td>${esc(i.description)}</td><td>${esc(i.unit || "")}</td><td class="num">${q3(i.qty)}</td><td class="num">${i.rate ? round(i.rate, 2) : ""}</td></tr>`).join("")}</tbody></table></div></div>` : ""}`;
+      ${s.boqItems?.length ? `<div class="card"><h2>BOQ items (${s.boqItems.length}: ${s.boqItems.filter((i) => !isH(i)).length} G-Schedule, ${s.boqItems.filter(isH).length} H-Schedule)</h2><p class="muted small">Offered as work items in the daily entry.</p><div class="table-wrap tall"><table class="data small"><thead><tr><th>Sch.</th><th>No.</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Rate</th></tr></thead>
+        <tbody>${[...s.boqItems].sort((a, b) => (isH(a) ? 1 : 0) - (isH(b) ? 1 : 0)).map((i) => `<tr class="${isH(i) ? "h-row" : ""}"><td>${isH(i) ? `<span class="badge h-badge">H</span>` : `<span class="badge">G</span>`}</td><td>${esc(i.sno || "")}</td><td>${esc(i.description)}</td><td>${esc(i.unit || "")}</td><td class="num">${q3(i.qty)}</td><td class="num">${i.rate ? round(i.rate, 2) : ""}</td></tr>`).join("")}</tbody></table></div></div>` : ""}`;
     const ms = materialStatus(s, today());
     if (ms.rows.length || s.boqItems?.length) body.insertAdjacentHTML("beforeend", `<div class="card"><h2>Materials for this work</h2>
       <p class="muted small">Required quantities are worked out from the BOQ items (mix, grade, thickness and unit in each item) with common site thumb rules: an approximate guide, not the department's analysis of rates. Received and consumed come from the daily entries.</p>
@@ -274,6 +275,9 @@ const rowTable = (key, cols, rows, addLabel, quick = "") => `<div class="table-w
 // ---------------------------------------------------------------------------
 
 const boqKey = (i) => String(i.sno ?? "");
+const isH = (i) => String(i?.schedule || "").toUpperCase() === "H";
+/** "BOQ 12" for G-Schedule items, "H-Sch 1" for H-Schedule (non-SOR) items, as numbered on the bills. */
+const boqTag = (i) => (isH(i) ? `<span class="ac-no h-no">H-Sch ${esc(boqKey(i).replace(/\.0*1$/, ""))}</span>` : `<span class="ac-no">BOQ ${esc(boqKey(i))}</span>`);
 const findBoq = (r) => (site().boqItems || []).find((i) => (r.boq != null && r.boq !== "" ? boqKey(i) === String(r.boq) : i.description === r.desc));
 /** Quantity of a BOQ item entered in the diary up to a day (all days when no day is given). */
 function doneUpTo(item, day = "") {
@@ -284,7 +288,7 @@ const bar = (pct, cls = "") => `<span class="pbar ${cls} ${pct > 100 ? "over" : 
 function workInfo(r) {
   const it = findBoq(r); if (!it) return "";
   const done = doneUpTo(it, state.date), bal = round(num(it.qty) - done, 3), pct = pctOf(done, it.qty);
-  return `<span class="wi-top"><b class="ac-no">BOQ ${esc(boqKey(it))}</b>${num(it.qty) ? `${bar(pct)}<b class="pct ${pct > 100 ? "danger-text" : ""}">${pct}%</b>` : ""}</span>
+  return `<span class="wi-top">${boqTag(it)}${num(it.qty) ? `${bar(pct)}<b class="pct ${pct > 100 ? "danger-text" : ""}">${pct}%</b>` : ""}</span>
     <span>${num(it.qty) ? `done ${q3(done)} of ${q3(it.qty)} ${esc(it.unit || "")} · <span class="${bal < 0 ? "danger-text" : ""}">${bal < 0 ? "excess" : "balance"} ${q3(Math.abs(bal))}</span>` : esc(it.unit || "")}${num(it.rate) ? ` · ₹${round(it.rate, 2)}/${esc(it.unit || "unit")}` : ""}</span>`;
 }
 const SHAPES = { rect: ["▭ Rectangle", "Nos × L × B × H"], tri: ["◺ Triangle", "½ × Nos × L × B × H (L = base, B = height of the triangle)"],
@@ -338,7 +342,7 @@ function showAc(input) {
   hideAc();
   const list = acMatches(input.value); if (!list.length) return;
   const box = document.createElement("div"); box.className = "ac-list"; box.id = "acList";
-  box.innerHTML = list.map((m) => m.it ? `<button type="button" data-acpick="${m.k}"><span class="ac-no">BOQ ${esc(boqKey(m.it))}</span> ${esc(m.it.description.length > 170 ? m.it.description.slice(0, 170) + "…" : m.it.description)}<small> · ${esc(m.it.unit || "")}${num(m.it.qty) ? ` · tender ${q3(m.it.qty)}` : ""}</small></button>`
+  box.innerHTML = list.map((m) => m.it ? `<button type="button" data-acpick="${m.k}">${boqTag(m.it)} ${esc(m.it.description.length > 170 ? m.it.description.slice(0, 170) + "…" : m.it.description)}<small> · ${esc(m.it.unit || "")}${num(m.it.qty) ? ` · tender ${q3(m.it.qty)}` : ""}</small></button>`
     : `<button type="button" data-acprev="${esc(m.prev)}"><span class="ac-no">Used before</span> ${esc(m.prev.slice(0, 170))}</button>`).join("");
   input.closest(".ac-cell").appendChild(box);
 }
@@ -700,7 +704,7 @@ async function printReport(kind, from, to, photoOpt = "8") {
   const labourCost = one ? listTotal("labour", d?.labour) : round([...A.labourAmt.values()].reduce((a, v) => a + v, 0), 2);
   const boqOf = (desc) => (s.boqItems || []).find((i) => i.description.trim() === desc);
   const workRows = [...A.work].map(([k, v]) => { const [desc, unit] = k.split("|"); const locs = one ? (d.work.filter((w) => (w.desc || "").trim() === desc).map((w) => [w.loc, measureText(w)].filter(Boolean).join(" ")).filter(Boolean).join("; ")) : ""; const b = boqOf(desc); const up = A.upto.get(k) || v;
-    return [b ? esc(boqKey(b)) : "", esc(desc) + (locs ? `<br><small>${esc(locs)}</small>` : ""), esc(unit), v, up, b && num(b.qty) ? num(b.qty) : "", b && num(b.qty) ? round(num(b.qty) - up, 3) : "", b && num(b.qty) ? `${pctOf(up, b.qty)}%` : ""]; });
+    return [b ? (isH(b) ? `H-Sch ${esc(boqKey(b).replace(/\.0*1$/, ""))}` : esc(boqKey(b))) : "", esc(desc) + (locs ? `<br><small>${esc(locs)}</small>` : ""), esc(unit), v, up, b && num(b.qty) ? num(b.qty) : "", b && num(b.qty) ? round(num(b.qty) - up, 3) : "", b && num(b.qty) ? `${pctOf(up, b.qty)}%` : ""]; });
   const matRows = one ? (d?.materials || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.supplier || ""), esc(m.challan || "")]) : [...A.materials].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
   const conRows = one ? (d?.consumed || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.usedFor || "")]) : [...A.consumed].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
   const machRows = one ? (d?.machinery || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.count) || 1, `${inr(m.rate)} / ${m.basis || "hour"}`, m.start && m.end ? `${m.start}–${m.end}` : "", num(m.hours) || "", inr(CALC.machinery(m))])

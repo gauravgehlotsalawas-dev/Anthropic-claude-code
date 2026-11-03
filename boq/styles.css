@@ -756,3 +756,10 @@ tr.sel-row td { background: #fdecec !important; }
   .d-pg { position: absolute; right: 0; bottom: 0; font-size: 7.5pt; }
 }
 .ml { margin-left: .35rem; }
+
+.ac-no.h-no { background: #b45309; }
+.sch-h { margin: 1.1rem 0 .2rem; font-size: .95rem; display: flex; gap: .4rem; align-items: center; }
+.sch-h::before { content: ""; width: .7rem; height: .7rem; border-radius: 3px; background: var(--brand); }
+.sch-h.h::before { background: #b45309; }
+.badge.h-badge { background: #fdecd3; color: #8a4b0a; }
+tr.h-row td { background: #fffaf2; }
