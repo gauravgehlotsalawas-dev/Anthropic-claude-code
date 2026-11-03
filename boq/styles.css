@@ -746,3 +746,13 @@ input.auto, textarea.auto { background: #eaf7ef; border-color: var(--brand); }
 #sitesRoot [data-list="machinery"] input[type="time"] { min-width: 6.5rem; }
 tr.sel-row td { background: #fdecec !important; }
 .mb { margin-bottom: .6rem; }
+
+/* Deviation statement: landscape pages turned on the A4 sheet (same as photo sheets) */
+@media print {
+  .p-page.d-rot { display: block; position: relative; width: 176mm; height: 242mm; overflow: hidden; margin: 0 auto; page-break-after: always; }
+  .p-page.d-rot:last-child { page-break-after: auto; }
+  .d-rot .p-rot-in { display: block; padding: 0; }
+  .d-rot .d-grid { width: 100%; }
+  .d-pg { position: absolute; right: 0; bottom: 0; font-size: 7.5pt; }
+}
+.ml { margin-left: .35rem; }

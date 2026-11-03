@@ -270,9 +270,9 @@ function deviationRows(p) {
 }
 
 function deviationView(p) {
-  const d = deviationRows(p);
+  const d = deviationRows(p), c = contract(p);
   const pct = d.grand.tamt ? (d.grand.amt / d.grand.tamt) * 100 : 0;
-  return `<div class="card"><div class="row between wrap"><h2>Deviation statement</h2><div class="row gap"><button class="ghost" data-print="deviation">Print</button><button class="ghost" data-act="excel">Excel</button></div></div>
+  return `<div class="card"><div class="row between wrap"><h2>Deviation statement</h2><div class="row gap"><label class="small muted">Print<select data-c="devOrient" class="ml"><option value="landscape" ${(c.devOrient || "landscape") === "landscape" ? "selected" : ""}>Landscape</option><option value="portrait" ${c.devOrient === "portrait" ? "selected" : ""}>Portrait</option></select></label><button class="ghost" data-print="deviation">Print</button><button class="ghost" data-act="excel">Excel</button></div></div>
     <p class="muted small">Tender (G/H Schedule) against executed quantities of the latest bill. Executed value is ${pct.toFixed(1)}% of the tender value.</p>
     ${devTable(d, "data small")}</div>`;
 }
@@ -939,18 +939,37 @@ function deviationSheet(p, c) {
   const row = (r, i) => `<tr><td class="c">${i + 1}</td><td class="j">${esc(r.desc)}</td><td class="r">${q3(r.extra ? 0 : r.tqty)}</td><td class="c">${esc(r.unit)}</td><td class="r">${q3(r.rate)}</td><td class="r">${n2(r.tamt)}</td>
     <td class="r">${q3(r.qty)}</td><td class="c">${esc(r.unit)}</td><td class="r">${q3(r.applied)}</td><td class="r">${n2(r.amt)}</td><td class="r">${v(r.excess)}</td><td class="r">${v(r.extraAmt)}</td><td class="r">${v(r.saving)}</td><td></td></tr>`;
   const tot = (label, o, bold) => `<tr class="${bold ? "d-b" : ""}"><td></td><td class="r">${label}</td><td></td><td></td><td></td><td class="r">${n2(o.tamt)}</td><td></td><td></td><td></td><td class="r">${n2(o.amt)}</td><td class="r">${n2(o.excess)}</td><td class="r">${n2(o.extraAmt)}</td><td class="r">${n2(o.saving)}</td><td></td></tr>`;
-  return `<section class="p-page p-landscape f27 d-dev">
-    <div class="d-title">DEVIATION STATEMENT</div>
+  const head = `<div class="d-title">DEVIATION STATEMENT</div>
     <table class="d-fields"><tr><td>Name of Work :</td><td></td><td class="d-work">${esc(p.name)}</td></tr>
       <tr><td>Name of Agency</td><td></td><td>${esc(c.contractor)}</td></tr>
-      <tr><td>Aggrement No.</td><td></td><td>${esc(c.workOrderNo)}${c.woDate ? ` Dated ${fd(c.woDate)}` : ""}</td></tr></table>
-    <table class="d-grid"><colgroup><col style="width:3%"><col style="width:23%"><col style="width:6%"><col style="width:4%"><col style="width:6.5%"><col style="width:8%"><col style="width:6%"><col style="width:4%"><col style="width:6.5%"><col style="width:8%"><col style="width:6.5%"><col style="width:6.5%"><col style="width:7.5%"><col style="width:4.5%"></colgroup>
-      <thead><tr><th rowspan="2">S.<br>No.</th><th rowspan="2">Particular</th><th colspan="4">As per "G" Schedule</th><th colspan="4">As per Actual Executed of work</th><th colspan="3">Amount</th><th rowspan="2">Remarks</th></tr>
-      <tr><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Excess</th><th>Extra</th><th>Saving</th></tr></thead><tbody>
-      ${d.G.map(row).join("")}
-      ${tot("Total", d.gT, true)}${tot(esc(tpLabel(d.c).replace(/^Less T\.P\. ([\d.]+)% Below$/, "Less: $1% as per T.P.")), d.gTp)}${tot("G. Total", d.gNet, true)}
-      ${d.H.length ? `<tr class="d-b"><td></td><td>H-Schedule</td><td colspan="12"></td></tr>${d.H.map(row).join("")}${tot("Total", d.grand, true)}` : ""}</tbody></table>
-    <div class="d-signs d-signs3">${["Junior Engineer", "Assistant Engineer", "Executive Engineer,"].map((t) => `<div>${t}<br>${esc((c.office || p.client || "").replace(/^.*?(Corporation|Nigam)/i, "Nagar Nigam"))}</div>`).join("")}</div></section>`;
+      <tr><td>Aggrement No.</td><td></td><td>${esc(c.workOrderNo)}${c.woDate ? ` Dated ${fd(c.woDate)}` : ""}</td></tr></table>`;
+  const colgroup = `<colgroup><col style="width:3%"><col style="width:23%"><col style="width:6%"><col style="width:4%"><col style="width:6.5%"><col style="width:8%"><col style="width:6%"><col style="width:4%"><col style="width:6.5%"><col style="width:8%"><col style="width:6.5%"><col style="width:6.5%"><col style="width:7.5%"><col style="width:4.5%"></colgroup>`;
+  const thead = `<thead><tr><th rowspan="2">S.<br>No.</th><th rowspan="2">Particular</th><th colspan="4">As per "G" Schedule</th><th colspan="4">As per Actual Executed of work</th><th colspan="3">Amount</th><th rowspan="2">Remarks</th></tr>
+      <tr><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Excess</th><th>Extra</th><th>Saving</th></tr></thead>`;
+  const rows = [...d.G.map(row), tot("Total", d.gT, true) + tot(esc(tpLabel(d.c).replace(/^Less T\.P\. ([\d.]+)% Below$/, "Less: $1% as per T.P.")), d.gTp) + tot("G. Total", d.gNet, true),
+    ...(d.H.length ? [`<tr class="d-b"><td></td><td>H-Schedule</td><td colspan="12"></td></tr>`, ...d.H.map((r, i) => row(r, i)), tot("Total", d.grand, true)] : [])];
+  const signs = `<div class="d-signs d-signs3">${["Junior Engineer", "Assistant Engineer", "Executive Engineer,"].map((t) => `<div>${t}<br>${esc((c.office || p.client || "").replace(/^.*?(Corporation|Nigam)/i, "Nagar Nigam"))}</div>`).join("")}</div>`;
+  const table = (body) => `<table class="d-grid">${colgroup}${thead}<tbody>${body}</tbody></table>`;
+  if ((c.devOrient || "landscape") === "portrait") return `<section class="p-page f27 d-dev">${head}${table(rows.join(""))}${signs}</section>`;
+  // Landscape on every browser: each page is laid out landscape and turned on the portrait A4 sheet
+  // (Safari / iPad ignore landscape page settings). Rows are measured so that each sheet is filled.
+  const MM = 96 / 25.4, PAGE = 166 * MM;
+  const m = document.createElement("div");
+  m.className = "f27 d-dev f-measure"; m.style.width = "242mm";
+  m.innerHTML = `<div class="m-h">${head}</div><table class="d-grid">${colgroup}${thead}<tbody>${rows.map((r, i) => r.replace(/<tr/g, `<tr data-ri="${i}"`)).join("")}</tbody></table><div class="m-s">${signs}</div>`;
+  document.body.appendChild(m);
+  const hgt = (el) => el?.getBoundingClientRect().height || 0;
+  const H = { head: hgt(m.querySelector(".m-h")), thead: hgt(m.querySelector("thead")), signs: hgt(m.querySelector(".m-s")) };
+  const rh = rows.map((_, i) => [...m.querySelectorAll(`[data-ri="${i}"]`)].reduce((a, el) => a + hgt(el), 0) || 14);
+  m.remove();
+  const pages = [[]]; let used = H.head + H.thead;
+  rows.forEach((r, i) => {
+    if (used + rh[i] > PAGE && pages.at(-1).length) { pages.push([]); used = H.thead; }
+    pages.at(-1).push(r); used += rh[i];
+  });
+  if (used + H.signs > PAGE) pages.push([]);
+  return pages.map((pg, pi) => `<section class="p-page p-rot d-rot"><div class="p-rot-in f27 d-dev">${pi ? "" : head}${pg.length ? table(pg.join("")) : ""}${pi === pages.length - 1 ? signs : ""}
+    <div class="d-pg">Page ${pi + 1} of ${pages.length}</div></div></section>`).join("");
 }
 
 // ---------------------------------------------------------------------------
