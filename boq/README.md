@@ -11,6 +11,8 @@ cd boq
 python3 -m http.server 8000     # then open http://localhost:8000
 ```
 
+Before each deploy run `python3 tools/version.py`: it stamps a version on every script URL, so browsers never mix new files with old cached ones.
+
 To put it online, serve the `boq/` folder from any static host (GitHub Pages, Netlify, an office web server). Opening `index.html` directly from disk does not work, because browsers block ES modules on `file://`.
 
 ## How it works

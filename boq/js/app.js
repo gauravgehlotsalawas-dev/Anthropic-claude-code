@@ -1962,7 +1962,12 @@ function renderSettings() {
   };
 }
 
-boot().catch((e) => {
+// If the start hangs (an old tab holds the database, or the browser kept old files), say so instead of showing dead buttons.
+const stuck = (msg) => { if (document.querySelector(".fatal")) return; document.body.insertAdjacentHTML("afterbegin", `<div class="fatal">${msg} <button onclick="location.reload()">Reload</button></div>`); };
+window.addEventListener("db-blocked", () => stuck("RateBook is open in another tab or window with an older version. Close the other RateBook tabs, then press Reload."));
+const bootTimer = setTimeout(() => stuck("The app is taking too long to start. Close other RateBook tabs and press Reload."), 15000);
+boot().then(() => clearTimeout(bootTimer)).catch((e) => {
+  clearTimeout(bootTimer);
   console.error(e);
   document.body.insertAdjacentHTML("afterbegin", `<div class="fatal">Could not start: ${esc(e.message)}. Try a recent version of Chrome, Edge, Firefox or Safari.</div>`);
 });

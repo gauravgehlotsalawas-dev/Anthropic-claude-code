@@ -15,8 +15,15 @@ function db() {
           if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: "id" });
         }
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const d = req.result;
+        // A newer version of the app opened in another tab: let it upgrade, then reload this one.
+        d.onversionchange = () => { d.close(); location.reload(); };
+        resolve(d);
+      };
       req.onerror = () => reject(req.error);
+      // An older copy of the app is still open in another tab and holds the database.
+      req.onblocked = () => window.dispatchEvent(new CustomEvent("db-blocked"));
     });
   }
   return dbPromise;
