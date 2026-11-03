@@ -154,6 +154,40 @@ async function photosOf(siteId, from, to) {
 // Rendering
 // ---------------------------------------------------------------------------
 
+/** Overall progress of the BOQ: by value where rates are known, else the average of item progress. */
+function overall(s, day = "") {
+  const items = (s.boqItems || []).filter((i) => num(i.qty));
+  if (!items.length) return { n: 0, pct: 0 };
+  const prevId = state.siteId; state.siteId = s.id;
+  const rows = items.map((it) => ({ it, done: doneUpTo(it, day) }));
+  state.siteId = prevId;
+  const val = rows.reduce((a, r) => a + num(r.it.qty) * num(r.it.rate), 0);
+  const pct = val ? (rows.reduce((a, r) => a + Math.min(r.done, num(r.it.qty)) * num(r.it.rate), 0) / val) * 100 : rows.reduce((a, r) => a + Math.min(1, r.done / num(r.it.qty)), 0) / rows.length * 100;
+  return { n: items.length, pct: round(pct, 1), byAmount: !!val, rows, started: rows.filter((r) => r.done > 0).length, done: rows.filter((r) => r.done >= num(r.it.qty)).length };
+}
+const ring = (pct, size = 92) => { const r = 40, c = 2 * Math.PI * r, p = Math.min(100, Math.max(0, pct));
+  return `<svg class="ring" viewBox="0 0 100 100" width="${size}" height="${size}"><circle cx="50" cy="50" r="${r}" class="ring-bg"/><circle cx="50" cy="50" r="${r}" class="ring-fg" stroke-dasharray="${(c * p) / 100} ${c}" transform="rotate(-90 50 50)"/><text x="50" y="47" class="ring-num">${Math.round(pct)}%</text><text x="50" y="64" class="ring-lbl">done</text></svg>`; };
+function heroStats(s) {
+  const t = today(), out = [];
+  if (s.startDate) {
+    const day = Math.floor((new Date(t + "T12:00") - new Date(s.startDate + "T12:00")) / 864e5) + 1;
+    const total = s.endDate ? Math.floor((new Date(s.endDate + "T12:00") - new Date(s.startDate + "T12:00")) / 864e5) + 1 : 0;
+    if (day > 0) out.push(["📅", total ? `Day ${day} of ${total}` : `Day ${day}`, total ? (day > total ? `${day - total} days over` : `${total - day} days left`) : "since start"]);
+  }
+  const e = entry(t); const lab = (e?.labour || []).reduce((a, l) => a + num(l.count), 0);
+  out.push(["👷", `${lab} today`, `labour · ${inr(listTotal("labour", e?.labour)) || "₹0"}`]);
+  out.push(["🗓", `${entriesOf(s.id).length} days`, "in the diary"]);
+  if (num(s.amount)) out.push(["₹", `${(num(s.amount) / 1e5).toLocaleString("en-IN", { maximumFractionDigits: 2 })} L`, "work order"]);
+  return out.map(([i, a, b]) => `<div class="hs"><span class="hs-i">${i}</span><div><b>${a}</b><small>${b}</small></div></div>`).join("");
+}
+function progressView(s) {
+  const o = overall(s);
+  if (!o.n) return `<div class="card empty-state"><h2>BOQ progress</h2><p>Add the BOQ in <b>Site details</b>: each item's progress is then worked out from the daily work entries.</p></div>`;
+  return `<div class="card"><div class="row between wrap"><div><h2>BOQ progress</h2><p class="muted small">${o.started} of ${o.n} items started · ${o.done} completed · overall ${o.pct}%${o.byAmount ? " by value" : ""}</p></div>${ring(o.pct, 84)}</div>
+    <div class="prog-list">${o.rows.map(({ it, done }) => { const pct = pctOf(done, it.qty); return `<div class="prog ${pct > 100 ? "over" : ""}"><div class="prog-h"><span class="ac-no">BOQ ${esc(boqKey(it))}</span><span class="prog-d">${esc(it.description.length > 140 ? it.description.slice(0, 140) + "…" : it.description)}</span><b class="pct">${pct}%</b></div>
+      ${bar(pct, "big")}<small class="muted">${q3(done)} of ${q3(it.qty)} ${esc(it.unit || "")} done${pct > 100 ? ` · <span class="danger-text">excess ${q3(done - num(it.qty))}: deviation</span>` : ` · balance ${q3(num(it.qty) - done)}`}</small></div>`; }).join("")}</div></div>`;
+}
+
 export async function renderSites() {
   const root = $("#sitesRoot"); if (!root) return;
   const s = site();
@@ -162,14 +196,17 @@ export async function renderSites() {
       <button class="primary" data-act="newSite">＋ Create your first site</button></div>`;
     return;
   }
-  const tabs = [["today", "Daily entry"], ["photos", "📷 Camera & photos"], ["reports", "Reports (DPR / WPR / MPR)"], ["docs", "Documents"], ["details", "Site details"]];
-  root.innerHTML = `<div class="site-head"><div><h2>${esc(s.name)}</h2><p class="muted small">${[s.workOrderNo && `W.O. ${esc(s.workOrderNo)}${s.woDate ? ` dt. ${fd(s.woDate)}` : ""}`, esc(s.client || ""), esc(s.location || "")].filter(Boolean).join(" · ")}</p></div>
-      <button class="primary cam-btn" data-act="camera">📷 GPS camera</button></div>
+  const tabs = [["today", "📝 Daily entry"], ["progress", "📈 Progress"], ["photos", "📷 Photos"], ["reports", "📄 Reports"], ["docs", "📁 Documents"], ["details", "⚙️ Site details"]];
+  const o = overall(s);
+  root.innerHTML = `<div class="site-hero"><div class="hero-main"><div class="hero-kicker">${[s.workOrderNo && `W.O. ${esc(s.workOrderNo)}${s.woDate ? ` · ${fd(s.woDate)}` : ""}`, esc(s.client || ""), esc(s.location || "")].filter(Boolean).join(" · ") || "Site"}</div>
+      <h2>${esc(s.name)}</h2><div class="hero-stats">${heroStats(s)}</div></div>
+      <div class="hero-side">${o.n ? `<button class="ring-btn" data-stab="progress" title="BOQ progress">${ring(o.pct)}</button>` : ""}<button class="cam-btn" data-act="camera"><span>📷</span> GPS camera</button></div></div>
     <nav class="subnav">${tabs.map(([k, l]) => `<button data-stab="${k}" class="${state.tab === k ? "active" : ""}">${l}</button>`).join("")}</nav><div id="siteBody"></div>`;
   const body = $("#siteBody", root);
   if (state.tab === "today") body.innerHTML = await todayView();
   if (state.tab === "photos") body.innerHTML = await photosView();
   if (state.tab === "reports") body.innerHTML = reportsView();
+  if (state.tab === "progress") body.innerHTML = progressView(s);
   if (state.tab === "details") {
     const docs = (await allFiles()).filter((f) => f.owner === s.id && f.kind === "doc");
     const names = (pred) => docs.filter(pred).map((f) => `${f.name}${["Work order", "BOQ"].includes(f.folder) ? "" : ` (${f.folder})`}`);
@@ -223,16 +260,28 @@ const findBoq = (r) => (site().boqItems || []).find((i) => (r.boq != null && r.b
 function doneUpTo(item, day = "") {
   return round(entriesOf(state.siteId, "", day).flatMap((d) => d.work).filter((w) => (w.boq != null && w.boq !== "" ? String(w.boq) === boqKey(item) : w.desc === item.description)).reduce((a, w) => a + num(w.qty), 0), 3);
 }
+const pctOf = (done, qty) => (num(qty) ? round((num(done) / num(qty)) * 100, 1) : 0);
+const bar = (pct, cls = "") => `<span class="pbar ${cls} ${pct > 100 ? "over" : pct >= 100 ? "full" : ""}"><i style="width:${Math.min(100, Math.max(0, pct))}%"></i></span>`;
 function workInfo(r) {
   const it = findBoq(r); if (!it) return "";
-  const done = doneUpTo(it, state.date), bal = round(num(it.qty) - done, 3);
-  return `<b>BOQ ${esc(boqKey(it))}</b> · ${esc(it.unit || "")}${num(it.qty) ? ` · tender ${q3(it.qty)} · done to date ${q3(done)} · <span class="${bal < 0 ? "danger-text" : ""}">balance ${q3(bal)}</span>` : ""}${num(it.rate) ? ` · ₹${round(it.rate, 2)}` : ""}`;
+  const done = doneUpTo(it, state.date), bal = round(num(it.qty) - done, 3), pct = pctOf(done, it.qty);
+  return `<span class="wi-top"><b class="ac-no">BOQ ${esc(boqKey(it))}</b>${num(it.qty) ? `${bar(pct)}<b class="pct ${pct > 100 ? "danger-text" : ""}">${pct}%</b>` : ""}</span>
+    <span>${num(it.qty) ? `done ${q3(done)} of ${q3(it.qty)} ${esc(it.unit || "")} · <span class="${bal < 0 ? "danger-text" : ""}">${bal < 0 ? "excess" : "balance"} ${q3(Math.abs(bal))}</span>` : esc(it.unit || "")}${num(it.rate) ? ` · ₹${round(it.rate, 2)}/${esc(it.unit || "unit")}` : ""}</span>`;
 }
-const workTable = (rows) => `<div class="table-wrap ac-wrap"><table class="data diary-tab" data-list="work"><thead><tr><th>Item of work</th><th>Location / chainage</th><th>Qty</th><th>Unit</th><th></th></tr></thead>
-  <tbody>${rows.map((r, i) => `<tr data-i="${i}"><td class="ac-cell"><input data-k="desc" data-ac autocomplete="off" value="${esc(r.desc ?? "")}" placeholder="Type item name or BOQ No."><div class="ac-info small muted">${workInfo(r)}</div></td>
-    <td><input data-k="loc" value="${esc(r.loc ?? "")}"></td><td><input data-k="qty" type="number" step="any" class="num w90" value="${esc(r.qty ?? "")}"></td>
-    <td><input data-k="unit" list="dlUnit" class="w70" value="${esc(r.unit ?? "")}"></td><td><button class="icon danger-text" data-delrow>×</button></td></tr>`).join("")}</tbody></table></div>
-  <div class="row gap wrap"><button class="ghost small" data-addrow="work">＋ Work item</button></div>`;
+/** Quantity from the measurement: Nos × L × B × H, using only the dimensions filled in. */
+function measuredQty(r) {
+  const dims = ["l", "b", "h"].map((k) => r[k]).filter((v) => v !== undefined && v !== null && String(v).trim() !== "");
+  if (!dims.length) return null;
+  const n = String(r.nos ?? "").trim() === "" ? 1 : num(r.nos);
+  return round(dims.reduce((a, v) => a * num(v), n), 3);
+}
+const workTable = (rows) => `<div class="table-wrap ac-wrap"><table class="data diary-tab work-tab" data-list="work"><thead><tr><th>Item of work</th><th>Location / chainage</th><th title="Number of like parts">Nos</th><th>L</th><th>B</th><th>H / D</th><th>Qty</th><th>Unit</th><th></th></tr></thead>
+  <tbody>${rows.map((r, i) => { const mq = measuredQty(r); return `<tr data-i="${i}"><td class="ac-cell"><input data-k="desc" data-ac autocomplete="off" value="${esc(r.desc ?? "")}" placeholder="Type item name or BOQ No."><div class="ac-info small muted">${workInfo(r)}</div></td>
+    <td><input data-k="loc" value="${esc(r.loc ?? "")}" placeholder="e.g. Ch. 0–30 m"></td>
+    ${["nos", "l", "b", "h"].map((k) => `<td><input data-k="${k}" type="number" step="any" inputmode="decimal" class="num w60" value="${esc(r[k] ?? "")}" placeholder="${k === "nos" ? "1" : ""}"></td>`).join("")}
+    <td><input data-k="qty" type="number" step="any" inputmode="decimal" class="num w80 ${mq != null ? "auto" : ""}" value="${esc(r.qty ?? "")}" ${mq != null ? 'title="Nos × L × B × H"' : ""}></td>
+    <td><input data-k="unit" list="dlUnit" class="w60" value="${esc(r.unit ?? "")}"></td><td><button class="icon danger-text" data-delrow>×</button></td></tr>`; }).join("")}</tbody></table></div>
+  <div class="row gap wrap"><button class="ghost small" data-addrow="work">＋ Work item</button><span class="muted small">Fill Nos × L × B × H (metres) and the quantity is worked out; leave out what does not apply (L × B for sqm, L for rmt).</span></div>`;
 
 function acMatches(q) {
   const items = site().boqItems || [];
@@ -277,21 +326,21 @@ async function todayView() {
       <label class="field">Working hours<input data-f="hours" value="${esc(d.hours || "")}" placeholder="9:00 am – 6:00 pm"></label></div></div>
     <datalist id="dlLabour">${LABOUR.map((x) => `<option>${x}</option>`).join("")}</datalist><datalist id="dlUnit">${UNITS.map((x) => `<option>${x}</option>`).join("")}</datalist><datalist id="dlWork">${prevWork.map((x) => `<option>${esc(x)}</option>`).join("")}</datalist>
     <div class="grid-2">
-      <div class="card"><h3>Labour on site <span class="muted" data-tot="labour">(${labourTotal} · ${inr(listTotal("labour", d.labour)) || "₹0"})</span></h3>
+      <div class="card"><h3><span class="hico">👷</span>Labour on site <span class="muted" data-tot="labour">(${labourTotal} · ${inr(listTotal("labour", d.labour)) || "₹0"})</span></h3>
         <p class="muted small">One line per group, e.g. 4 labour at ₹700 and 6 at ₹900 from the chowk.</p>${rowTable("labour", [["type", "Category", "", "dlLabour"], ["count", "Nos", "number"], ["rate", "Rate / day ₹", "number"], ["agency", "From (chowk / contractor)"], ["amt", "Amount", "calc"]], d.labour, "Labour",
         LABOUR.slice(0, 5).map((x) => `<button class="chip" data-quick="${x}">${x}</button>`).join(""))}</div>
-      <div class="card"><h3>Machinery / equipment <span class="muted" data-tot="machinery">(${inr(listTotal("machinery", d.machinery)) || "₹0"})</span></h3>
+      <div class="card"><h3><span class="hico">🚜</span>Machinery / equipment <span class="muted" data-tot="machinery">(${inr(listTotal("machinery", d.machinery)) || "₹0"})</span></h3>
         <p class="muted small">Rent per hour (start and end time give the hours), per day or per trip.</p>${rowTable("machinery", [["name", "Machine", "", "dlMach"], ["count", "Nos / trips", "number"], ["basis", "Rent per", "sel:hour=Hour|day=Day|trip=Trip"], ["rate", "Rate ₹", "number"], ["start", "Start", "time"], ["end", "End", "time"], ["hours", "Hours", "number"], ["amt", "Amount", "calc"]], d.machinery, "Machine")}</div>
     </div>
-    <div class="card"><h3>Work done today</h3>${site().boqItems?.length ? `<p class="muted small">Type a few words or the BOQ No. and pick the item: its full description, unit and BOQ No. are filled in.</p>` : ""}${workTable(d.work)}</div>
+    <div class="card"><h3><span class="hico">🏗️</span>Work done today</h3>${site().boqItems?.length ? `<p class="muted small">Type a few words or the BOQ No. and pick the item: its full description, unit and BOQ No. are filled in.</p>` : ""}${workTable(d.work)}</div>
     <datalist id="dlMat">${MAT_NAMES.map((x) => `<option>${x}</option>`).join("")}</datalist><datalist id="dlMach">${MACHINES.map((x) => `<option>${x}</option>`).join("")}</datalist>
-    <div class="card"><h3>Materials received</h3>${rowTable("materials", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["supplier", "Supplier"], ["challan", "Challan No."]], d.materials, "Material")}</div>
-    <div class="card"><h3>Materials consumed today</h3>${rowTable("consumed", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["usedFor", "Used for (item / location)", "", "dlWork"]], d.consumed || [], "Material used")}</div>
+    <div class="card"><h3><span class="hico">📦</span>Materials received</h3>${rowTable("materials", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["supplier", "Supplier"], ["challan", "Challan No."]], d.materials, "Material")}</div>
+    <div class="card"><h3><span class="hico">🧮</span>Materials consumed today</h3>${rowTable("consumed", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["usedFor", "Used for (item / location)", "", "dlWork"]], d.consumed || [], "Material used")}</div>
     <div class="grid-3">
       <label class="field card">Hindrances / problems<textarea data-f="hindrance" rows="3">${esc(d.hindrance || "")}</textarea></label>
       <label class="field card">Instructions / visitors<textarea data-f="visitors" rows="3">${esc(d.visitors || "")}</textarea></label>
       <label class="field card">Remarks<textarea data-f="remarks" rows="3">${esc(d.remarks || "")}</textarea></label></div>
-    <div class="card"><div class="row between"><h3>Photos of this day (${photos.length})</h3><button class="ghost" data-act="camera">📷 Take photo</button></div>
+    <div class="card"><div class="row between"><h3><span class="hico">📷</span>Photos of this day (${photos.length})</h3><button class="ghost" data-act="camera">📷 Take photo</button></div>
       ${photos.length ? `<div class="thumbs">${photos.map((p) => `<figure data-pid="${p.id}"><img src="${p.thumb}" alt="" data-view><figcaption>${esc(p.caption || "")}<small>${fmtDateTime(p.date).slice(11, 19)}</small></figcaption></figure>`).join("")}</div>` : `<p class="muted">Photos taken today with the GPS camera appear here and in the DPR.</p>`}</div>`;
 }
 
@@ -499,7 +548,11 @@ function onChange(e) {
 /** Hours from start/end, the row amount and the card total, updated while typing. */
 function updateRow(t, r) {
   const key = t.closest("[data-list]").dataset.list, tr = t.closest("tr");
-  if (key === "work") { const info = $(".ac-info", tr); if (info) info.innerHTML = workInfo(r); return; }
+  if (key === "work") {
+    if (["nos", "l", "b", "h"].includes(t.dataset.k)) { const mq = measuredQty(r); const qi = $('[data-k="qty"]', tr); if (mq != null) { r.qty = mq; if (qi) { qi.value = mq; qi.classList.add("auto"); } } else qi?.classList.remove("auto"); }
+    const info = $(".ac-info", tr); if (info) info.innerHTML = workInfo(r);
+    return;
+  }
   if (key === "machinery" && (t.dataset.k === "start" || t.dataset.k === "end")) { const h = timeDiff(r.start, r.end); if (h != null) { r.hours = h; const hi = $('[data-k="hours"]', tr); if (hi) hi.value = h; } }
   if (!CALC[key]) return;
   const c = $("[data-calc]", tr); if (c) c.textContent = inr(CALC[key](r));
@@ -603,8 +656,8 @@ async function printReport(kind, from, to, photoOpt = "8") {
     : [...A.labour].map(([k, v]) => [esc(k), v, round(v / Math.max(1, A.E.length), 1), inr(A.labourAmt.get(k))]);
   const labourCost = one ? listTotal("labour", d?.labour) : round([...A.labourAmt.values()].reduce((a, v) => a + v, 0), 2);
   const boqOf = (desc) => (s.boqItems || []).find((i) => i.description.trim() === desc);
-  const workRows = [...A.work].map(([k, v]) => { const [desc, unit] = k.split("|"); const locs = one ? (d.work.filter((w) => (w.desc || "").trim() === desc).map((w) => w.loc).filter(Boolean).join(", ")) : ""; const b = boqOf(desc); const up = A.upto.get(k) || v;
-    return [b ? esc(boqKey(b)) : "", esc(desc) + (locs ? `<br><small>${esc(locs)}</small>` : ""), esc(unit), v, up, b && num(b.qty) ? num(b.qty) : "", b && num(b.qty) ? round(num(b.qty) - up, 3) : ""]; });
+  const workRows = [...A.work].map(([k, v]) => { const [desc, unit] = k.split("|"); const locs = one ? (d.work.filter((w) => (w.desc || "").trim() === desc).map((w) => [w.loc, measuredQty(w) != null ? `${w.nos || 1} × ${["l", "b", "h"].map((k) => w[k]).filter((v) => String(v ?? "").trim() !== "").join(" × ")}` : ""].filter(Boolean).join(" ")).filter(Boolean).join("; ")) : ""; const b = boqOf(desc); const up = A.upto.get(k) || v;
+    return [b ? esc(boqKey(b)) : "", esc(desc) + (locs ? `<br><small>${esc(locs)}</small>` : ""), esc(unit), v, up, b && num(b.qty) ? num(b.qty) : "", b && num(b.qty) ? round(num(b.qty) - up, 3) : "", b && num(b.qty) ? `${pctOf(up, b.qty)}%` : ""]; });
   const matRows = one ? (d?.materials || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.supplier || ""), esc(m.challan || "")]) : [...A.materials].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
   const conRows = one ? (d?.consumed || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.usedFor || "")]) : [...A.consumed].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
   const machRows = one ? (d?.machinery || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.count) || 1, `${inr(m.rate)} / ${m.basis || "hour"}`, m.start && m.end ? `${m.start}–${m.end}` : "", num(m.hours) || "", inr(CALC.machinery(m))])
@@ -623,7 +676,8 @@ async function printReport(kind, from, to, photoOpt = "8") {
   const html = `<section class="p-page r-page">${head}
     <h4>1. Labour ${one ? "on site" : "(man-days)"}</h4>${tbl(one ? ["Category", "Nos", "Rate / day", "From", "Amount"] : ["Category", "Man-days", "Average per day", "Amount"], labourRows)}
     ${labourRows.length ? `<p class="r-tot">Total: ${q3(labourRows.reduce((a, r) => a + num(r[1]), 0))} ${one ? "nos" : "man-days"}${labourCost ? ` · ${inr(labourCost)}` : ""}</p>` : ""}
-    <h4>2. Work done</h4>${tbl(["BOQ No.", "Item of work", "Unit", one ? "Today" : "This period", "Up to date", "Tender qty", "Balance"], workRows)}
+    <h4>2. Work done</h4>${tbl(["BOQ No.", "Item of work", "Unit", one ? "Today" : "This period", "Up to date", "Tender qty", "Balance", "% done"], workRows)}
+    ${(() => { const o = overall(s, to); return o.n ? `<p class="r-tot">Overall progress of the BOQ up to ${fd(to)}: ${o.pct}%${o.byAmount ? " (by value)" : ""}</p>` : ""; })()}
     <h4>3. Materials received</h4>${tbl(one ? ["Material", "Qty", "Unit", "Supplier", "Challan"] : ["Material", "Qty", "Unit"], matRows)}
     <h4>4. Materials consumed</h4>${tbl(one ? ["Material", "Qty", "Unit", "Used for"] : ["Material", "Qty", "Unit"], conRows)}
     <h4>5. Machinery / equipment</h4>${tbl(one ? ["Machine", "Nos", "Rent", "Time", "Hours", "Amount"] : ["Machine", "Hours", "Amount"], machRows)}
