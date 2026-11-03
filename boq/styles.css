@@ -744,3 +744,5 @@ input.auto, textarea.auto { background: #eaf7ef; border-color: var(--brand); }
 .work-tab select[data-k="shape"] { min-width: 7.5rem; }
 #sitesRoot .grid-2:has([data-list="machinery"]) { grid-template-columns: 1fr; }
 #sitesRoot [data-list="machinery"] input[type="time"] { min-width: 6.5rem; }
+tr.sel-row td { background: #fdecec !important; }
+.mb { margin-bottom: .6rem; }

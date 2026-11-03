@@ -11,7 +11,7 @@ const fd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v).split
 
 let ctx; // { project, saveProject, toast, modal, closeModal, searchItems, rateOf, download }
 const $ = (s, el = document) => el.querySelector(s);
-const view = { tab: "bill", billId: "" };
+const view = { tab: "bill", billId: "", xsel: new Set() };
 const sched = (it) => it.schedule || (it.bsrId ? "G" : "H");
 const ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
 const m2 = (v) => money(v, false);
@@ -193,7 +193,7 @@ function billView(p, c) {
   const row = (r, i) => {
     const pct = r.tqty ? (r.qty / r.tqty) * 100 : null;
     return `<tr data-line="${r.id}" class="${r.extra ? "extra-row" : ""}" data-text="${esc((r.desc + " " + r.no).toLowerCase())}"><td><input data-mbs class="w70" value="${esc(bill.mbs?.[r.id] ?? "")}" placeholder="${i + 1}"></td><td>${esc(r.no)}</td>
-      <td class="desc"><div class="clamp">${esc(r.desc)}</div></td><td>${esc(r.unit)}</td>
+      <td class="desc"><div class="clamp">${esc(r.desc)}</div>${r.extra ? `<button class="link small danger-text" data-act="delExtraLine" title="Delete this extra item from the work and all its bills">🗑 Delete extra item</button>` : ""}</td><td>${esc(r.unit)}</td>
       <td class="num">${r.extra ? "—" : qtyFmt(r.tqty)}</td><td class="num muted">${qtyFmt(r.prevQty)}</td>
       <td class="num">${r.parts ? `<b>${qtyFmt(r.qty)}</b>${bill.mbRefs?.[r.id]?.length ? `<div class="small muted">from M.B.</div>` : ""}` : `<input data-q class="w120 num" value="${esc(bill.qty[r.id] ?? "")}" placeholder="0" title="Up-to-date quantity. For parts at different rates use “Part rate” or type e.g. 237.74@384.5 + 409.5@159">`}<div><button class="link small" data-act="mbRefs" title="Quantities from measurement book pages (e.g. 10/02 → 237.74)">MB refs${bill.mbRefs?.[r.id]?.length ? ` (${bill.mbRefs[r.id].length})` : ""}</button> · <button class="link small" data-act="addPart" title="Split this item into quantities paid at different rates">＋ part rate</button></div>${bill.mbRefs?.[r.id]?.length ? `<div class="small muted">MB: ${bill.mbRefs[r.id].map((x) => esc(x.page || "?")).join(", ")}</div>` : ""}</td>
       <td class="num">${qtyFmt(round(r.qty - r.prevQty, 3))}</td>
@@ -229,13 +229,22 @@ function billView(p, c) {
       <p class="small muted">${esc(amountInWords(k.say))}</p></div></div></div>`;
 }
 
+/** Removes extra items and every quantity entered against them in the bills. */
+function deleteExtras(p, ids) {
+  p.extras = p.extras.filter((x) => !ids.includes(x.id));
+  for (const b of p.bills) for (const key of ["qty", "parts", "partRate", "mbRefs", "mbs"]) if (b[key]) for (const id of ids) delete b[key][id];
+  ids.forEach((id) => view.xsel?.delete(id));
+}
+
 function extraView(p, c) {
   const bill = currentBill(p);
   const k = bill ? computeBill(p, bill) : null;
   return `<div class="card"><div class="row between"><h2>Extra items (not in the BOQ)</h2><button class="primary" data-act="addExtra">＋ Extra item</button></div>
     <p class="muted small">Items executed that are not in the tender BOQ. They are billed in the G-Schedule with the tender premium, and their total may not exceed ${num(c.extraLimitPct)}% of the contract value without sanction.</p>
-    <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>Description</th><th>Unit</th><th class="num">Rate</th><th class="num">Qty (latest bill)</th><th class="num">Amount</th><th></th></tr></thead><tbody>
-    ${p.extras.map((x, i) => { const r = k?.rows.find((r) => r.id === x.id); return `<tr data-x="${x.id}"><td>${i + 1}</td><td><textarea data-xf="description" rows="2">${esc(x.description)}</textarea></td><td><input data-xf="unit" class="w70" value="${esc(x.unit)}"></td><td><input data-xf="rate" type="number" step="any" class="w100 num" value="${x.rate}"></td><td class="num">${qtyFmt(r?.qty || 0)}</td><td class="num">${m2(r?.amt || 0)}</td><td><button class="icon danger-text" data-act="delExtra">🗑</button></td></tr>`; }).join("") || `<tr><td colspan="7" class="muted pad">No extra items.</td></tr>`}
+    ${p.extras.length ? `<div class="row gap wrap mb"><label class="check"><input type="checkbox" data-xall ${view.xsel?.size && view.xsel.size === p.extras.length ? "checked" : ""}> Select all</label>
+      <button class="ghost danger-text" data-act="delExtraSel" ${view.xsel?.size ? "" : "disabled"}>🗑 Delete selected${view.xsel?.size ? ` (${view.xsel.size})` : ""}</button></div>` : ""}
+    <div class="table-wrap"><table class="data"><thead><tr><th></th><th>#</th><th>Description</th><th>Unit</th><th class="num">Rate</th><th class="num">Qty (latest bill)</th><th class="num">Amount</th><th></th></tr></thead><tbody>
+    ${p.extras.map((x, i) => { const r = k?.rows.find((r) => r.id === x.id); return `<tr data-x="${x.id}" class="${view.xsel?.has(x.id) ? "sel-row" : ""}"><td><input type="checkbox" data-xsel ${view.xsel?.has(x.id) ? "checked" : ""}></td><td>${i + 1}</td><td><textarea data-xf="description" rows="2">${esc(x.description)}</textarea></td><td><input data-xf="unit" class="w70" value="${esc(x.unit)}"></td><td><input data-xf="rate" type="number" step="any" class="w100 num" value="${x.rate}"></td><td class="num">${qtyFmt(r?.qty || 0)}</td><td class="num">${m2(r?.amt || 0)}</td><td><button class="ghost small danger-text" data-act="delExtra">🗑 Delete</button></td></tr>`; }).join("") || `<tr><td colspan="8" class="muted pad">No extra items.</td></tr>`}
     </tbody></table></div>${bill ? `<button class="ghost mt" data-print="slip">Print extra item slip</button>` : ""}</div>`;
 }
 
@@ -339,7 +348,15 @@ function onClick(e) {
   if (act === "loadBOQ") { pickFiles(".xls,.xlsx,.ods,.csv,.pdf,.docx,image/*", loadBoq); return; }
   if (act === "loadWO") { pickFiles(".pdf,.xls,.xlsx,.docx,.txt,image/*", loadWorkOrder); return; }
   if (act === "addExtra") { addExtraDialog(p); return; }
-  if (act === "delExtra") { const id = e.target.closest("[data-x]").dataset.x; if (!confirm("Remove this extra item?")) return; p.extras = p.extras.filter((x) => x.id !== id); }
+  if (act === "delExtra" || act === "delExtraLine" || act === "delExtraSel") {
+    const ids = act === "delExtraSel" ? [...(view.xsel || [])] : [e.target.closest(act === "delExtra" ? "[data-x]" : "[data-line]").dataset[act === "delExtra" ? "x" : "line"]];
+    if (!ids.length) return;
+    const names = p.extras.filter((x) => ids.includes(x.id)).map((x) => `• ${x.description.slice(0, 70)}`).join("\n");
+    const billed = p.bills.some((b) => ids.some((id) => num(b.qty?.[id]) || b.parts?.[id]?.length || b.mbRefs?.[id]?.length));
+    if (!confirm(`Delete ${ids.length} extra item${ids.length > 1 ? "s" : ""}?\n${names}${billed ? "\n\nIts quantities are removed from every bill of this work too." : ""}`)) return;
+    deleteExtras(p, ids);
+    ctx.toast(`${ids.length} extra item${ids.length > 1 ? "s" : ""} deleted.`);
+  }
   if (act === "excel") { exportExcel(p); return; }
   if (act.startsWith("ph")) {
     const id = e.target.closest("[data-ph]").dataset.ph; const i = p.photos.findIndex((x) => x.id === id);
@@ -352,6 +369,8 @@ function onClick(e) {
 
 function onChange(e) {
   const p = ctx.project(); const c = contract(p); const el = e.target;
+  if (el.matches("[data-xsel]")) { const id = el.closest("[data-x]").dataset.x; el.checked ? view.xsel.add(id) : view.xsel.delete(id); renderBills(); return; }
+  if (el.matches("[data-xall]")) { view.xsel = new Set(el.checked ? p.extras.map((x) => x.id) : []); renderBills(); return; }
   if (el.id === "billSel") { view.billId = el.value; renderBills(); return; }
   if (el.id === "photoFile") { addPhotos([...el.files]); el.value = ""; return; }
   if (el.matches("[data-pname]")) { p.name = el.value.trim() || p.name; ctx.saveProject(); return; }
