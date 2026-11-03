@@ -1,0 +1,7 @@
+{
+  "name": "साइट साक्षी (SiteSaakshi) demo",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "forwardPorts": [8080],
+  "portsAttributes": { "8080": { "label": "साइट साक्षी", "onAutoForward": "openBrowser" } },
+  "postAttachCommand": "cd saakshi && node server.js --demo"
+}

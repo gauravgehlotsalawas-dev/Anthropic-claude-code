@@ -22,7 +22,7 @@ async function api(path, body, method) {
   if (body) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   const r = await fetch(path, opt);
   const data = (r.headers.get('content-type') || '').includes('json') ? await r.json() : await r.text();
-  if (r.status === 401 && path !== '/api/login') { me = null; renderLogin(); throw new Error(data.error || 'लॉगिन करें'); }
+  if (r.status === 401 && path !== 'api/login') { me = null; renderLogin(); throw new Error(data.error || 'लॉगिन करें'); }
   if (!r.ok) throw new Error(data.error || 'गड़बड़ी हुई');
   return data;
 }
@@ -37,7 +37,7 @@ async function busy(btn, fn) {
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 const fmtDay = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('hi-IN', { weekday: 'short', day: '2-digit', month: 'short' }) : '';
 const rupees = (n) => n == null ? '' : '₹ ' + Number(n).toLocaleString('en-IN');
-const photo = (hash) => hash ? `<img class="thumb" src="/photo/${esc(hash)}" alt="फ़ोटो" data-zoom="/photo/${esc(hash)}" loading="lazy">` : '';
+const photo = (hash) => hash ? `<img class="thumb" src="photo/${esc(hash)}" alt="फ़ोटो" data-zoom="photo/${esc(hash)}" loading="lazy">` : '';
 const mapLink = (lat, lng, label = 'नक्शा') => lat != null ? `<a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank" rel="noopener">${label}</a>` : '';
 
 function dialog(html, onMount) {
@@ -129,7 +129,11 @@ function renderLogin() {
     <p class="center"><button id="lotp">नया खाता / पहली बार / PIN भूल गए: OTP से लॉगिन</button></p>
     <p class="small muted">हर विभाग के इंजीनियर और सरकारी टेंडर में पंजीकृत हर ठेकेदार यहाँ अपना खाता बनाता है। अगर किसी प्रोजेक्ट में आपका नाम और मोबाइल डाला गया है, तो आपका खाता पहले से बना है: बस OTP से लॉगिन करें।</p></div>`;
   $('#lotp').onclick = renderOtp;
-  const go = () => busy($('#lb'), async () => { await api('/api/login', { mobile: $('#lm').value.trim(), pin: $('#lp').value }); await boot(); });
+  if (IS_DEMO) {
+    $('.login').insertAdjacentHTML('beforeend', `<div class="demologin"><p><b>डेमो: एक क्लिक में किसी भी भूमिका से देखें</b></p><div class="row">${DEMO_USERS.map(([m, l]) => `<button data-dm="${m}">${l}</button>`).join('')}</div></div>`);
+    document.querySelectorAll('[data-dm]').forEach((b) => (b.onclick = () => { $('#lm').value = b.dataset.dm; $('#lp').value = '1234'; $('#lb').click(); }));
+  }
+  const go = () => busy($('#lb'), async () => { await api('api/login', { mobile: $('#lm').value.trim(), pin: $('#lp').value }); await boot(); });
   $('#lb').onclick = go; $('#lp').onkeydown = (e) => e.key === 'Enter' && go();
 }
 function renderOtp() {
@@ -151,13 +155,13 @@ function renderOtp() {
     <p><button id="oback">← PIN से लॉगिन</button></p></div>`;
   $('#oback').onclick = renderLogin;
   $('#os').onclick = () => busy($('#os'), async () => {
-    const r = await api('/api/otp/send', { mobile: $('#om').value.trim() });
+    const r = await api('api/otp/send', { mobile: $('#om').value.trim() });
     $('#ostep').hidden = false; $('#onew').hidden = !!r.existing;
     $('#oinfo').innerHTML = (r.existing ? `खाता मिला: <b>${esc(r.existing.name)}</b> (${esc(ROLE[r.existing.role])})।` : 'नया खाता बनेगा।') + ' SMS पर आया OTP डालें।'
       + (r.dev_otp ? ` <span class="pill warn">डेमो OTP: ${esc(r.dev_otp)}</span>` : '');
   });
   $('#ov').onclick = () => busy($('#ov'), async () => {
-    await api('/api/otp/verify', { mobile: $('#om').value.trim(), code: $('#oc').value.trim(), pin: $('#op').value, name: $('#on').value, role: $('#or').value, office: $('#oo').value, department: $('#odp').value, reg_no: $('#org').value, gstin: $('#ogst').value });
+    await api('api/otp/verify', { mobile: $('#om').value.trim(), code: $('#oc').value.trim(), pin: $('#op').value, name: $('#on').value, role: $('#or').value, office: $('#oo').value, department: $('#odp').value, reg_no: $('#org').value, gstin: $('#ogst').value });
     await boot();
   });
 }
@@ -194,15 +198,39 @@ async function show() {
   main.innerHTML = '<p class="muted center">लोड हो रहा है…</p>';
   try { await VIEWS[tab](main); } catch (e) { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; }
   // an unanswered explanation follows the person on every screen until they reply
-  if (tab !== 'explanations') api('/api/explanations').then((exs) => {
+  if (tab !== 'explanations') api('api/explanations').then((exs) => {
     const n = exs.filter((e) => e.asked_to === me.id && !e.reply).length;
     if (!n || $('#exban')) return;
     main.insertAdjacentHTML('afterbegin', `<div class="notice" id="exban" style="background:var(--bad-bg)">❓ आपसे <b>${n}</b> स्पष्टीकरण माँगे गए हैं। ${settings.explanation_days} दिन में जवाब न दिया तो लाल झंडा लगेगा। <a href="#explanations">जवाब दें →</a></div>`);
   }).catch(() => {});
 }
+// ---------- demo: on static hosting (GitHub Pages) the server runs inside the browser ----------
+const STATIC_DEMO = location.hostname.endsWith('github.io') || new URLSearchParams(location.search).has('static-demo');
+let IS_DEMO = STATIC_DEMO;
+async function ensureDemoWorker() {
+  if (!STATIC_DEMO) return;
+  if (!('serviceWorker' in navigator)) throw new Error('यह ब्राउज़र डेमो नहीं चला सकता (service worker नहीं)। Chrome / Edge / Firefox / Safari का नया संस्करण खोलें');
+  $('#main').innerHTML = '<p class="muted center">डेमो तैयार हो रहा है (पहली बार कुछ सेकंड)…</p>';
+  await navigator.serviceWorker.register('demo-sw.js');
+  if (!navigator.serviceWorker.controller) await new Promise((ok) => navigator.serviceWorker.addEventListener('controllerchange', ok, { once: true }));
+}
+const DEMO_USERS = [['9000000005', 'ठेकेदार'], ['9000000004', 'JEN'], ['9000000003', 'AEN'], ['9000000002', 'XEN'], ['9000000001', 'S.E.'], ['9000000006', 'मुख्यालय (TIA)'], ['9000000000', 'Admin']];
+function demoBar() {
+  if (!IS_DEMO || $('#demobar')) return;
+  document.body.insertAdjacentHTML('afterbegin', `<div id="demobar" class="demobar"><b>डेमो</b>${STATIC_DEMO ? ': सारा डेटा सिर्फ़ इसी ब्राउज़र में है।' : ':'} सभी डेमो खातों का PIN 1234।
+    <button id="dmove">📍 डेमो साइटें मेरी जगह पर लाएँ</button>${STATIC_DEMO ? '<button id="dreset">↺ डेमो रीसेट</button>' : ''}</div>`);
+  $('#dmove').onclick = () => busy($('#dmove'), async () => { const p = await getPosition(); const r = await api('api/demo/move-sites', p); toast(`${r.moved} डेमो साइटें आपकी जगह पर: अब हाज़िरी और नाप यहीं से आज़माएँ`); });
+  if ($('#dreset')) $('#dreset').onclick = async () => {
+    if (!confirm('डेमो का सारा डेटा मिटाकर नए सिरे से शुरू करें?')) return;
+    for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+    indexedDB.deleteDatabase('saakshi-demo');
+    location.hash = 'home'; location.reload();
+  };
+}
 async function boot() {
+  try { await ensureDemoWorker(); } catch (e) { $('#main').innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return; }
   try {
-    const r = await api('/api/me'); me = r.user; settings = r.settings; today = r.today;
+    const r = await api('api/me'); me = r.user; settings = r.settings; today = r.today; if (r.demo) IS_DEMO = true; demoBar();
     const h = location.hash.slice(1);
     if (isPublicHash(h)) return route();
     tab = VIEWS[h] ? h : ''; renderShell();
@@ -213,13 +241,13 @@ async function boot() {
 const VIEWS = {};
 
 VIEWS.dash = async (main, week) => {
-  const d = await api('/api/dashboard' + (week ? '?week=' + week : ''));
+  const d = await api('api/dashboard' + (week ? '?week=' + week : ''));
   const c = d.compliance;
   const short = c.filter((r) => r.status === 'short').length;
   const statusPill = (r) => r.status === 'ok' ? '<span class="pill ok">पूरा</span>' : r.status === 'due' ? '<span class="pill warn">बाकी</span>' : '<span class="pill bad">कम</span>';
   main.innerHTML = `
     <div class="spread"><h2>सप्ताह ${fmtDay(d.week)} – ${fmtDay(d.week_end)}</h2>
-      <div class="row"><button id="prevW">← पिछला</button><button id="nextW">अगला →</button><a class="btn" href="/api/dashboard?format=csv&week=${d.week}">Excel (CSV)</a></div></div>
+      <div class="row"><button id="prevW">← पिछला</button><button id="nextW">अगला →</button><a class="btn" href="api/dashboard?format=csv&week=${d.week}">Excel (CSV)</a></div></div>
     ${d.pending_visit_confirmations ? `<div class="notice">आपके कामों पर <b>${d.pending_visit_confirmations}</b> हाज़िरियाँ आपकी पुष्टि का इंतज़ार कर रही हैं। <a href="#visits" data-go="visits">देखें</a></div>` : ''}
     ${d.red_flags.length ? `<div class="card" style="border-color:var(--bad)"><div class="spread"><h3 style="color:var(--bad)">🚩 ${d.red_flags.length} लाल झंडे</h3><a href="#flags" data-go="flags">सब देखें</a></div>
       ${d.red_flags.slice(0, 4).map((f) => `<p class="small"><span class="pill ${f.severity === 'high' ? 'bad' : f.severity === 'medium' ? 'warn' : ''}">${esc(FLAG_TYPE[f.type] || f.type)}</span> <b>${esc(f.work)}</b>: ${esc(f.text)}</p>`).join('')}</div>` : ''}
@@ -248,7 +276,7 @@ VIEWS.dash = async (main, week) => {
 const shiftDay = (day, n) => { const x = new Date(day + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 
 VIEWS.works = async (main) => {
-  const works = await api('/api/works');
+  const works = await api('api/works');
   const lv = (x) => x ? `${fmtDay(x.day)} <span class="${x.days_ago > 7 ? 'pill bad' : 'muted small'}">${x.days_ago} दिन</span>` : '<span class="pill bad">कभी नहीं</span>';
   main.innerHTML = `<h2>काम (${works.length})</h2><div class="grid">${works.map((w) => `<div class="card">
     <div class="spread"><h3>${esc(w.name)}</h3>${w.status === 'active' ? '' : '<span class="pill">बंद</span>'}</div>
@@ -265,8 +293,8 @@ VIEWS.works = async (main) => {
 };
 
 VIEWS.attend = async (main) => {
-  const works = (await api('/api/works')).filter((w) => w.status === 'active');
-  const visits = await api('/api/visits?from=' + today);
+  const works = (await api('api/works')).filter((w) => w.status === 'active');
+  const visits = await api('api/visits?from=' + today);
   const mine = visits.filter((v) => v.user_id === me.id);
   main.innerHTML = `<h2>साइट पर हाज़िरी</h2>
     <div class="notice">हाज़िरी तभी गिनी जाएगी जब आप साइट के घेरे के अंदर हों, GPS सही हो और लाइव फ़ोटो ली जाए। समय सर्वर का दर्ज होता है, फ़ोन का नहीं। दर्ज हाज़िरी बदली या मिटाई नहीं जा सकती।</div>
@@ -284,13 +312,13 @@ VIEWS.attend = async (main) => {
     const pos = await getPosition();
     $('#ar').innerHTML = `<p class="small muted">GPS मिला (±${pos.accuracy} मी.)।</p>`;
     const shot = await takePhoto('हाज़िरी फ़ोटो: ' + work.name, () => [`${me.name} (${ROLE_SHORT[me.role]})`, work.name.slice(0, 60), `${new Date().toLocaleString('hi-IN')} · ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)} ±${pos.accuracy}m`]);
-    const r = await api('/api/visits', { work_id: work.id, ...pos, client_ts: new Date().toISOString(), photo: shot.dataUrl, from_gallery: shot.fromGallery, note: $('#an').value });
+    const r = await api('api/visits', { work_id: work.id, ...pos, client_ts: new Date().toISOString(), photo: shot.dataUrl, from_gallery: shot.fromGallery, note: $('#an').value });
     toast(r.counts ? 'हाज़िरी दर्ज हुई ✓' : 'दर्ज हुई, पर गिनी नहीं जाएगी: ' + r.flags.map((f) => FLAG[f] || f).join(', '), !r.counts);
     show();
   });
   main.querySelectorAll('[data-out]').forEach((b) => (b.onclick = () => busy(b, async () => {
     const pos = await getPosition();
-    const r = await api(`/api/visits/${b.dataset.out}/checkout`, pos);
+    const r = await api(`api/visits/${b.dataset.out}/checkout`, pos);
     toast(`वापसी दर्ज: ${r.minutes} मिनट साइट पर, ${r.out_distance_m} मी. दूर से`);
     show();
   })));
@@ -298,16 +326,16 @@ VIEWS.attend = async (main) => {
 const flagPills = (flags) => (flags ? flags.split(',') : []).filter((f) => f !== 'outside_fence').map((f) => `<span class="pill warn">${esc(FLAG[f] || f)}</span>`).join(' ');
 
 VIEWS.visits = async (main, filter) => {
-  const works = await api('/api/works');
+  const works = await api('api/works');
   const f = filter || { work_id: '', from: shiftDay(today, -30), to: today };
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
-  const visits = await api('/api/visits?' + qs);
+  const visits = await api('api/visits?' + qs);
   const isC = me.role === 'contractor';
   main.innerHTML = `<h2>${isC ? 'अधिकारियों की हाज़िरी: पुष्टि करें' : 'हाज़िरी रिकॉर्ड'}</h2>
     ${isC ? '<div class="notice">आप साइट पर मौजूद थे या आपके आदमी थे: अगर अधिकारी सच में आए तो "हाँ, आए थे" दबाएँ। अगर नहीं आए या फ़र्ज़ी हाज़िरी है तो "आपत्ति" दबाकर कारण लिखें। आपत्ति वाली हाज़िरी गिनी नहीं जाती और ऊपर के अधिकारी को दिखती है।</div>' : ''}
     <div class="card row"><select id="vw" style="max-width:300px"><option value="">सभी काम</option>${works.map((w) => `<option value="${w.id}" ${String(w.id) === String(f.work_id) ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>
       <input type="date" id="vf" value="${f.from}" style="max-width:170px"><input type="date" id="vt" value="${f.to}" style="max-width:170px">
-      <button id="vgo">दिखाएँ</button><a class="btn" href="/api/visits?format=csv&${qs}">Excel (CSV)</a></div>
+      <button id="vgo">दिखाएँ</button><a class="btn" href="api/visits?format=csv&${qs}">Excel (CSV)</a></div>
     <div class="list">${visits.map((v) => `<div class="card" style="${v.counts ? '' : 'box-shadow: inset 3px 0 var(--bad)'}">
       <div class="row" style="align-items:flex-start;flex-wrap:nowrap">${photo(v.photo)}<div style="flex:1;min-width:0">
         <div class="spread"><b>${esc(v.officer)} <span class="small muted">${ROLE_SHORT[v.role]}</span></b><span class="small muted">${fmtTime(v.server_ts)}</span></div>
@@ -318,18 +346,18 @@ VIEWS.visits = async (main, filter) => {
       <div style="margin-top:8px">ठेकेदार: ${v.contractor_status === 'pending' ? (isC ? `<button data-ok="${v.id}">हाँ, आए थे</button> <button class="danger" data-no="${v.id}">आपत्ति</button>` : '<span class="muted small">पुष्टि बाकी</span>')
         : v.contractor_status === 'confirmed' ? '<span class="pill ok">पुष्टि</span>' : `<span class="pill bad">आपत्ति</span> <span class="small">${esc(v.contractor_note)}</span>`}</div></div>`).join('') || '<p class="muted">कोई हाज़िरी नहीं</p>'}</div>`;
   $('#vgo').onclick = () => VIEWS.visits(main, { work_id: $('#vw').value, from: $('#vf').value, to: $('#vt').value });
-  main.querySelectorAll('[data-ok]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/visits/${b.dataset.ok}/respond`, { status: 'confirmed' }); VIEWS.visits(main, f); })));
+  main.querySelectorAll('[data-ok]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`api/visits/${b.dataset.ok}/respond`, { status: 'confirmed' }); VIEWS.visits(main, f); })));
   main.querySelectorAll('[data-no]').forEach((b) => (b.onclick = () => {
     dialog(`<h3>आपत्ति दर्ज करें</h3><label>कारण</label><textarea id="dn" placeholder="जैसे: अधिकारी साइट पर नहीं आए, फ़ोटो साइट की नहीं है"></textarea>
       <div class="row" style="margin-top:10px"><button class="primary" id="ds">दर्ज करें</button><button onclick="dlg.close()">रद्द</button></div>`, () => {
-      $('#ds').onclick = () => busy($('#ds'), async () => { await api(`/api/visits/${b.dataset.no}/respond`, { status: 'disputed', note: $('#dn').value }); $('#dlg').close(); VIEWS.visits(main, f); });
+      $('#ds').onclick = () => busy($('#ds'), async () => { await api(`api/visits/${b.dataset.no}/respond`, { status: 'disputed', note: $('#dn').value }); $('#dlg').close(); VIEWS.visits(main, f); });
     });
   }));
 };
 
 VIEWS.dpr = async (main) => {
-  const works = await api('/api/works');
-  const dprs = await api('/api/dprs');
+  const works = await api('api/works');
+  const dprs = await api('api/dprs');
   const isJ = me.role === 'jen', isC = me.role === 'contractor';
   const pendingWorks = isJ ? works.filter((w) => w.status === 'active' && w.jen_id === me.id && !w.dpr_today) : [];
   main.innerHTML = `<h2>DPR (दैनिक प्रगति रिपोर्ट)</h2>
@@ -345,7 +373,7 @@ VIEWS.dpr = async (main) => {
       <div class="row" style="margin-top:10px"><button id="dp">📷 साइट फ़ोटो जोड़ें</button><span id="dpi" class="small muted"></span></div>
       <p><button class="primary big" id="ds">DPR जमा करें</button></p></div>` : '<div class="card"><span class="pill ok">आज की सभी DPR जमा हैं</span></div>') : ''}
     ${isC ? '<div class="notice">JEN की DPR पढ़ें। अगर काम, मात्रा या रुकावट गलत लिखी है तो "असहमत" दबाकर सही बात लिखें। यह रिकॉर्ड बाद में बिल और समय-वृद्धि (extension) में सबूत बनता है।</div>' : ''}
-    <div class="spread"><h3>पिछली DPR</h3><a class="btn" href="/api/dprs?format=csv">Excel (CSV)</a></div>
+    <div class="spread"><h3>पिछली DPR</h3><a class="btn" href="api/dprs?format=csv">Excel (CSV)</a></div>
     <div class="list">${dprs.map((d) => `<div class="card"><div class="spread"><b>${fmtDay(d.day)} · ${esc(d.work)}</b><span class="small muted">${esc(d.jen)} · ${fmtTime(d.server_ts)}
       ${d.distance_m != null ? ` · ${d.in_fence ? 'साइट से' : `<span class="pill warn">साइट से ${d.distance_m} मी. दूर</span>`}` : ''}</span></div>
       <p>${esc(d.work_done)}</p>
@@ -359,14 +387,14 @@ VIEWS.dpr = async (main) => {
     $('#dp').onclick = async () => { pic = await pickPhoto(); $('#dpi').textContent = pic ? 'फ़ोटो जुड़ी ✓' : ''; };
     $('#ds').onclick = () => busy($('#ds'), async () => {
       let pos = {}; try { pos = await getPosition(); } catch { /* DPR is accepted without GPS; distance is then blank */ }
-      await api('/api/dprs', { work_id: Number($('#dw').value), work_done: $('#d1').value, labour: $('#d2').value, materials: $('#d3').value, machinery: $('#d4').value, hindrance: $('#d5').value, instructions: $('#d6').value, photo: pic, ...pos });
+      await api('api/dprs', { work_id: Number($('#dw').value), work_done: $('#d1').value, labour: $('#d2').value, materials: $('#d3').value, machinery: $('#d4').value, hindrance: $('#d5').value, instructions: $('#d6').value, photo: pic, ...pos });
       toast('DPR जमा हुई ✓'); show();
     });
   }
-  main.querySelectorAll('[data-agree]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/dprs/${b.dataset.agree}/respond`, { status: 'agreed' }); show(); })));
+  main.querySelectorAll('[data-agree]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`api/dprs/${b.dataset.agree}/respond`, { status: 'agreed' }); show(); })));
   main.querySelectorAll('[data-dis]').forEach((b) => (b.onclick = () => dialog(`<h3>DPR से असहमति</h3><label>सही स्थिति लिखें</label><textarea id="xn"></textarea>
     <div class="row" style="margin-top:10px"><button class="primary" id="xs">दर्ज करें</button><button onclick="dlg.close()">रद्द</button></div>`, () => {
-    $('#xs').onclick = () => busy($('#xs'), async () => { await api(`/api/dprs/${b.dataset.dis}/respond`, { status: 'disagreed', note: $('#xn').value }); $('#dlg').close(); show(); });
+    $('#xs').onclick = () => busy($('#xs'), async () => { await api(`api/dprs/${b.dataset.dis}/respond`, { status: 'disagreed', note: $('#xn').value }); $('#dlg').close(); show(); });
   })));
 };
 
@@ -380,8 +408,8 @@ function reqTable(rows) {
 function wireReqLinks(el) { el.querySelectorAll('[data-req]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); openRequest(a.dataset.req); })); }
 
 VIEWS.requests = async (main) => {
-  const works = await api('/api/works');
-  const rows = await api('/api/requests');
+  const works = await api('api/works');
+  const rows = await api('api/requests');
   const isC = me.role === 'contractor';
   main.innerHTML = `<h2>${isC ? 'नाप / बिल / निरीक्षण के लिए अनुरोध' : 'ठेकेदारों के अनुरोध'}</h2>
     ${isC ? `<div class="card"><h3>नया अनुरोध</h3>
@@ -393,21 +421,21 @@ VIEWS.requests = async (main) => {
       <label>राशि (बिल हो तो)</label><input id="ra" inputmode="decimal">
       <div class="row" style="margin-top:10px"><button id="rp">📷 फ़ोटो/पत्र जोड़ें</button><span id="rpi" class="small muted"></span></div>
       <p><button class="primary big" id="rb">अनुरोध भेजें</button></p></div>` : ''}
-    <div class="spread"><h3>सभी अनुरोध</h3><a class="btn" href="/api/requests?format=csv">Excel (CSV)</a></div>
+    <div class="spread"><h3>सभी अनुरोध</h3><a class="btn" href="api/requests?format=csv">Excel (CSV)</a></div>
     <div class="card">${reqTable(rows)}</div>`;
   wireReqLinks(main);
   if (isC) {
     let pic = null;
     $('#rp').onclick = async () => { pic = await pickPhoto(); $('#rpi').textContent = pic ? 'फ़ोटो जुड़ी ✓' : ''; };
     $('#rb').onclick = () => busy($('#rb'), async () => {
-      await api('/api/requests', { work_id: Number($('#rw').value), type: $('#rt').value, title: $('#rs').value, details: $('#rd').value, amount: $('#ra').value, photo: pic });
+      await api('api/requests', { work_id: Number($('#rw').value), type: $('#rt').value, title: $('#rs').value, details: $('#rd').value, amount: $('#ra').value, photo: pic });
       toast('अनुरोध भेजा गया ✓'); show();
     });
   }
 };
 
 async function openRequest(id) {
-  const r = await api('/api/requests/' + id);
+  const r = await api('api/requests/' + id);
   const isC = me.role === 'contractor';
   const isOfficer = !isC;
   const open = r.status === 'open' || r.status === 'reopened';
@@ -423,7 +451,7 @@ async function openRequest(id) {
       ${isOfficer && open && nextStages.length ? `<select id="qsg" style="max-width:200px">${nextStages.map((s) => `<option value="${s}">${BILL_STAGE[s]}</option>`).join('')}</select><button class="primary" id="qsb">चरण आगे बढ़ाएँ</button>` : ''}
       ${isC && r.status === 'done' ? '<button class="primary" id="qcl">हाँ, हो गया: बंद करें</button><button class="danger" id="qro">नहीं हुआ: दोबारा खोलें</button>' : ''}
       <button onclick="dlg.close()">बंद</button></div>`, () => {
-    const act = (btn, body) => busy(btn, async () => { await api(`/api/requests/${r.id}/action`, { note: $('#qn').value, ...body }); $('#dlg').close(); toast('दर्ज हुआ ✓'); show(); });
+    const act = (btn, body) => busy(btn, async () => { await api(`api/requests/${r.id}/action`, { note: $('#qn').value, ...body }); $('#dlg').close(); toast('दर्ज हुआ ✓'); show(); });
     $('#qc').onclick = () => act($('#qc'), { action: 'comment' });
     if ($('#qd')) $('#qd').onclick = () => act($('#qd'), { action: 'done' });
     if ($('#qsb')) $('#qsb').onclick = () => act($('#qsb'), { action: 'stage', stage: $('#qsg').value });
@@ -434,10 +462,10 @@ async function openRequest(id) {
 const actionLabel = (a) => ({ raised: 'अनुरोध दिया', comment: 'टिप्पणी', done: 'पूरा बताया', close: 'ठेकेदार ने बंद किया', reopen: 'दोबारा खोला' }[a] || (a.startsWith('stage:') ? 'चरण: ' + (BILL_STAGE[a.slice(6)] || a) : a));
 
 VIEWS.complaints = async (main) => {
-  const rows = await api('/api/complaints');
+  const rows = await api('api/complaints');
   const isC = me.role === 'contractor';
   let works = [], users = [];
-  if (isC) { works = await api('/api/works'); users = (await api('/api/users')).filter((u) => ['jen', 'aen', 'xen'].includes(u.role)); }
+  if (isC) { works = await api('api/works'); users = (await api('api/users')).filter((u) => ['jen', 'aen', 'xen'].includes(u.role)); }
   main.innerHTML = `<h2>शिकायत</h2>
     ${isC ? `<div class="card"><div class="notice">शिकायत सिर्फ़ S.E. / विभाग प्रमुख (Admin) को दिखती है, जिस अधिकारी के बारे में है उसे नहीं। तथ्य लिखें: तारीख़, क्या कहा या माँगा गया, कौन मौजूद था।</div>
       <label>काम</label><select id="cw"><option value="">—</option>${works.map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select>
@@ -448,14 +476,14 @@ VIEWS.complaints = async (main) => {
       <p class="small">${esc(c.raised_by_name)}${c.against ? ` → <b>${esc(c.against)}</b>` : ''} · <span class="pill ${c.status === 'closed' ? '' : 'warn'}">${c.status === 'open' ? 'खुली' : c.status === 'closed' ? 'बंद' : 'कार्रवाई जारी'}</span></p>
       <p>${esc(c.text)}</p>${c.response ? `<p class="small"><b>जवाब (${esc(c.responder)}, ${fmtTime(c.responded_ts)}):</b> ${esc(c.response)}</p>` : ''}
       ${!isC ? `<div class="row"><input data-resp="${c.id}" placeholder="जवाब / की गई कार्रवाई"><button data-send="${c.id}">भेजें</button><button data-close="${c.id}">भेजें और बंद करें</button></div>` : ''}</div>`).join('') || '<p class="muted">कोई शिकायत नहीं।</p>'}</div>`;
-  if (isC) $('#cb').onclick = () => busy($('#cb'), async () => { await api('/api/complaints', { work_id: $('#cw').value || null, against_user_id: $('#cu').value || null, text: $('#ct').value }); toast('शिकायत दर्ज हुई ✓'); show(); });
-  const respond = (b, close) => busy(b, async () => { const id = b.dataset.send || b.dataset.close; await api(`/api/complaints/${id}/respond`, { response: $(`[data-resp="${id}"]`).value, status: close ? 'closed' : 'in_progress' }); show(); });
+  if (isC) $('#cb').onclick = () => busy($('#cb'), async () => { await api('api/complaints', { work_id: $('#cw').value || null, against_user_id: $('#cu').value || null, text: $('#ct').value }); toast('शिकायत दर्ज हुई ✓'); show(); });
+  const respond = (b, close) => busy(b, async () => { const id = b.dataset.send || b.dataset.close; await api(`api/complaints/${id}/respond`, { response: $(`[data-resp="${id}"]`).value, status: close ? 'closed' : 'in_progress' }); show(); });
   main.querySelectorAll('[data-send]').forEach((b) => (b.onclick = () => respond(b, false)));
   main.querySelectorAll('[data-close]').forEach((b) => (b.onclick = () => respond(b, true)));
 };
 
 VIEWS.admin = async (main) => {
-  const [users, works] = await Promise.all([api('/api/users'), api('/api/works')]);
+  const [users, works] = await Promise.all([api('api/users'), api('api/works')]);
   const opts = (role, sel) => `<option value="">—</option>` + users.filter((u) => u.role === role && u.active).map((u) => `<option value="${u.id}" ${u.id === sel ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
   main.innerHTML = `<h2>प्रबंधन</h2>
     <div class="card"><div class="spread"><h3>काम और साइट का घेरा (geo-fence)</h3><button class="primary" id="nw">＋ नया काम</button></div>
@@ -508,13 +536,13 @@ VIEWS.admin = async (main) => {
       <textarea id="imp" placeholder="Ramesh Kumar, 9876543210, jen, PWD, EMP1234"></textarea><p><button id="impb">जोड़ें</button> <span id="impr" class="small"></span></p></div>
     <div class="card"><h3>ऑडिट लॉग</h3><div id="audit" class="small muted">…</div></div>`;
   $('#nw').onclick = () => workForm(null, opts);
-  $('#impb').onclick = () => busy($('#impb'), async () => { const r = await api('/api/users/import', { text: $('#imp').value }); $('#impr').textContent = `${r.added} जोड़े` + (r.skipped.length ? `; छोड़े: ${r.skipped.join('; ')}` : ''); });
+  $('#impb').onclick = () => busy($('#impb'), async () => { const r = await api('api/users/import', { text: $('#imp').value }); $('#impr').textContent = `${r.added} जोड़े` + (r.skipped.length ? `; छोड़े: ${r.skipped.join('; ')}` : ''); });
   main.querySelectorAll('[data-ew]').forEach((b) => (b.onclick = () => workForm(works.find((w) => String(w.id) === b.dataset.ew), opts)));
   $('#nu').onclick = () => userForm(null);
   main.querySelectorAll('[data-eu]').forEach((b) => (b.onclick = () => userForm(users.find((u) => String(u.id) === b.dataset.eu))));
   if ($('#ss')) $('#ss').onclick = () => busy($('#ss'), async () => {
     const n = (id) => Number($(id).value);
-    settings = await api('/api/settings', {
+    settings = await api('api/settings', {
       visits_per_week: { jen: n('#sj'), aen: n('#sa'), xen: n('#sx') },
       sla_days: Object.fromEntries(Object.keys(REQ_TYPE).map((k) => [k, n('#sl_' + k)])),
       max_gps_accuracy_m: n('#sg'), min_visit_minutes: n('#sm'), escalate_after_days: n('#se'),
@@ -523,7 +551,7 @@ VIEWS.admin = async (main) => {
     }, 'PUT');
     toast('नियम सहेजे गए ✓');
   });
-  const log = await api('/api/audit');
+  const log = await api('api/audit');
   $('#audit').innerHTML = log.slice(0, 50).map((a) => `<div>${fmtTime(a.ts)} · ${esc(a.by)} · ${esc(a.action)}</div>`).join('') || 'कुछ नहीं';
 };
 function workForm(w, opts) {
@@ -546,7 +574,7 @@ function workForm(w, opts) {
     $('#fsave').onclick = () => busy($('#fsave'), async () => {
       const body = { name: $('#fn').value, wo_no: $('#fo').value, office: $('#ff').value, contractor_id: $('#fc').value || null, jen_id: $('#fj').value || null, aen_id: $('#fa').value || null, xen_id: $('#fx').value || null,
         lat: $('#flat').value, lng: $('#flng').value, radius_m: $('#fr').value, start_date: $('#fs').value, end_date: $('#fe').value, status: $('#fst').value };
-      if (w) await api('/api/works/' + w.id, body, 'PUT'); else await api('/api/works', body);
+      if (w) await api('api/works/' + w.id, body, 'PUT'); else await api('api/works', body);
       $('#dlg').close(); toast('सहेजा गया ✓'); show();
     });
   });
@@ -563,8 +591,8 @@ function userForm(u) {
       <label><input type="checkbox" id="uv" ${u.verified ? 'checked' : ''} style="width:auto"> पहचान जाँची गई (विभाग के रिकॉर्ड से)</label>` : ''}
     <div class="row" style="margin-top:12px"><button class="primary" id="usave">सहेजें</button><button onclick="dlg.close()">रद्द</button></div>`, () => {
     $('#usave').onclick = () => busy($('#usave'), async () => {
-      if (u) await api('/api/users/' + u.id, { name: $('#un').value, role: $('#ur').value, office: $('#uo').value, pin: $('#up').value || undefined, active: $('#ua').checked, verified: $('#uv').checked }, 'PUT');
-      else await api('/api/users', { name: $('#un').value, mobile: $('#um').value, role: $('#ur').value, office: $('#uo').value, pin: $('#up').value });
+      if (u) await api('api/users/' + u.id, { name: $('#un').value, role: $('#ur').value, office: $('#uo').value, pin: $('#up').value || undefined, active: $('#ua').checked, verified: $('#uv').checked }, 'PUT');
+      else await api('api/users', { name: $('#un').value, mobile: $('#um').value, role: $('#ur').value, office: $('#uo').value, pin: $('#up').value });
       $('#dlg').close(); toast('सहेजा गया ✓'); show();
     });
   });
@@ -575,16 +603,16 @@ VIEWS.account = async (main) => {
     <label>पुराना PIN</label><input id="p1" type="password" inputmode="numeric" maxlength="8">
     <label>नया PIN</label><input id="p2" type="password" inputmode="numeric" maxlength="8">
     <p class="row"><button class="primary" id="pc">PIN बदलें</button><button id="lo">लॉगआउट</button></p></div>`;
-  $('#pc').onclick = () => busy($('#pc'), async () => { await api('/api/me/pin', { old_pin: $('#p1').value, new_pin: $('#p2').value }); toast('PIN बदल गया ✓'); });
-  $('#lo').onclick = async () => { await api('/api/logout', {}); me = null; location.hash = 'home'; route(); };
+  $('#pc').onclick = () => busy($('#pc'), async () => { await api('api/me/pin', { old_pin: $('#p1').value, new_pin: $('#p2').value }); toast('PIN बदल गया ✓'); });
+  $('#lo').onclick = async () => { await api('api/logout', {}); me = null; location.hash = 'home'; route(); };
 };
 
 // ---------- red flags (shown up to the tender inviting authority) ----------
 VIEWS.flags = async (main) => {
-  const flags = await api('/api/flags');
+  const flags = await api('api/flags');
   const by = {};
   for (const f of flags) (by[f.against_role || 'other'] ||= []).push(f);
-  main.innerHTML = `<div class="spread"><h2>🚩 लाल झंडे (${flags.length})</h2><a class="btn" href="/api/flags?format=csv">Excel (CSV)</a></div>
+  main.innerHTML = `<div class="spread"><h2>🚩 लाल झंडे (${flags.length})</h2><a class="btn" href="api/flags?format=csv">Excel (CSV)</a></div>
     <div class="notice">ये झंडे अपने-आप बनते हैं और तभी हटते हैं जब काम सच में हो जाए। कोई इन्हें हाथ से मिटा नहीं सकता। ये उस काम के JEN, AEN, XEN, ठेकेदार, S.E. और <b>निविदा आमंत्रण प्राधिकारी / मुख्यालय</b>, सबको एक जैसे दिखते हैं। झंडे दोनों तरफ़ लगते हैं: अधिकारी सत्यापन न करें तो उन पर, और ठेकेदार ज़्यादा दावा करे या अपडेट न डाले तो उस पर।</div>
     <div class="stats">${['jen', 'aen', 'xen', 'contractor'].map((r) => `<div class="stat"><b style="color:${(by[r] || []).length ? 'var(--bad)' : 'inherit'}">${(by[r] || []).length}</b><span>${ROLE_SHORT[r]} पर</span></div>`).join('')}</div>
     <div class="list">${flags.map((f) => `<div class="card" style="box-shadow: inset 4px 0 ${f.severity === 'high' ? 'var(--bad)' : f.severity === 'medium' ? 'var(--warn)' : 'var(--line)'}">
@@ -597,15 +625,15 @@ VIEWS.flags = async (main) => {
       ${f.against_id && f.against_id !== me.id && ['se', 'admin', 'hq', 'xen'].includes(me.role) ? `<button data-ask="${flags.indexOf(f)}">❓ स्पष्टीकरण माँगें</button>` : ''}
       ${f.age_days >= 7 ? `<span class="pill bad">${f.age_days} दिन पुराना</span>` : ''}</div></div>`).join('') || '<div class="card"><span class="pill ok">कोई लाल झंडा नहीं 👍</span></div>'}</div>`;
   main.querySelectorAll('[data-ask]').forEach((b) => (b.onclick = () => askExplanation(flags[Number(b.dataset.ask)])));
-  main.querySelectorAll('[data-res]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/work-flags/${b.dataset.res}/resolve`, { note: '' }); show(); })));
+  main.querySelectorAll('[data-res]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`api/work-flags/${b.dataset.res}/resolve`, { note: '' }); show(); })));
 };
 
 // ---------- contractor: today's work with quantities and site photos ----------
 VIEWS.today = async (main) => {
-  const works = (await api('/api/works')).filter((w) => w.status === 'active' && w.contractor_id === me.id && w.items_count);
+  const works = (await api('api/works')).filter((w) => w.status === 'active' && w.contractor_id === me.id && w.items_count);
   if (!works.length) { main.innerHTML = '<div class="card"><p>पहले अपना प्रोजेक्ट (वर्क ऑर्डर और BOQ) डालें।</p><button class="primary" data-go="newproject">＋ नया प्रोजेक्ट</button></div>'; main.querySelector('[data-go]').onclick = () => { tab = 'newproject'; renderShell(); }; return; }
   const sel = VIEWS.today.work || works[0].id;
-  const w = await api('/api/works/' + sel);
+  const w = await api('api/works/' + sel);
   const pct = (x) => w.wo_amount || w.boq_total ? Math.round((x / (w.wo_amount || w.boq_total)) * 1000) / 10 : 0;
   const nextMilestone = w.milestone_step ? Math.ceil((w.claimed_amount + 1) / w.milestone_step) * w.milestone_step : null;
   main.innerHTML = `<h2>आज का काम अपडेट करें</h2>
@@ -638,11 +666,11 @@ VIEWS.today = async (main) => {
   $('#tsub').onclick = () => busy($('#tsub'), async () => {
     const lines = [...main.querySelectorAll('[data-item]')].filter((i) => Number(i.value)).map((i) => ({ item_id: Number(i.dataset.item), qty: Number(i.value) }));
     const pos = await getPosition();
-    const r = await api('/api/progress', { work_id: w.id, lines, note: $('#tn').value, photos, from_gallery: fromGallery, ...pos });
+    const r = await api('api/progress', { work_id: w.id, lines, note: $('#tn').value, photos, from_gallery: fromGallery, ...pos });
     toast(r.verification_id ? `जमा हुआ ✓ माइलस्टोन पूरा: JEN को ${r.jen_due_hours} घंटे में साइट पर नाप लेना होगा` : 'अपडेट जमा हुआ ✓' + (r.flags.length ? ' (' + r.flags.map((f) => FLAG[f] || f).join(', ') + ')' : ''), r.flags.length > 0);
     show();
   });
-  const prev = await api('/api/progress?work_id=' + w.id);
+  const prev = await api('api/progress?work_id=' + w.id);
   $('#tprev').innerHTML = progressCards(prev.slice(0, 20));
 };
 const progressCards = (rows) => rows.map((p) => `<div class="card"><div class="spread"><b>${fmtTime(p.server_ts)}</b><span>${rupees(Math.round(p.amount))}</span></div>
@@ -653,7 +681,7 @@ const progressCards = (rows) => rows.map((p) => `<div class="card"><div class="s
 
 // ---------- 10% milestone verification ----------
 VIEWS.verify = async (main) => {
-  const vs = await api('/api/verifications');
+  const vs = await api('api/verifications');
   main.innerHTML = `<h2>${settings.milestone_percent}% माइलस्टोन सत्यापन</h2>
     <div class="notice">${settings.deemed_approval ? `<b>⚖️ मान्य अनुमोदन:</b> JEN की समय-सीमा के ${settings.deemed_measure_hours} घंटे बाद तक भी JEN, AEN या XEN में से कोई नाप न ले, तो ठेकेदार की साइट-घेरे के अंदर से GPS-फ़ोटो के साथ डाली मात्रा अपने-आप मान्य हो जाती है (BOQ की सीमा तक), और ठेकेदार उस पर बिल बना सकता है। अनुमोदन ${settings.deemed_approve_hours} घंटे देर हो तो नाप मान्य। बाद के असली नाप में कम निकले तो अगले बिल में समायोजन। <br>` : ''}ठेकेदार का दावा हर ${settings.milestone_percent}%${settings.milestone_max_amount ? ` (या ${rupees(settings.milestone_max_amount)})` : ''} पार करते ही: <b>JEN ${settings.jen_verify_hours} घंटे में साइट पर</b> (GPS घेरे के अंदर, लाइव फ़ोटो के साथ) नाप दर्ज करेगा, फिर <b>AEN ${settings.aen_approve_hours} घंटे में</b> अनुमोदन करेगा। देर होते ही लाल झंडा लगता है और मुख्यालय तक दिखता है।</div>
     <div class="list">${vs.map((v) => `<div class="card" style="box-shadow: inset 4px 0 ${v.overdue_hours ? 'var(--bad)' : v.status === 'approved' ? 'var(--ok)' : 'var(--warn)'}">
@@ -676,17 +704,17 @@ VIEWS.verify = async (main) => {
   main.querySelectorAll('[data-vopen]').forEach((b) => (b.onclick = () => verifyDialog(find(b.dataset.vopen), 'view')));
   main.querySelectorAll('[data-vmeasure]').forEach((b) => (b.onclick = () => verifyDialog(find(b.dataset.vmeasure), 'measure')));
   main.querySelectorAll('[data-vapprove]').forEach((b) => (b.onclick = () => verifyDialog(find(b.dataset.vapprove), 'approve')));
-  main.querySelectorAll('[data-vagree]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/verifications/${b.dataset.vagree}/respond`, { status: 'agreed' }); show(); })));
+  main.querySelectorAll('[data-vagree]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`api/verifications/${b.dataset.vagree}/respond`, { status: 'agreed' }); show(); })));
   main.querySelectorAll('[data-vdis]').forEach((b) => (b.onclick = () => dialog(`<h3>नाप से असहमति</h3><label>कारण / सही मात्रा</label><textarea id="vn"></textarea>
     <div class="row" style="margin-top:10px"><button class="primary" id="vs">दर्ज करें</button><button onclick="dlg.close()">रद्द</button></div>`, () => {
-    $('#vs').onclick = () => busy($('#vs'), async () => { await api(`/api/verifications/${b.dataset.vdis}/respond`, { status: 'disagreed', note: $('#vn').value }); $('#dlg').close(); show(); });
+    $('#vs').onclick = () => busy($('#vs'), async () => { await api(`api/verifications/${b.dataset.vdis}/respond`, { status: 'disagreed', note: $('#vn').value }); $('#dlg').close(); show(); });
   })));
 };
 const vkind = (v) => ({ weekly: 'साप्ताहिक नाप', on_demand: 'ठेकेदार द्वारा माँगा नाप', final: '✅ काम पूरा: अंतिम नाप' }[v.kind] || `${v.percent}% माइलस्टोन`);
 async function verifyDialog(v, mode) {
   let lines = v.lines;
   if (mode === 'measure') { // offer every BOQ item, so items the contractor did not claim can be measured too
-    const w = await api('/api/works/' + v.work_id);
+    const w = await api('api/works/' + v.work_id);
     lines = w.items.map((i) => ({ ...(v.lines.find((l) => l.item_id === i.id) || { claimed_qty: 0, measured_qty: null }), item_id: i.id, description: i.description, unit: i.unit, rate: i.rate, code: i.code }));
   }
   dialog(`<h3>${esc(v.work)}: ${vkind(v)}</h3>
@@ -706,13 +734,13 @@ async function verifyDialog(v, mode) {
       if (ml.some((l) => l.measured_qty == null && v.lines.some((x) => x.item_id === l.item_id))) throw new Error('दावे वाले हर आइटम का नाप भरें');
       const pos = await getPosition();
       const shot = await takePhoto('नाप की फ़ोटो', () => [`${me.name} (JEN) · नाप`, v.work.slice(0, 60), `${new Date().toLocaleString('hi-IN')} · ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`], 'environment');
-      await api(`/api/verifications/${v.id}/measure`, { lines: ml.filter((l) => l.measured_qty != null), note: $('#mnote')?.value || '', photo: shot.dataUrl, ...pos });
+      await api(`api/verifications/${v.id}/measure`, { lines: ml.filter((l) => l.measured_qty != null), note: $('#mnote')?.value || '', photo: shot.dataUrl, ...pos });
       $('#dlg').close(); toast('नाप दर्ज हुआ ✓ अब AEN का अनुमोदन'); show();
     });
     if (mode === 'approve') {
       const go = (btn, decision) => busy(btn, async () => {
         let pos = {}; try { pos = await getPosition(); } catch { /* location is recorded when available */ }
-        await api(`/api/verifications/${v.id}/approve`, { decision, note: $('#anote').value, ...pos });
+        await api(`api/verifications/${v.id}/approve`, { decision, note: $('#anote').value, ...pos });
         $('#dlg').close(); toast(decision === 'approved' ? 'अनुमोदन दर्ज ✓' : 'JEN को वापस भेजा'); show();
       });
       $('#aok').onclick = () => go($('#aok'), 'approved');
@@ -760,7 +788,7 @@ VIEWS.newproject = async (main) => {
   $('#p_here').onclick = () => busy($('#p_here'), async () => { const p = await getPosition(); $('#p_lat').value = p.lat.toFixed(6); $('#p_lng').value = p.lng.toFixed(6); toast(`GPS ±${p.accuracy} मी.`); });
   $('#p_save').onclick = () => busy($('#p_save'), async () => {
     const who = (r) => me.role === r ? undefined : ($(`#p_${r}_mobile`).value.trim() ? { name: $(`#p_${r}_name`).value, mobile: $(`#p_${r}_mobile`).value.trim() } : undefined);
-    const r = await api('/api/projects', { name: $('#p_name').value, wo_no: $('#p_wo').value, wo_amount: $('#p_amt').value.replace(/,/g, ''), office: $('#p_office').value, tia: $('#p_tia').value,
+    const r = await api('api/projects', { name: $('#p_name').value, wo_no: $('#p_wo').value, wo_amount: $('#p_amt').value.replace(/,/g, ''), office: $('#p_office').value, tia: $('#p_tia').value,
       award_date: $('#p_award').value, wo_date: $('#p_wodate').value, duration_days: $('#p_dur').value, tp_percent: $('#p_tp').value, department: $('#p_dept').value, lat: $('#p_lat').value, lng: $('#p_lng').value, radius_m: $('#p_radius').value,
       contractor: who('contractor'), jen: who('jen'), aen: who('aen'), xen: who('xen'), items: readItems() });
     dialog(`<h3>प्रोजेक्ट बन गया ✓</h3>${r.new_accounts.length ? `<p>इनके खाते बनाकर नियुक्त कर दिए गए हैं:</p>${r.new_accounts.map((a) => `<p>${ROLE_SHORT[a.role]}: <b>${esc(a.name)}</b> (${esc(a.mobile)})</p>`).join('')}<p class="small muted">इन्हें बताएँ: ऐप खोलें → "OTP से लॉगिन"।</p>` : '<p>सभी लोग पहले से ऐप में थे और नियुक्त हो गए हैं।</p>'}
@@ -771,7 +799,7 @@ VIEWS.newproject = async (main) => {
 
 // ---------- project detail ----------
 async function openWork(id) {
-  const w = await api('/api/works/' + id);
+  const w = await api('api/works/' + id);
   const base = w.wo_amount || w.boq_total;
   const pct = (x) => base ? Math.round((x / base) * 1000) / 10 : 0;
   const bar = (x, color) => `<div style="height:8px;background:var(--line);border-radius:4px;overflow:hidden"><div style="width:${Math.min(100, pct(x))}%;height:100%;background:${color}"></div></div>`;
@@ -787,10 +815,10 @@ async function openWork(id) {
     ${!w.wo_date && ['xen', 'aen', 'se', 'admin', 'hq'].includes(me.role) ? `<div class="row" style="margin:8px 0"><input id="wono" placeholder="वर्क ऑर्डर नं." style="flex:1"><input id="wodt" type="date" value="${today}" style="flex:1"><button class="primary" id="woiss">वर्क ऑर्डर जारी करें</button></div>` : ''}
     <div class="row"><button id="wqr">🖨 साइट बोर्ड (QR)</button><a class="btn" href="#work/${w.id}" target="_blank">जनता पेज</a>${me.role !== 'hq' ? '<button class="danger" id="wdisp">⚠ आपत्ति: यह काम/जानकारी गलत है</button>' : ''}<button onclick="dlg.close()">बंद करें</button></div>`, () => {
     $('#wqr').onclick = () => printSiteBoard(w.id);
-    if ($('#woiss')) $('#woiss').onclick = () => busy($('#woiss'), async () => { await api(`/api/works/${w.id}/issue-wo`, { wo_no: $('#wono').value, wo_date: $('#wodt').value }); $('#dlg').close(); toast('वर्क ऑर्डर जारी ✓'); show(); });
+    if ($('#woiss')) $('#woiss').onclick = () => busy($('#woiss'), async () => { await api(`api/works/${w.id}/issue-wo`, { wo_no: $('#wono').value, wo_date: $('#wodt').value }); $('#dlg').close(); toast('वर्क ऑर्डर जारी ✓'); show(); });
     if ($('#wdisp')) $('#wdisp').onclick = () => {
       const note = prompt('आपत्ति का कारण (यह S.E. और मुख्यालय को दिखेगी):');
-      if (note) busy($('#wdisp'), async () => { await api(`/api/works/${w.id}/dispute`, { note }); $('#dlg').close(); toast('आपत्ति दर्ज हुई'); });
+      if (note) busy($('#wdisp'), async () => { await api(`api/works/${w.id}/dispute`, { note }); $('#dlg').close(); toast('आपत्ति दर्ज हुई'); });
     };
   });
 }
@@ -817,7 +845,7 @@ function timelineHtml(t) {
 
 // ---------- hindrances (बाधा) and extension of time ----------
 VIEWS.hindrances = async (main) => {
-  const [list, works] = await Promise.all([api('/api/hindrances'), api('/api/works')]);
+  const [list, works] = await Promise.all([api('api/hindrances'), api('api/works')]);
   const isC = me.role === 'contractor';
   main.innerHTML = `<h2>बाधा और समय-वृद्धि</h2>
     <div class="notice">काम विभाग के कारण रुका (साइट नहीं सौंपी, काम या ड्रॉइंग नहीं बताई, एस्टीमेट गलत निकला) तो ठेकेदार यहाँ उसी दिन दर्ज करे। ज़िम्मेदार अधिकारी को <b>${settings.hindrance_response_days} दिन</b> में स्वीकार या आपत्ति करनी है। <b>जवाब न दे तो बाधा स्वीकार मानी जाती है।</b> आपत्ति पर S.E./मुख्यालय ${settings.hindrance_decision_days} दिन में निर्णय देते हैं, और तब तक समय-वृद्धि ठेकेदार को मिलती रहती है। बाधा के दिन अपने-आप समय-वृद्धि बनते हैं: <b>उतने दिन की देरी पर ठेकेदार पर कोई पेनल्टी नहीं</b>, और ज़िम्मेदारी अधिकारी की दर्ज होती है।</div>
@@ -846,26 +874,26 @@ VIEWS.hindrances = async (main) => {
     $('#hc').onchange();
     $('#hp').onclick = async () => { pic = await pickPhoto(); $('#hpi').textContent = pic ? 'जुड़ी ✓' : ''; };
     $('#hs').onclick = () => busy($('#hs'), async () => {
-      await api('/api/hindrances', { work_id: Number($('#hw').value), category: $('#hc').value, responsible_role: $('#hr').value, description: $('#hd').value, from_day: $('#hf').value, to_day: $('#ht').value || null, photo: pic });
+      await api('api/hindrances', { work_id: Number($('#hw').value), category: $('#hc').value, responsible_role: $('#hr').value, description: $('#hd').value, from_day: $('#hf').value, to_day: $('#ht').value || null, photo: pic });
       toast('बाधा दर्ज हुई ✓ अधिकारी को सूचना गई'); show();
     });
   }
-  main.querySelectorAll('[data-hclose]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/hindrances/${b.dataset.hclose}/close`, {}); show(); })));
-  main.querySelectorAll('[data-hacc]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/hindrances/${b.dataset.hacc}/respond`, { decision: 'accepted' }); show(); })));
+  main.querySelectorAll('[data-hclose]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`api/hindrances/${b.dataset.hclose}/close`, {}); show(); })));
+  main.querySelectorAll('[data-hacc]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`api/hindrances/${b.dataset.hacc}/respond`, { decision: 'accepted' }); show(); })));
   const noteDialog = (title, cb) => dialog(`<h3>${title}</h3><label>कारण *</label><textarea id="xnote"></textarea><div class="row" style="margin-top:10px"><button class="primary" id="xok">दर्ज करें</button><button onclick="dlg.close()">रद्द</button></div>`,
     () => { $('#xok').onclick = () => busy($('#xok'), async () => { await cb($('#xnote').value); $('#dlg').close(); show(); }); });
-  main.querySelectorAll('[data-hdis]').forEach((b) => (b.onclick = () => noteDialog('बाधा पर आपत्ति (सबूत सहित)', (note) => api(`/api/hindrances/${b.dataset.hdis}/respond`, { decision: 'disputed', note }))));
-  main.querySelectorAll('[data-hdec]').forEach((b) => (b.onclick = () => noteDialog(b.dataset.d === 'accepted' ? 'बाधा स्वीकार' : 'बाधा अस्वीकार', (note) => api(`/api/hindrances/${b.dataset.hdec}/decide`, { decision: b.dataset.d, note }))));
+  main.querySelectorAll('[data-hdis]').forEach((b) => (b.onclick = () => noteDialog('बाधा पर आपत्ति (सबूत सहित)', (note) => api(`api/hindrances/${b.dataset.hdis}/respond`, { decision: 'disputed', note }))));
+  main.querySelectorAll('[data-hdec]').forEach((b) => (b.onclick = () => noteDialog(b.dataset.d === 'accepted' ? 'बाधा स्वीकार' : 'बाधा अस्वीकार', (note) => api(`api/hindrances/${b.dataset.hdec}/decide`, { decision: b.dataset.d, note }))));
 };
 
 // ---------- bills: running / final whenever the contractor wants, from verified quantities ----------
 const BSTATUS = { submitted: ['जमा', 'warn'], passed: ['XEN ने पास किया', 'ok'], hq_approved: ['मुख्यालय ने अनुमोदन किया', 'ok'], paid: ['भुगतान हुआ', 'ok'] };
 const ordinal = (n) => ({ 1: 'पहला', 2: 'दूसरा', 3: 'तीसरा', 4: 'चौथा' }[n] || `${n}वाँ`);
 VIEWS.bills = async (main) => {
-  const [bills, works] = await Promise.all([api('/api/bills'), api('/api/works')]);
+  const [bills, works] = await Promise.all([api('api/bills'), api('api/works')]);
   const isC = me.role === 'contractor';
   let mine = [];
-  if (isC) mine = await Promise.all(works.filter((w) => w.contractor_id === me.id && w.items_count).map((w) => api('/api/works/' + w.id)));
+  if (isC) mine = await Promise.all(works.filter((w) => w.contractor_id === me.id && w.items_count).map((w) => api('api/works/' + w.id)));
   main.innerHTML = `<h2>बिल</h2>
     <div class="notice">बिल सिर्फ़ <b>JEN + AEN से सत्यापित नाप</b> से बनता है, इसलिए दोबारा नाप या जाँच की ज़रूरत नहीं। ठेकेदार जब चाहे रनिंग बिल (पहला, दूसरा, तीसरा…) बना सकता है, और काम पूरा होने पर अंतिम बिल। रनिंग बिल XEN <b>${settings.bill_pass_days} दिन</b> में पास करेगा। अंतिम बिल <b>मुख्यालय / निविदा प्राधिकारी ${settings.final_approval_days} दिन</b> में सत्यापित और अनुमोदित करेगा। भुगतान उसके ${settings.payment_days} दिन में होगा। देर होते ही लाल झंडा लगता है।</div>
     ${isC ? mine.map((w) => `<div class="card"><div class="spread"><h3>${esc(w.name)}</h3><span class="small">सत्यापित ${rupees(Math.round(w.approved_amount))} · बिल हुए ${w.bills.length}</span></div>
@@ -889,19 +917,19 @@ VIEWS.bills = async (main) => {
   main.querySelectorAll('[data-mkbill],[data-mkfinal]').forEach((b) => (b.onclick = () => busy(b, async () => {
     const final = !!b.dataset.mkfinal;
     if (final && !confirm('अंतिम बिल के बाद इस काम का कोई और बिल नहीं बनेगा। आगे बढ़ें?')) return;
-    const r = await api('/api/bills', { work_id: Number(b.dataset.mkbill || b.dataset.mkfinal), final });
+    const r = await api('api/bills', { work_id: Number(b.dataset.mkbill || b.dataset.mkfinal), final });
     toast(`${final ? 'अंतिम' : ordinal(r.bill_no)} बिल ${rupees(r.net_amount)} जमा ✓`); show();
   })));
-  main.querySelectorAll('[data-askv]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/works/${b.dataset.askv}/request-verification`, {}); toast(`नाप माँगा गया: JEN को ${settings.jen_verify_hours} घंटे में साइट पर आना होगा`); show(); })));
+  main.querySelectorAll('[data-askv]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`api/works/${b.dataset.askv}/request-verification`, {}); toast(`नाप माँगा गया: JEN को ${settings.jen_verify_hours} घंटे में साइट पर आना होगा`); show(); })));
   main.querySelectorAll('[data-done]').forEach((b) => (b.onclick = () => busy(b, async () => {
     if (!confirm('काम पूरा घोषित करें? JEN अंतिम नाप लेगा, AEN अनुमोदन करेगा, फिर आप अंतिम बिल बना सकेंगे।')) return;
-    await api(`/api/works/${b.dataset.done}/complete`, {}); toast('काम पूरा घोषित ✓ अंतिम नाप के लिए JEN को सूचना गई'); show();
+    await api(`api/works/${b.dataset.done}/complete`, {}); toast('काम पूरा घोषित ✓ अंतिम नाप के लिए JEN को सूचना गई'); show();
   })));
   main.querySelectorAll('[data-bact]').forEach((b) => (b.onclick = () => busy(b, async () => {
     let ref = '', note = '';
     if (b.dataset.a === 'paid') { ref = prompt('भुगतान का संदर्भ (UTR / चेक नं.):'); if (!ref) return; }
     if (b.dataset.a === 'hq_approve') { note = prompt('टिप्पणी (वैकल्पिक):') || ''; }
-    await api(`/api/bills/${b.dataset.bact}/action`, { action: b.dataset.a, ref, note }); toast('दर्ज हुआ ✓'); show();
+    await api(`api/bills/${b.dataset.bact}/action`, { action: b.dataset.a, ref, note }); toast('दर्ज हुआ ✓'); show();
   })));
   main.querySelectorAll('[data-print]').forEach((b) => (b.onclick = () => printBill(bills.find((x) => String(x.id) === b.dataset.print))));
 };
@@ -938,7 +966,8 @@ async function renderHome(scrollTo) {
   const main = $('#main');
   main.innerHTML = '<p class="muted center">लोड हो रहा है…</p>';
   let d;
-  try { d = await api('/api/public/overview'); } catch (e) { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return; }
+  try { d = await api('api/public/overview'); } catch (e) { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return; }
+  if (d.demo) { IS_DEMO = true; demoBar(); }
   const s = d.settings, st = d.stats || {};
   const steps = [
     ['📝', 'पंजीकरण', 'हर विभाग का इंजीनियर और हर पंजीकृत ठेकेदार मोबाइल OTP से खाता बनाता है।'],
@@ -991,7 +1020,7 @@ async function renderHome(scrollTo) {
   <section><h2>अपडेट कैसे पाएँ (बिना नंबर दिए)</h2><div class="grid">
     <div class="card"><h3>📱 साइट पर QR</h3><p class="small">हर काम की साइट पर लगे सूचना-पट्ट का QR स्कैन करें। उस काम की पूरी जानकारी और अपडेट खुल जाएँगे।</p></div>
     <div class="card"><h3>⭐ फ़ॉलो</h3><p class="small">किसी काम के पेज पर "फ़ॉलो करें" दबाएँ। होम पेज पर दिखेगा कि उसमें कितने नए अपडेट आए। यह सिर्फ़ आपके फ़ोन में याद रहता है।</p></div>
-    <div class="card"><h3>📰 RSS</h3><p class="small">अख़बार और पत्रकार <a href="/feed.xml">/feed.xml</a> या किसी एक काम की फ़ीड जोड़ लें। नए अपडेट अपने-आप आते रहेंगे।</p></div>
+    <div class="card"><h3>📰 RSS</h3><p class="small">अख़बार और पत्रकार <a href="feed.xml">/feed.xml</a> या किसी एक काम की फ़ीड जोड़ लें। नए अपडेट अपने-आप आते रहेंगे।</p></div>
   </div></section>
   <section><h2>किसके लिए</h2><div class="grid">
     <div class="card"><h3>👷 ठेकेदार</h3><p class="small">नाप, बिल और भुगतान की हर देरी का पक्का रिकॉर्ड। विभाग की वजह से हुई देरी पर पेनल्टी नहीं। जब चाहें बिल बनाएँ। शिकायत सीधे S.E. और मुख्यालय तक।</p></div>
@@ -1019,7 +1048,7 @@ async function renderHome(scrollTo) {
     draw();
   }
   if (d.enabled) followedHtml().then((h) => { if (h && $('#hfol')) $('#hfol').innerHTML = h; });
-  if (d.enabled) api('/api/public/updates').then((u) => { if ($('#hupd')) $('#hupd').innerHTML = eventsHtml(u.slice(0, 8), true); }).catch(() => {});
+  if (d.enabled) api('api/public/updates').then((u) => { if ($('#hupd')) $('#hupd').innerHTML = eventsHtml(u.slice(0, 8), true); }).catch(() => {});
   if (scrollTo) document.getElementById(scrollTo)?.scrollIntoView();
 }
 const isPublicHash = (h) => h === 'home' || h === 'board' || h === 'updates' || h === 'contractors' || h === 'officers' || h.startsWith('work/');
@@ -1037,7 +1066,7 @@ window.addEventListener('hashchange', route);
 
 // ---------- public: one work, updates feed, contractors and officers ----------
 const EV_ICON = { deemed: '⚖️', award: '📜', wo: '📄', progress: '📷', verification_due: '⏳', measured: '📏', approved: '✍️', bill: '🧾', bill_passed: '✅', bill_hq: '🏛️', paid: '💰', hindrance: '⛔', hindrance_reply: '💬', hindrance_decided: '⚖️', visit: '📍', dpr: '📝', completed: '🏁' };
-const pubPhoto = (h) => `<img class="thumb" src="/api/public/photo/${esc(h)}" data-zoom="/api/public/photo/${esc(h)}" loading="lazy" alt="साइट फ़ोटो">`;
+const pubPhoto = (h) => `<img class="thumb" src="api/public/photo/${esc(h)}" data-zoom="api/public/photo/${esc(h)}" loading="lazy" alt="साइट फ़ोटो">`;
 const eventsHtml = (list, showWork) => `<div class="timeline">${list.map((e) => `<div><span>${EV_ICON[e.kind] || '•'}</span> <span class="small muted">${fmtTime(e.ts)}${showWork ? ` · <a href="#work/${e.work_id}">${esc(e.work)}</a>` : ''}</span><br>
   ${esc(e.text)}${e.by ? ` <span class="small muted">: ${esc(e.by)}${e.role ? ` (${ROLE_SHORT[e.role] || ''})` : ''}</span>` : ''}
   ${e.photos && e.photos.length ? `<div class="row" style="margin-top:4px">${e.photos.map(pubPhoto).join('')}</div>` : ''}</div>`).join('') || '<p class="muted">अभी कोई अपडेट नहीं।</p>'}</div>`;
@@ -1049,12 +1078,12 @@ async function renderPublicWork(id) {
   const main = $('#main');
   main.innerHTML = '<p class="muted center">लोड हो रहा है…</p>';
   let w;
-  try { w = await api('/api/public/works/' + id); } catch (e) { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return; }
+  try { w = await api('api/public/works/' + id); } catch (e) { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return; }
   const t = w.timeline, base = w.wo_amount || 1;
   const pct = (x) => Math.min(100, Math.round(x / base * 1000) / 10);
   const lastTs = w.updates[0]?.ts;
   main.innerHTML = `<div class="spread"><a href="#board">← जनता बोर्ड</a>
-      <div class="row"><button id="wfol">${isFollowed(w.id) ? '★ फ़ॉलो कर रहे हैं' : '☆ फ़ॉलो करें'}</button><button id="wshare">🔗 शेयर</button><button id="wboard">🖨 साइट बोर्ड (QR)</button><a class="btn" href="/feed/work/${w.id}.xml" title="RSS फ़ीड">RSS</a></div></div>
+      <div class="row"><button id="wfol">${isFollowed(w.id) ? '★ फ़ॉलो कर रहे हैं' : '☆ फ़ॉलो करें'}</button><button id="wshare">🔗 शेयर</button><button id="wboard">🖨 साइट बोर्ड (QR)</button><a class="btn" href="feed/work/${w.id}.xml" title="RSS फ़ीड">RSS</a></div></div>
     <div class="card infoboard"><div class="small muted">सूचना-पट्ट</div><h2>${esc(w.name)}</h2>
       <div class="kv"><span>विभाग / कार्यालय</span><b>${esc(w.department)} ${esc(w.office)}</b><span>निविदा आमंत्रण प्राधिकारी</span><b>${esc(w.tia) || '—'}</b>
       <span>वर्क ऑर्डर</span><b>${esc(w.wo_no) || 'जारी नहीं'}${t.wo_date ? ` · ${fmtDay(t.wo_date)}` : ''}</b><span>राशि</span><b>${w.wo_amount ? crore(w.wo_amount) : '—'}${w.tp_percent ? ` (T.P. ${w.tp_percent}%)` : ''}</b>
@@ -1083,7 +1112,7 @@ async function renderPublicWork(id) {
 async function renderUpdates() {
   publicHeader();
   const main = $('#main');
-  const list = await api('/api/public/updates').catch((e) => { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return null; });
+  const list = await api('api/public/updates').catch((e) => { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return null; });
   if (!list) return;
   main.innerHTML = `<h2>ताज़ा अपडेट: सभी काम</h2><p class="small muted">साइट विज़िट, ठेकेदार के अपडेट (फ़ोटो सहित), JEN के नाप, AEN के अनुमोदन, बिल, भुगतान, बाधाएँ: जैसे ही दर्ज हों।</p><div class="card">${eventsHtml(list, true)}</div>`;
 }
@@ -1091,7 +1120,7 @@ async function renderPeople(kind) {
   publicHeader();
   const main = $('#main');
   main.innerHTML = '<p class="muted center">लोड हो रहा है…</p>';
-  const list = await api('/api/public/people?kind=' + kind).catch((e) => { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return null; });
+  const list = await api('api/public/people?kind=' + kind).catch((e) => { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return null; });
   if (!list) return;
   const isC = kind === 'contractors';
   const worksLinks = (p) => p.works.map((w) => `<a href="#work/${w.id}">${esc(w.name)}</a>`).join(', ');
@@ -1138,7 +1167,7 @@ async function followedHtml() {
   const f = followStore.get();
   const ids = Object.keys(f).slice(0, 20);
   if (!ids.length) return '';
-  const works = await Promise.all(ids.map((id) => api('/api/public/works/' + id).catch(() => null)));
+  const works = await Promise.all(ids.map((id) => api('api/public/works/' + id).catch(() => null)));
   return `<section><h2>⭐ आपके फ़ॉलो किए काम</h2><div class="grid">${works.filter(Boolean).map((w) => {
     const fresh = w.updates.filter((e) => e.ts > f[w.id]).length;
     return `<a class="card followcard" href="#work/${w.id}"><b>${esc(w.name)}</b><span class="small muted">${esc(w.office)}</span>
@@ -1151,10 +1180,10 @@ function qrSvg(text, cell = 6) {
   const qr = qrcode(0, 'M'); qr.addData(text); qr.make();
   return qr.createSvgTag(cell, 2);
 }
-const workUrl = (id) => `${location.origin}/#work/${id}`;
+const workUrl = (id) => `${location.href.split("#")[0]}#work/${id}`;
 async function printSiteBoard(id) {
   let w;
-  try { w = await api('/api/public/works/' + id); } catch (e) { toast('जनता पोर्टल बंद है या काम नहीं मिला: ' + e.message, true); return; }
+  try { w = await api('api/public/works/' + id); } catch (e) { toast('जनता पोर्टल बंद है या काम नहीं मिला: ' + e.message, true); return; }
   const t = w.timeline, p = w.people;
   const row = (k, v) => `<tr><th>${k}</th><td>${v || '—'}</td></tr>`;
   const html = `<!doctype html><html lang="hi"><head><meta charset="utf-8"><title>सूचना-पट्ट: ${esc(w.name)}</title>
@@ -1183,7 +1212,7 @@ async function shareWork(id, name) {
 // ---------- instruction register (निर्देश रजिस्टर) ----------
 const ISTATE = { pending: ['जवाब बाकी', 'warn'], deemed: ['जवाब नहीं आया: पुष्टि मानी', 'ok'], confirmed: ['पुष्टि', 'ok'], denied: ['खंडन: S.E./HQ देखेंगे', 'bad'] };
 VIEWS.instructions = async (main) => {
-  const [list, works] = await Promise.all([api('/api/instructions'), api('/api/works')]);
+  const [list, works] = await Promise.all([api('api/instructions'), api('api/works')]);
   const mine = works.filter((w) => w.status === 'active' && w[me.role + '_id'] === me.id);
   const canAdd = ['contractor', 'jen', 'aen', 'xen'].includes(me.role) && mine.length;
   main.innerHTML = `<h2>निर्देश रजिस्टर</h2>
@@ -1201,16 +1230,16 @@ VIEWS.instructions = async (main) => {
       ${i.state === 'pending' ? `<p class="small">जवाब की अंतिम तिथि ${fmtDay(i.respond_due_day)}</p>` : ''}
       ${i.state === 'pending' && works.find((w) => w.id === i.work_id)?.[i.to_role + '_id'] === me.id ? `<div class="row"><button class="primary" data-iok="${i.id}">पुष्टि करें</button><button class="danger" data-ino="${i.id}">खंडन करें</button></div>` : ''}</div>`).join('') || '<p class="muted">अभी कोई प्रविष्टि नहीं।</p>'}</div>`;
   if ($('#is')) $('#is').onclick = () => busy($('#is'), async () => {
-    await api('/api/instructions', { work_id: Number($('#iw').value), to_role: $('#ito')?.value, kind: $('#ik')?.value || 'instruction', said_on: $('#id').value, text: $('#it').value });
+    await api('api/instructions', { work_id: Number($('#iw').value), to_role: $('#ito')?.value, kind: $('#ik')?.value || 'instruction', said_on: $('#id').value, text: $('#it').value });
     toast('दर्ज हुआ ✓ सामने वाले को सूचना गई'); show();
   });
-  main.querySelectorAll('[data-iok]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/instructions/${b.dataset.iok}/respond`, { status: 'confirmed' }); show(); })));
-  main.querySelectorAll('[data-ino]').forEach((b) => (b.onclick = () => { const note = prompt('खंडन का कारण:'); if (note) busy(b, async () => { await api(`/api/instructions/${b.dataset.ino}/respond`, { status: 'denied', note }); show(); }); }));
+  main.querySelectorAll('[data-iok]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`api/instructions/${b.dataset.iok}/respond`, { status: 'confirmed' }); show(); })));
+  main.querySelectorAll('[data-ino]').forEach((b) => (b.onclick = () => { const note = prompt('खंडन का कारण:'); if (note) busy(b, async () => { await api(`api/instructions/${b.dataset.ino}/respond`, { status: 'denied', note }); show(); }); }));
 };
 
 // ---------- explanations (स्पष्टीकरण) ----------
 VIEWS.explanations = async (main) => {
-  const list = await api('/api/explanations');
+  const list = await api('api/explanations');
   main.innerHTML = `<h2>स्पष्टीकरण</h2>
     <div class="notice">S.E., मुख्यालय या XEN किसी लाल झंडे पर ज़िम्मेदार व्यक्ति से कारण पूछते हैं। जवाब <b>${settings.explanation_days} दिन</b> में देना है। जवाब न आए तो उस व्यक्ति पर नया लाल झंडा लगता है।</div>
     <div class="list">${list.map((e) => `<div class="card" style="box-shadow: inset 4px 0 ${e.reply ? 'var(--ok)' : e.overdue ? 'var(--bad)' : 'var(--warn)'}">
@@ -1218,19 +1247,19 @@ VIEWS.explanations = async (main) => {
       <p class="small">${esc(e.by)} → <b>${esc(e.to)}</b> · अंतिम तिथि ${fmtDay(e.due_day)} ${e.overdue ? '<span class="pill bad">🚩 देर</span>' : ''}</p>
       ${e.flag_text ? `<p class="small muted">झंडा: ${esc(e.flag_text)}</p>` : ''}<p><b>प्रश्न:</b> ${esc(e.question)}</p>
       ${e.reply ? `<p><b>जवाब (${fmtTime(e.replied_ts)}):</b> ${esc(e.reply)}</p>` : e.asked_to === me.id ? `<textarea data-rt="${e.id}" placeholder="आपका जवाब"></textarea><p><button class="primary" data-rs="${e.id}">जवाब भेजें</button></p>` : '<p class="small muted">जवाब बाकी</p>'}</div>`).join('') || '<p class="muted">कोई स्पष्टीकरण नहीं।</p>'}</div>`;
-  main.querySelectorAll('[data-rs]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/explanations/${b.dataset.rs}/reply`, { reply: $(`[data-rt="${b.dataset.rs}"]`).value }); toast('जवाब भेजा ✓'); show(); })));
+  main.querySelectorAll('[data-rs]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`api/explanations/${b.dataset.rs}/reply`, { reply: $(`[data-rt="${b.dataset.rs}"]`).value }); toast('जवाब भेजा ✓'); show(); })));
 };
 function askExplanation(f) {
   dialog(`<h3>स्पष्टीकरण माँगें: ${esc(f.against_name)}</h3><p class="small muted">${esc(f.work)} · ${esc(f.text)}</p>
     <label>प्रश्न</label><textarea id="exq">${esc(f.type === 'jen_not_verified' ? 'नाप समय पर क्यों नहीं लिया गया? कब तक लेंगे?' : f.type === 'bill_delayed' || f.type === 'final_not_approved' ? 'बिल/भुगतान में देरी का कारण और तिथि बताएँ।' : 'देरी का कारण और समाधान की तिथि बताएँ।')}</textarea>
     <div class="row" style="margin-top:10px"><button class="primary" id="exs">भेजें (${settings.explanation_days} दिन में जवाब)</button><button onclick="dlg.close()">रद्द</button></div>`, () => {
-    $('#exs').onclick = () => busy($('#exs'), async () => { await api('/api/explanations', { work_id: f.work_id, asked_to: f.against_id, question: $('#exq').value, flag_text: f.text }); $('#dlg').close(); toast('स्पष्टीकरण माँगा गया ✓'); });
+    $('#exs').onclick = () => busy($('#exs'), async () => { await api('api/explanations', { work_id: f.work_id, asked_to: f.against_id, question: $('#exq').value, flag_text: f.text }); $('#dlg').close(); toast('स्पष्टीकरण माँगा गया ✓'); });
   });
 }
 
 // ---------- daily report (दैनिक रिपोर्ट) ----------
 VIEWS.daily = async (main, day) => {
-  const r = await api('/api/daily-report' + (day ? '?day=' + day : ''));
+  const r = await api('api/daily-report' + (day ? '?day=' + day : ''));
   main.innerHTML = `<div class="spread"><h2>दैनिक रिपोर्ट: ${fmtDay(r.day)}</h2><div class="row">
       ${r.past_days?.length ? `<select id="drd"><option value="">आज (लाइव)</option>${r.past_days.map((d) => `<option ${d === day ? 'selected' : ''}>${d}</option>`).join('')}</select>` : ''}<button onclick="print()">🖨 प्रिंट</button></div></div>
     <p class="small muted">हर सुबह 9 बजे यह सार S.E. और मुख्यालय को SMS से जाता है और उस दिन की प्रति यहाँ सहेजी जाती है।</p>

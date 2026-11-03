@@ -98,3 +98,7 @@ details summary { cursor: pointer; list-style: none; }
 .penalty { border-color: var(--brand); }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 b.big { font-size: 20px; display: block; margin: 2px 0; } b.big.neg { color: var(--bad); } b.big.pos { color: var(--ok); }
+.demobar { background: #fff4d6; color: #3d2f00; font-size: 13px; padding: 6px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #e8d48a; }
+.demobar button { padding: 4px 10px; font-size: 13px; }
+.demologin { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 6px; }
+@media (min-width: 900px) { body.app:has(.demobar) { grid-template-rows: auto auto 1fr; } body.app .demobar { grid-column: 1 / -1; } }

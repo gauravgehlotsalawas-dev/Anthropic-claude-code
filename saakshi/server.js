@@ -743,7 +743,7 @@ route('POST', '/api/logout', async (req, res) => {
 });
 
 route('GET', '/api/me', async (req, res, { user }) => {
-  send(res, 200, { user: publicUser(user), settings: getSettings(), today: istDay(), server_time: nowIso() });
+  send(res, 200, { user: publicUser(user), settings: getSettings(), today: istDay(), server_time: nowIso(), demo: DEMO });
 });
 
 route('POST', '/api/me/pin', async (req, res, { user }) => {
@@ -1606,7 +1606,7 @@ route('POST', '/api/users/import', async (req, res, { user }) => {
 let publicCache = { at: 0, data: null };
 route('GET', '/api/public/overview', async (req, res) => {
   const s = getSettings();
-  if (!s.public_board) return send(res, 200, { enabled: false, settings: publicSettings(s) });
+  if (!s.public_board) return send(res, 200, { enabled: false, settings: publicSettings(s), demo: DEMO });
   if (Date.now() - publicCache.at > 60e3) {
     const all = q('SELECT * FROM works ORDER BY id DESC').all();
     const names = userNames();
@@ -1653,7 +1653,7 @@ route('GET', '/api/public/overview', async (req, res) => {
       works,
     } };
   }
-  send(res, 200, { ...publicCache.data, settings: publicSettings(s) });
+  send(res, 200, { ...publicCache.data, settings: publicSettings(s), demo: DEMO });
 }, { public: true });
 function publicSettings(s) {
   const keys = ['deemed_measure_hours', 'deemed_approval', 'penalty_percent_per_week', 'penalty_max_percent', 'visits_per_week', 'milestone_percent', 'milestone_max_amount', 'jen_verify_hours', 'aen_approve_hours', 'wo_issue_days', 'start_within_days', 'hindrance_response_days', 'hindrance_decision_days', 'bill_pass_days', 'payment_days', 'final_approval_days', 'sla_days'];
@@ -1979,6 +1979,18 @@ function dailyTick() {
     Object.entries(r.flags_by_role).map(([k, n]) => `${k.toUpperCase()} ${n}`).join(', ') + `। कल: ${r.yesterday.visits} विज़िट, ${r.yesterday.measured} नाप, ${r.yesterday.paid} भुगतान।`;
   for (const u of q("SELECT mobile FROM users WHERE role IN ('hq','se') AND active = 1").all()) sendSms(u.mobile, msg);
 }
+
+// demo only: bring the demo sites to where the visitor is, so GPS attendance and measuring can be tried anywhere
+route('POST', '/api/demo/move-sites', async (req, res) => {
+  if (!DEMO) throw httpErr(404, 'Not found');
+  const b = await readJson(req);
+  const lat = num(b.lat), lng = num(b.lng);
+  if (lat == null || lng == null) throw httpErr(400, 'GPS लोकेशन नहीं मिली');
+  const ws = q('SELECT id, lat, lng FROM works ORDER BY id').all();
+  ws.forEach((w, i) => q('UPDATE works SET lat = ?, lng = ? WHERE id = ?').run(lat + i * 0.01, lng, w.id));
+  publicCache.at = 0; pubCache.clear();
+  send(res, 200, { moved: ws.length });
+}, { public: true });
 
 route('GET', '/api/settings', async (req, res) => send(res, 200, getSettings()));
 route('PUT', '/api/settings', async (req, res, { user }) => {
