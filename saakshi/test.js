@@ -251,7 +251,8 @@ async function main() {
 
   // demo work: the XEN never answered the hindrance → deemed accepted → extension, no penalty
   const demo = (await con('GET', '/api/works/' + w.id)).data.timeline;
-  assert.equal(demo.extension_days, 13); assert.equal(demo.contractor_delay_days, 0); assert.equal(demo.wo_late_days, 2);
+  assert.ok(demo.extension_days >= 14, 'drawing hindrance 13 days + the JEN late in measuring');
+  assert.ok(demo.hindrances.some((h) => h.category === 'measurement_late')); assert.equal(demo.contractor_delay_days, 0); assert.equal(demo.wo_late_days, 2);
   assert.ok(demo.hindrances.some((h) => h.state === 'deemed'));
 
   // ---- award without a work order: red flag on the XEN until it is issued ----
@@ -280,6 +281,44 @@ async function main() {
   // officer objects to being assigned
   assert.equal((await nj('POST', `/api/works/${pid}/dispute`, { note: 'Yeh mera kshetra nahi' })).status, 201);
   assert.ok((await hq('GET', '/api/flags')).data.some((f) => f.type === 'assignment_disputed'));
+
+  // ---- the JEN never came: the duty moves to the AEN (after 24 h), and the AEN cannot approve their own measurement ----
+  const dv = (await aen('GET', '/api/verifications?work_id=' + w.id)).data.find((v) => v.status === 'pending_jen');
+  assert.ok(dv && dv.overdue_hours >= 24, 'demo milestone overdue');
+  const here = { lat: w.lat + 1, lng: w.lng, accuracy: 8 }; // the demo fence was moved earlier in this test
+  const dl = dv.lines.map((l) => ({ item_id: l.item_id, measured_qty: l.claimed_qty }));
+  assert.equal((await xen('POST', `/api/verifications/${dv.id}/measure`, { lines: dl, photo: fakePhoto(), ...here })).status, 403, 'XEN only after 72 h');
+  assert.equal((await aen('POST', `/api/verifications/${dv.id}/measure`, { lines: dl, photo: fakePhoto(), ...here })).status, 200);
+  assert.equal((await aen('POST', `/api/verifications/${dv.id}/approve`, { decision: 'approved' })).status, 403, 'no approving your own measurement');
+  assert.equal((await xen('POST', `/api/verifications/${dv.id}/approve`, { decision: 'approved' })).status, 200);
+  const dtl = (await con('GET', '/api/works/' + w.id)).data.timeline;
+  assert.ok(dtl.hindrances.some((h) => h.category === 'measurement_late' && h.days >= 1), 'JEN lateness counted as department delay');
+
+  // ---- instruction register: written-down promises; a denial goes up as a flag ----
+  r = await con('POST', '/api/instructions', { work_id: w.id, kind: 'promise', to_role: 'xen', text: 'XEN ne kaha: pehla bill abhi, final baad me, penalty nahi lagegi', said_on: '2026-10-01' });
+  assert.equal(r.status, 201);
+  const ins = r.data.id;
+  assert.equal((await jen('POST', `/api/instructions/${ins}/respond`, { status: 'confirmed' })).status, 403, 'only the person named answers');
+  assert.equal((await xen('POST', `/api/instructions/${ins}/respond`, { status: 'denied' })).status, 400, 'reason needed');
+  assert.equal((await xen('POST', `/api/instructions/${ins}/respond`, { status: 'denied', note: 'aisa nahi kaha' })).status, 200);
+  assert.ok((await hq('GET', '/api/flags')).data.some((f) => f.type === 'instruction_disputed'));
+  r = await jen('POST', '/api/instructions', { work_id: w.id, text: 'Drain ka level 0.5 m neeche rakhein' });
+  assert.equal((await con('POST', `/api/instructions/${r.data.id}/respond`, { status: 'confirmed' })).status, 200);
+  assert.equal((await con('GET', '/api/instructions?work_id=' + w.id)).data.length, 2);
+
+  // ---- explanation asked by the top authority ----
+  r = await hq('POST', '/api/explanations', { work_id: w.id, asked_to: (await jen('GET', '/api/me')).data.user.id, question: 'Naap 2 din der se kyon?' });
+  assert.equal(r.status, 201);
+  assert.equal((await con('POST', '/api/explanations', { work_id: w.id, asked_to: 1, question: 'x' })).status, 403);
+  const myEx = (await jen('GET', '/api/explanations')).data;
+  assert.equal(myEx.length, 1);
+  assert.equal((await jen('POST', `/api/explanations/${myEx[0].id}/reply`, { reply: 'Doosri site par emergency thi' })).status, 200);
+  assert.equal((await hq('GET', '/api/explanations')).data[0].reply, 'Doosri site par emergency thi');
+
+  // ---- daily report for the top authority ----
+  const rep = (await hq('GET', '/api/daily-report')).data;
+  assert.ok(rep.flags_total > 0 && rep.works_total >= 3 && rep.yesterday);
+  assert.equal((await jen('GET', '/api/daily-report')).status, 403);
 
   // ---- public portal: works and stats for citizens, with no person's name or mobile ----
   r = await anon('GET', '/api/public/overview');

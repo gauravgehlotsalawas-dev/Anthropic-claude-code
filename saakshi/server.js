@@ -45,6 +45,11 @@ const DEFAULT_SETTINGS = {
   bill_pass_days: 7,            // XEN passes a running bill (quantities are already verified)
   payment_days: 15,             // payment after the bill is passed / approved
   final_approval_days: 15,      // top authority verifies the completed work and approves the final payment
+  escalate_measure_aen_hours: 24,  // JEN this late → the AEN may and must measure
+  escalate_measure_xen_hours: 72,  // → the XEN
+  escalate_approve_xen_hours: 24,  // AEN this late in approving → the XEN may approve
+  instruction_response_days: 3,    // a written-down instruction/promise not denied in this time stands confirmed
+  explanation_days: 3,             // reply time for an explanation asked by S.E./HQ/XEN
   public_board: true,           // public portal: every work, its updates, contractors and officers
   public_names: true,           // names of officers and contractor firms on the public portal (never mobile numbers)
   public_photos: true,          // site photos from contractors' work updates (never attendance selfies)
@@ -121,6 +126,14 @@ CREATE TABLE IF NOT EXISTS bills (
   status TEXT NOT NULL DEFAULT 'submitted', passed_by INTEGER, passed_ts TEXT, hq_by INTEGER, hq_ts TEXT, hq_note TEXT DEFAULT '',
   paid_by INTEGER, paid_ts TEXT, paid_ref TEXT DEFAULT '', note TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS bill_lines (id INTEGER PRIMARY KEY, bill_id INTEGER NOT NULL, item_id INTEGER NOT NULL, upto_qty REAL NOT NULL, prev_qty REAL NOT NULL, rate REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS instructions (
+  id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, raised_by INTEGER NOT NULL, raised_role TEXT NOT NULL, to_role TEXT NOT NULL, kind TEXT NOT NULL,
+  text TEXT NOT NULL, said_on TEXT NOT NULL, created_ts TEXT NOT NULL, respond_due_day TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+  responded_by INTEGER, responded_ts TEXT, response_note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS explanations (
+  id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, asked_by INTEGER NOT NULL, asked_to INTEGER NOT NULL, flag_text TEXT DEFAULT '', question TEXT NOT NULL,
+  created_ts TEXT NOT NULL, due_day TEXT NOT NULL, reply TEXT, replied_ts TEXT);
+CREATE TABLE IF NOT EXISTS daily_reports (day TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS visits_work_day ON visits(work_id, day);
 CREATE INDEX IF NOT EXISTS visits_photo ON visits(photo);
 `);
@@ -351,8 +364,14 @@ function redFlags(works, s) {
   for (const w of works.filter((x) => x.status === 'active')) {
     for (const v of q("SELECT * FROM verifications WHERE work_id = ? AND status IN ('pending_jen','pending_aen')").all(w.id)) {
       const pct = v.kind === 'milestone' || !v.kind ? `${v.milestone_no * s.milestone_percent}% माइलस्टोन` : { weekly: 'साप्ताहिक नाप', on_demand: 'ठेकेदार द्वारा माँगा नाप', final: 'काम पूरा: अंतिम नाप' }[v.kind];
-      if (v.status === 'pending_jen' && now > v.jen_due_ts) add(w, { type: 'jen_not_verified', severity: 'high', against_role: 'jen', against_id: w.jen_id, since: v.jen_due_ts, hours: Math.round(hoursBetween(v.jen_due_ts, now)), ref: v.id,
-        text: `ठेकेदार ने ₹${Math.round(v.claimed_amount).toLocaleString('en-IN')} का काम (${pct}) अपलोड किया; JEN ने ${s.jen_verify_hours} घंटे में साइट पर नाप नहीं लिया` });
+      if (v.status === 'pending_jen' && now > v.jen_due_ts) {
+        const late = hoursBetween(v.jen_due_ts, now);
+        const up = late >= s.escalate_measure_xen_hours ? 'xen' : late >= s.escalate_measure_aen_hours ? 'aen' : null;
+        add(w, { type: 'jen_not_verified', severity: 'high', against_role: 'jen', against_id: w.jen_id, since: v.jen_due_ts, hours: Math.round(late), ref: v.id,
+          text: `ठेकेदार ने ₹${Math.round(v.claimed_amount).toLocaleString('en-IN')} का काम (${pct}) अपलोड किया; JEN ने ${s.jen_verify_hours} घंटे में साइट पर नाप नहीं लिया${up ? `। अब ज़िम्मेदारी ${up === 'xen' ? 'AEN और XEN' : 'AEN'} की भी` : ''}` });
+        if (up) add(w, { type: 'measure_escalated', severity: 'high', against_role: up, against_id: w[up + '_id'], since: addHours(v.jen_due_ts, up === 'xen' ? s.escalate_measure_xen_hours : s.escalate_measure_aen_hours), ref: v.id,
+          text: `JEN नहीं आया; अब ${up.toUpperCase()} को साइट पर जाकर नाप लेना है (ठेकेदार का दावा ₹${Math.round(v.claimed_amount).toLocaleString('en-IN')})` });
+      }
       if (v.status === 'pending_aen' && now > v.aen_due_ts) add(w, { type: 'aen_not_approved', severity: 'high', against_role: 'aen', against_id: w.aen_id, since: v.aen_due_ts, hours: Math.round(hoursBetween(v.aen_due_ts, now)), ref: v.id,
         text: `JEN का नाप (${pct}) ${s.aen_approve_hours} घंटे से AEN के अनुमोदन के बिना पड़ा है` });
     }
@@ -391,11 +410,19 @@ function redFlags(works, s) {
       if (d && today > d.due) add(w, { type: b.is_final && b.status === 'submitted' ? 'final_not_approved' : 'bill_delayed', severity: 'high', against_role: d.by, against_id: d.by === 'xen' ? w.xen_id : null, since: d.due, days: daysBetween(d.due, today), ref: b.id,
         text: `${b.is_final ? 'अंतिम बिल' : `${b.bill_no}वाँ रनिंग बिल`} (₹${Math.round(b.net_amount).toLocaleString('en-IN')}): ${d.what} ${daysBetween(d.due, today)} दिन से बाकी` });
     }
+    for (const e of q('SELECT * FROM explanations WHERE work_id = ? AND reply IS NULL AND due_day < ?').all(w.id, today)) {
+      const u = q('SELECT role FROM users WHERE id = ?').get(e.asked_to);
+      add(w, { type: 'explanation_overdue', severity: 'high', against_role: u?.role || '', against_id: e.asked_to, since: e.due_day, days: daysBetween(e.due_day, today), ref: e.id,
+        text: `${names[e.asked_by]} ने स्पष्टीकरण माँगा ("${e.question.slice(0, 80)}"); ${daysBetween(e.due_day, today)} दिन से जवाब नहीं` });
+    }
+    for (const i of q("SELECT * FROM instructions WHERE work_id = ? AND status = 'denied'").all(w.id)) add(w, { type: 'instruction_disputed', severity: 'medium', against_role: '', against_id: null, since: i.responded_ts, ref: i.id,
+      text: `निर्देश/वादे पर विवाद: ${names[i.raised_by]} का कहना "${i.text.slice(0, 80)}"; ${names[i.responded_by]} ने खंडन किया: "${i.response_note.slice(0, 80)}". S.E./मुख्यालय देखें` });
     for (const role of OFFICER_ROLES) {
       const u = w[role + '_id'] && q('SELECT verified, pin_hash FROM users WHERE id = ?').get(w[role + '_id']);
       if (u && !u.pin_hash) add(w, { type: 'officer_not_joined', severity: 'low', against_role: role, against_id: w[role + '_id'], since: w.created_at, text: `${role.toUpperCase()} ने अभी तक ऐप में लॉगिन नहीं किया` });
     }
   }
+  for (const f of flags) f.age_days = f.since ? Math.max(0, daysBetween(String(f.since).slice(0, 10), today)) : 0;
   const rank = { high: 0, medium: 1, low: 2 };
   return flags.sort((a, b) => rank[a.severity] - rank[b.severity] || String(a.since).localeCompare(String(b.since)));
 }
@@ -441,6 +468,17 @@ function hindrances(w, s) {
       category_label: HINDRANCE_CATEGORIES[h.category]?.label || h.category, raised_by_name: names[h.raised_by], responder: names[h.responded_by] || '', decider: names[h.decided_by] || '',
       decision_due_day: h.status === 'disputed' ? addDays(istDay(new Date(h.responded_ts)), s.hindrance_decision_days) : null };
   });
+  // the department's own lateness in measuring and approving: those days hold up the work and the bill
+  for (const v of q('SELECT * FROM verifications WHERE work_id = ?').all(w.id)) {
+    const jenDue = istDay(new Date(v.jen_due_ts)), jenDone = v.jen_ts ? istDay(new Date(v.jen_ts)) : (v.status === 'pending_jen' ? end : null);
+    if (jenDone && jenDone > jenDue) list.push({ id: 'V' + v.id, auto: true, category: 'measurement_late', category_label: `(स्वचालित) नाप #${v.id} समय पर नहीं लिया`, description: '', responsible_role: 'jen',
+      from_day: addDays(jenDue, 1), to_effective: jenDone, days: daysBetween(jenDue, jenDone), state: 'auto', counts: true });
+    if (v.aen_due_ts) {
+      const aenDue = istDay(new Date(v.aen_due_ts)), aenDone = v.aen_ts ? istDay(new Date(v.aen_ts)) : (v.status === 'pending_aen' ? end : null);
+      if (aenDone && aenDone > aenDue) list.push({ id: 'A' + v.id, auto: true, category: 'approval_late', category_label: `(स्वचालित) नाप #${v.id} का अनुमोदन समय पर नहीं`, description: '', responsible_role: 'aen',
+        from_day: addDays(aenDue, 1), to_effective: aenDone, days: daysBetween(aenDue, aenDone), state: 'auto', counts: true });
+    }
+  }
   // automatic hindrances from the system's own record: decisions and inspections the officers did not give in time
   for (const r of q("SELECT * FROM requests WHERE work_id = ? AND type IN ('decision','inspection')").all(w.id)) {
     const doneDay = r.done_ts ? istDay(new Date(r.done_ts)) : null;
@@ -1173,12 +1211,12 @@ const verOr404 = (user, id) => {
   return { v, w: workOr404(user, v.work_id) };
 };
 route('POST', '/api/verifications/:id/measure', async (req, res, { user, params }) => {
-  need(user, ['jen']);
+  need(user, OFFICER_ROLES);
   const { v, w } = verOr404(user, params.id);
-  if (w.jen_id !== user.id) throw httpErr(403, 'आप इस काम के JEN नहीं हैं');
   if (v.status !== 'pending_jen') throw httpErr(400, 'यह नाप पहले ही दर्ज है');
-  const b = await readJson(req);
   const s = getSettings();
+  if (!measurerAllowed(user, w, v, s)) throw httpErr(403, user.role === 'jen' ? 'आप इस काम के JEN नहीं हैं' : `JEN की समय-सीमा के ${user.role === 'aen' ? s.escalate_measure_aen_hours : s.escalate_measure_xen_hours} घंटे बाद ही ${user.role.toUpperCase()} नाप ले सकता है`);
+  const b = await readJson(req);
   const lat = num(b.lat), lng = num(b.lng), acc = num(b.accuracy);
   if (lat == null || lng == null) throw httpErr(400, 'GPS लोकेशन नहीं मिली');
   const d = Math.round(haversine(lat, lng, w.lat, w.lng));
@@ -1211,10 +1249,10 @@ route('POST', '/api/verifications/:id/measure', async (req, res, { user, params 
   send(res, 200, decorateVerification(q('SELECT * FROM verifications WHERE id = ?').get(v.id), s));
 });
 route('POST', '/api/verifications/:id/approve', async (req, res, { user, params }) => {
-  need(user, ['aen']);
+  need(user, ['aen', 'xen']);
   const { v, w } = verOr404(user, params.id);
-  if (w.aen_id !== user.id) throw httpErr(403, 'आप इस काम के AEN नहीं हैं');
   if (v.status !== 'pending_aen') throw httpErr(400, 'अभी अनुमोदन के लिए नहीं है');
+  if (!approverAllowed(user, w, v, getSettings())) throw httpErr(403, user.role === 'aen' ? 'आप इस नाप का अनुमोदन नहीं कर सकते (अपना नाप ख़ुद अनुमोदित नहीं होता)' : 'XEN अनुमोदन तब करता है जब नाप AEN ने लिया हो या AEN की समय-सीमा निकल गई हो');
   const b = await readJson(req);
   if (!['approved', 'returned'].includes(b.decision)) throw httpErr(400, 'अनुमोदन या वापसी चुनें');
   if (b.decision === 'returned' && !str(b.note)) throw httpErr(400, 'वापस भेजने का कारण लिखें');
@@ -1547,7 +1585,8 @@ function workEvents(w, s, limit = 200) {
   for (const v of q('SELECT * FROM verifications WHERE work_id = ? ORDER BY id DESC LIMIT 50').all(w.id)) {
     const label = { weekly: 'साप्ताहिक नाप', on_demand: 'ठेकेदार द्वारा माँगा नाप', final: 'अंतिम नाप (काम पूरा)' }[v.kind] || `${v.milestone_no * s.milestone_percent}% माइलस्टोन का नाप`;
     add(v.created_ts, 'verification_due', `${label} देय: JEN को ${s.jen_verify_hours} घंटे में साइट पर नाप लेना है (दावा ₹${Math.round(v.claimed_amount).toLocaleString('en-IN')})`);
-    if (v.jen_ts) add(v.jen_ts, 'measured', `JEN ने साइट पर नाप लिया: ₹${Math.round(v.measured_amount).toLocaleString('en-IN')}${v.jen_late_hours ? ` (${v.jen_late_hours} घंटे देर से)` : ' (समय पर)'}`, { by: nm(v.jen_id), role: 'jen' });
+    const mRole = v.jen_id ? q('SELECT role FROM users WHERE id = ?').get(v.jen_id)?.role || 'jen' : 'jen';
+    if (v.jen_ts) add(v.jen_ts, 'measured', `${mRole.toUpperCase()} ने साइट पर नाप लिया: ₹${Math.round(v.measured_amount).toLocaleString('en-IN')}${v.jen_late_hours ? ` (${v.jen_late_hours} घंटे देर से)` : ' (समय पर)'}`, { by: nm(v.jen_id), role: mRole });
     if (v.aen_ts) add(v.aen_ts, 'approved', `AEN ने नाप अनुमोदित किया${v.aen_late_hours ? ` (${v.aen_late_hours} घंटे देर से)` : ' (समय पर)'}`, { by: nm(v.aen_id), role: 'aen' });
   }
   for (const b of q('SELECT * FROM bills WHERE work_id = ?').all(w.id)) {
@@ -1675,6 +1714,143 @@ route('GET', '/feed/work/:id', async (req, res, { params }) => {
   if (!w) throw httpErr(404, 'काम नहीं मिला');
   send(res, 200, rss(req, `साइट साक्षी: ${w.name}`, `/#work/${w.id}`, workEvents(w, s, 60)), { 'Content-Type': 'application/rss+xml; charset=utf-8' });
 }, { public: true });
+
+// ---- measurement duty moves up when the JEN does not come: AEN after a day, XEN after three ----
+function measurerAllowed(user, w, v, s) {
+  if (user.role === 'jen') return w.jen_id === user.id;
+  const late = hoursBetween(v.jen_due_ts, nowIso());
+  if (user.role === 'aen') return w.aen_id === user.id && late >= s.escalate_measure_aen_hours;
+  if (user.role === 'xen') return w.xen_id === user.id && late >= s.escalate_measure_xen_hours;
+  return false;
+}
+// nobody approves their own measurement; the XEN steps in when the AEN measured or is late
+function approverAllowed(user, w, v, s) {
+  if (v.jen_id === user.id) return false;
+  if (user.role === 'aen') return w.aen_id === user.id;
+  if (user.role === 'xen') return w.xen_id === user.id && (v.jen_id === w.aen_id || hoursBetween(v.aen_due_ts, nowIso()) >= s.escalate_approve_xen_hours);
+  return false;
+}
+
+// ---- instruction register: verbal instructions and promises, written down; silence = confirmed ----
+route('GET', '/api/instructions', async (req, res, { user, query }) => {
+  const s = getSettings();
+  const names = userNames();
+  const ws = query.work_id ? [workOr404(user, query.work_id)] : worksFor(user);
+  const out = [];
+  for (const w of ws) for (const i of q('SELECT * FROM instructions WHERE work_id = ? ORDER BY id DESC').all(w.id))
+    out.push({ ...i, work: w.name, by: names[i.raised_by], to_name: names[w[i.to_role + '_id']] || '', responder: names[i.responded_by] || '', state: i.status === 'pending' && istDay() > i.respond_due_day ? 'deemed' : i.status });
+  send(res, 200, out);
+});
+route('POST', '/api/instructions', async (req, res, { user }) => {
+  need(user, ['contractor', ...OFFICER_ROLES]);
+  const b = await readJson(req);
+  const w = workOr404(user, b.work_id);
+  if (w[user.role + '_id'] !== user.id) throw httpErr(403, 'आप इस काम पर नहीं हैं');
+  if (!str(b.text)) throw httpErr(400, 'निर्देश / वादा पूरा लिखें: किसने, कब, क्या कहा');
+  const to = user.role === 'contractor' ? (OFFICER_ROLES.includes(b.to_role) ? b.to_role : 'jen') : 'contractor';
+  if (!w[to + '_id']) throw httpErr(400, 'उस पद पर कोई नियुक्त नहीं');
+  const s = getSettings();
+  const said = /^\d{4}-\d{2}-\d{2}$/.test(b.said_on || '') && b.said_on <= istDay() ? b.said_on : istDay();
+  const id = Number(q(`INSERT INTO instructions (work_id, raised_by, raised_role, to_role, kind, text, said_on, created_ts, respond_due_day) VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(w.id, user.id, user.role, to, b.kind === 'promise' ? 'promise' : 'instruction', str(b.text, 3000), said, nowIso(), addDays(istDay(), s.instruction_response_days)).lastInsertRowid);
+  const u = q('SELECT mobile FROM users WHERE id = ?').get(w[to + '_id']);
+  if (u) sendSms(u.mobile, `SiteSaakshi: "${w.name}" पर निर्देश रजिस्टर में आपके नाम एक प्रविष्टि। ${s.instruction_response_days} दिन में पुष्टि या खंडन करें, वरना पुष्टि मानी जाएगी।`);
+  send(res, 201, { id });
+});
+route('POST', '/api/instructions/:id/respond', async (req, res, { user, params }) => {
+  const i = q('SELECT * FROM instructions WHERE id = ?').get(Number(params.id));
+  if (!i) throw httpErr(404, 'नहीं मिला');
+  const w = workOr404(user, i.work_id);
+  if (w[i.to_role + '_id'] !== user.id) throw httpErr(403, 'यह आपके जवाब के लिए नहीं है');
+  if (i.status !== 'pending') throw httpErr(400, 'जवाब पहले दिया जा चुका है');
+  if (istDay() > i.respond_due_day) throw httpErr(400, 'जवाब की समय-सीमा निकल चुकी है; पुष्टि मानी गई');
+  const b = await readJson(req);
+  if (!['confirmed', 'denied'].includes(b.status)) throw httpErr(400, 'पुष्टि या खंडन चुनें');
+  if (b.status === 'denied' && !str(b.note)) throw httpErr(400, 'खंडन का कारण लिखें');
+  q('UPDATE instructions SET status = ?, responded_by = ?, responded_ts = ?, response_note = ? WHERE id = ?').run(b.status, user.id, nowIso(), str(b.note, 2000), i.id);
+  send(res, 200, { ok: true });
+});
+
+// ---- explanation: S.E. / HQ / XEN ask the person behind a red flag; no reply in time is itself a flag ----
+route('POST', '/api/explanations', async (req, res, { user }) => {
+  need(user, [...OVERSIGHT, 'xen']);
+  const b = await readJson(req);
+  const w = workOr404(user, b.work_id);
+  const to = num(b.asked_to);
+  const allowed = [w.contractor_id, w.jen_id, w.aen_id, w.xen_id].filter((x) => x && x !== user.id);
+  if (!allowed.includes(to)) throw httpErr(400, 'इस काम से जुड़ा व्यक्ति चुनें');
+  if (!str(b.question)) throw httpErr(400, 'प्रश्न लिखें');
+  const s = getSettings();
+  const id = Number(q('INSERT INTO explanations (work_id, asked_by, asked_to, flag_text, question, created_ts, due_day) VALUES (?,?,?,?,?,?,?)')
+    .run(w.id, user.id, to, str(b.flag_text, 1000), str(b.question, 2000), nowIso(), addDays(istDay(), s.explanation_days)).lastInsertRowid);
+  const u = q('SELECT mobile FROM users WHERE id = ?').get(to);
+  if (u) sendSms(u.mobile, `SiteSaakshi: "${w.name}" पर ${user.name} ने स्पष्टीकरण माँगा है। ${s.explanation_days} दिन में पोर्टल पर जवाब दें।`);
+  audit(user.id, 'explanation_asked', { id, to });
+  send(res, 201, { id });
+});
+route('GET', '/api/explanations', async (req, res, { user }) => {
+  const names = userNames();
+  const rows = OVERSIGHT.includes(user.role) ? q('SELECT * FROM explanations ORDER BY id DESC LIMIT 500').all()
+    : q('SELECT * FROM explanations WHERE asked_to = ? OR asked_by = ? ORDER BY id DESC').all(user.id, user.id);
+  send(res, 200, rows.map((e) => ({ ...e, work: q('SELECT name FROM works WHERE id = ?').get(e.work_id)?.name, by: names[e.asked_by], to: names[e.asked_to],
+    overdue: !e.reply && istDay() > e.due_day })));
+});
+route('POST', '/api/explanations/:id/reply', async (req, res, { user, params }) => {
+  const e = q('SELECT * FROM explanations WHERE id = ?').get(Number(params.id));
+  if (!e || e.asked_to !== user.id) throw httpErr(404, 'नहीं मिला');
+  if (e.reply) throw httpErr(400, 'जवाब दिया जा चुका है');
+  const b = await readJson(req);
+  if (!str(b.reply)) throw httpErr(400, 'जवाब लिखें');
+  q('UPDATE explanations SET reply = ?, replied_ts = ? WHERE id = ?').run(str(b.reply, 5000), nowIso(), e.id);
+  send(res, 200, { ok: true });
+});
+
+// ---- daily report: every morning to the S.E. and the top authority, and on the portal ----
+function dailyReport(works, s) {
+  const today = istDay(), yday = addDays(today, -1);
+  const flags = redFlags(works, s);
+  const byRole = {}, bySev = { high: 0, medium: 0, low: 0 };
+  for (const f of flags) { bySev[f.severity]++; if (f.against_role) byRole[f.against_role] = (byRole[f.against_role] || 0) + 1; }
+  const ids = works.map((w) => w.id).join(',') || '0';
+  const count = (sql) => q(sql.replace('$IDS', ids)).get(yday).n;
+  return {
+    day: today, works_total: works.length, works_running: works.filter((w) => w.status === 'active' && !w.completed_ts && w.wo_date).length,
+    flags_total: flags.length, flags_by_severity: bySev, flags_by_role: byRole,
+    flags_old: flags.filter((f) => f.severity !== 'low' && f.since && daysBetween(String(f.since).slice(0, 10), today) >= 7).length,
+    flags: flags.filter((f) => f.severity !== 'low').slice(0, 40),
+    yesterday: {
+      progress: count("SELECT COUNT(*) AS n FROM progress WHERE work_id IN ($IDS) AND day = ?"),
+      visits: count("SELECT COUNT(*) AS n FROM visits WHERE work_id IN ($IDS) AND day = ? AND in_fence = 1"),
+      dprs: count("SELECT COUNT(*) AS n FROM dprs WHERE work_id IN ($IDS) AND day = ?"),
+      measured: count("SELECT COUNT(*) AS n FROM verifications WHERE work_id IN ($IDS) AND substr(jen_ts,1,10) = ?"),
+      bills: count("SELECT COUNT(*) AS n FROM bills WHERE work_id IN ($IDS) AND substr(created_ts,1,10) = ?"),
+      paid: count("SELECT COUNT(*) AS n FROM bills WHERE work_id IN ($IDS) AND substr(paid_ts,1,10) = ?"),
+    },
+    explanations_pending: q(`SELECT COUNT(*) AS n FROM explanations WHERE work_id IN (${ids}) AND reply IS NULL`).get().n,
+  };
+}
+route('GET', '/api/daily-report', async (req, res, { user, query }) => {
+  need(user, [...OVERSIGHT, 'xen', 'aen']);
+  if (query.day && query.day !== istDay()) {
+    need(user, OVERSIGHT);
+    const r = q('SELECT json FROM daily_reports WHERE day = ?').get(query.day);
+    if (!r) throw httpErr(404, 'उस दिन की रिपोर्ट नहीं');
+    return send(res, 200, JSON.parse(r.json));
+  }
+  send(res, 200, { ...dailyReport(worksFor(user), getSettings()), past_days: OVERSIGHT.includes(user.role) ? q('SELECT day FROM daily_reports ORDER BY day DESC LIMIT 60').all().map((r) => r.day) : [] });
+});
+function dailyTick() {
+  const nowIst = new Date(Date.now() + 5.5 * 3600e3);
+  if (nowIst.getUTCHours() < 9) return;
+  const day = istDay();
+  if (q('SELECT 1 FROM daily_reports WHERE day = ?').get(day)) return;
+  const s = getSettings();
+  const r = dailyReport(q('SELECT * FROM works').all(), s);
+  q('INSERT INTO daily_reports (day, json) VALUES (?, ?)').run(day, JSON.stringify(r));
+  const msg = `SiteSaakshi ${day}: ${r.works_running} काम चालू। 🚩 ${r.flags_total} झंडे (गंभीर ${r.flags_by_severity.high}, 7+ दिन पुराने ${r.flags_old})। ` +
+    Object.entries(r.flags_by_role).map(([k, n]) => `${k.toUpperCase()} ${n}`).join(', ') + `। कल: ${r.yesterday.visits} विज़िट, ${r.yesterday.measured} नाप, ${r.yesterday.paid} भुगतान।`;
+  for (const u of q("SELECT mobile FROM users WHERE role IN ('hq','se') AND active = 1").all()) sendSms(u.mobile, msg);
+}
 
 route('GET', '/api/settings', async (req, res) => send(res, 200, getSettings()));
 route('PUT', '/api/settings', async (req, res, { user }) => {
@@ -1809,6 +1985,7 @@ function seedDemo() {
 
 firstRun();
 weeklyVerifications();
-setInterval(weeklyVerifications, 30 * 60e3).unref();
+dailyTick();
+setInterval(() => { weeklyVerifications(); dailyTick(); }, 10 * 60e3).unref();
 server.listen(PORT, () => console.log(`SiteSaakshi running at http://localhost:${PORT}`));
 module.exports = { server, haversine, weekStart };

@@ -9,7 +9,7 @@ const REQ_TYPE = { measurement: 'नाप (MB में माप)', bill: 'ब
 const BILL_STAGE = { submitted: 'बिल जमा', mb_recorded: 'MB दर्ज (JEN)', checked_aen: 'जाँचा (AEN)', passed_xen: 'पास (XEN)', paid: 'भुगतान हुआ' };
 const STATUS = { open: ['खुला', 'warn'], reopened: ['दोबारा खुला', 'bad'], done: ['विभाग ने पूरा बताया', 'ok'], closed: ['बंद', ''] };
 const FLAG_TYPE = { jen_not_verified: 'JEN ने नाप नहीं लिया', aen_not_approved: 'AEN ने अनुमोदन नहीं किया', contractor_overclaim: 'ठेकेदार का ज़्यादा दावा', contractor_no_update: 'ठेकेदार ने अपडेट नहीं डाला',
-  request_overdue: 'अनुरोध समय-सीमा पार', wo_not_issued: 'वर्क ऑर्डर जारी नहीं', contractor_not_started: 'काम शुरू नहीं', hindrance_undecided: 'बाधा पर निर्णय बाकी',
+  request_overdue: 'अनुरोध समय-सीमा पार', measure_escalated: 'नाप की ज़िम्मेदारी ऊपर गई', explanation_overdue: 'स्पष्टीकरण नहीं दिया', instruction_disputed: 'निर्देश/वादे पर विवाद', wo_not_issued: 'वर्क ऑर्डर जारी नहीं', contractor_not_started: 'काम शुरू नहीं', hindrance_undecided: 'बाधा पर निर्णय बाकी',
   department_delay: 'विभाग के कारण देरी', contractor_delay: 'ठेकेदार की देरी', bill_delayed: 'बिल/भुगतान में देरी', final_not_approved: 'अंतिम बिल: मुख्यालय का अनुमोदन बाकी', assignment_disputed: 'काम सौंपने पर आपत्ति', officer_not_joined: 'अधिकारी ने लॉगिन नहीं किया' };
 const VSTATUS = { pending_jen: ['JEN का साइट-नाप बाकी', 'warn'], pending_aen: ['AEN का अनुमोदन बाकी', 'warn'], approved: ['JEN + AEN से सत्यापित', 'ok'] };
 const FLAG = { exceeds_boq: 'BOQ मात्रा से ज़्यादा',  outside_fence: 'साइट से बाहर', low_accuracy: 'GPS कमज़ोर', photo_reused: 'पुरानी फ़ोटो', no_photo: 'फ़ोटो नहीं', clock_mismatch: 'फ़ोन का समय गलत', from_gallery: 'गैलरी से फ़ोटो' };
@@ -168,6 +168,9 @@ function tabsFor(role) {
   if (role !== 'hq') t.push(['newproject', '＋ नया प्रोजेक्ट']);
   t.push(['visits', role === 'contractor' ? 'हाज़िरी पुष्टि' : 'हाज़िरी रिकॉर्ड']);
   t.push(['bills', 'बिल']);
+  t.push(['instructions', 'निर्देश रजिस्टर']);
+  t.push(['explanations', 'स्पष्टीकरण']);
+  if (['se', 'hq', 'admin', 'xen', 'aen'].includes(role)) t.splice(1, 0, ['daily', '📋 दैनिक रिपोर्ट']);
   t.push(['hindrances', 'बाधा / समय-वृद्धि']);
   t.push(['dpr', role === 'jen' ? 'आज की DPR' : 'DPR']);
   t.push(['requests', role === 'contractor' ? 'नाप / बिल अनुरोध' : 'अनुरोध']);
@@ -190,6 +193,12 @@ async function show() {
   const main = $('#main');
   main.innerHTML = '<p class="muted center">लोड हो रहा है…</p>';
   try { await VIEWS[tab](main); } catch (e) { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; }
+  // an unanswered explanation follows the person on every screen until they reply
+  if (tab !== 'explanations') api('/api/explanations').then((exs) => {
+    const n = exs.filter((e) => e.asked_to === me.id && !e.reply).length;
+    if (!n || $('#exban')) return;
+    main.insertAdjacentHTML('afterbegin', `<div class="notice" id="exban" style="background:var(--bad-bg)">❓ आपसे <b>${n}</b> स्पष्टीकरण माँगे गए हैं। ${settings.explanation_days} दिन में जवाब न दिया तो लाल झंडा लगेगा। <a href="#explanations">जवाब दें →</a></div>`);
+  }).catch(() => {});
 }
 async function boot() {
   try {
@@ -478,6 +487,11 @@ VIEWS.admin = async (main) => {
       <div><label>रनिंग बिल पास (दिन)</label><input id="sbp" type="number" min="1" value="${settings.bill_pass_days}"></div>
       <div><label>भुगतान (दिन)</label><input id="spd" type="number" min="1" value="${settings.payment_days}"></div>
       <div><label>काम पूरा: मुख्यालय का सत्यापन व भुगतान-अनुमोदन (दिन)</label><input id="sfa" type="number" min="1" value="${settings.final_approval_days}"></div>
+      <div><label>JEN न आए तो AEN नाप ले (घंटे बाद)</label><input id="sea" type="number" min="1" value="${settings.escalate_measure_aen_hours}"></div>
+      <div><label>JEN न आए तो XEN नाप ले (घंटे बाद)</label><input id="sex" type="number" min="1" value="${settings.escalate_measure_xen_hours}"></div>
+      <div><label>AEN देर करे तो XEN अनुमोदन (घंटे बाद)</label><input id="sexa" type="number" min="1" value="${settings.escalate_approve_xen_hours}"></div>
+      <div><label>निर्देश/वादे पर जवाब (दिन)</label><input id="sir" type="number" min="1" value="${settings.instruction_response_days}"></div>
+      <div><label>स्पष्टीकरण का जवाब (दिन)</label><input id="sexd" type="number" min="1" value="${settings.explanation_days}"></div>
       <div><label><input type="checkbox" id="spb" ${settings.public_board ? 'checked' : ''} style="width:auto"> जनता पोर्टल चालू (काम, अपडेट, ठेकेदार, अधिकारी)</label></div>
       <div><label><input type="checkbox" id="spn" ${settings.public_names ? 'checked' : ''} style="width:auto"> जनता पोर्टल पर नाम दिखाएँ (मोबाइल कभी नहीं)</label></div>
       <div><label><input type="checkbox" id="spp" ${settings.public_photos ? 'checked' : ''} style="width:auto"> जनता पोर्टल पर साइट फ़ोटो (सेल्फ़ी कभी नहीं)</label></div>
@@ -499,7 +513,7 @@ VIEWS.admin = async (main) => {
       sla_days: Object.fromEntries(Object.keys(REQ_TYPE).map((k) => [k, n('#sl_' + k)])),
       max_gps_accuracy_m: n('#sg'), min_visit_minutes: n('#sm'), escalate_after_days: n('#se'),
       milestone_percent: n('#smp'), milestone_max_amount: n('#sma'), jen_verify_hours: n('#sjh'), aen_approve_hours: n('#sah'), overclaim_tolerance_percent: n('#sot'), progress_gap_days: n('#spg'),
-      wo_issue_days: n('#swo'), start_within_days: n('#sst'), hindrance_response_days: n('#shr'), hindrance_decision_days: n('#shd'), bill_pass_days: n('#sbp'), payment_days: n('#spd'), final_approval_days: n('#sfa'), weekly_verification: $('#swv').checked, public_board: $('#spb').checked, public_names: $('#spn').checked, public_photos: $('#spp').checked,
+      wo_issue_days: n('#swo'), start_within_days: n('#sst'), hindrance_response_days: n('#shr'), hindrance_decision_days: n('#shd'), bill_pass_days: n('#sbp'), payment_days: n('#spd'), final_approval_days: n('#sfa'), weekly_verification: $('#swv').checked, public_board: $('#spb').checked, escalate_measure_aen_hours: n('#sea'), escalate_measure_xen_hours: n('#sex'), escalate_approve_xen_hours: n('#sexa'), instruction_response_days: n('#sir'), explanation_days: n('#sexd'), public_names: $('#spn').checked, public_photos: $('#spp').checked,
     }, 'PUT');
     toast('नियम सहेजे गए ✓');
   });
@@ -573,7 +587,10 @@ VIEWS.flags = async (main) => {
         <span class="small muted">${f.hours != null ? `${f.hours} घंटे देर` : f.days != null ? `${f.days} दिन` : ''}</span></div>
       <p style="margin:6px 0">${esc(f.text)}</p>
       <p class="small muted">${esc(f.work)}${f.tia ? ` · निविदा प्राधिकारी: ${esc(f.tia)}` : ''}</p>
-      ${f.type === 'assignment_disputed' && ['se', 'admin', 'hq'].includes(me.role) ? `<button data-res="${f.ref}">सुलझ गया</button>` : ''}</div>`).join('') || '<div class="card"><span class="pill ok">कोई लाल झंडा नहीं 👍</span></div>'}</div>`;
+      <div class="row">${f.type === 'assignment_disputed' && ['se', 'admin', 'hq'].includes(me.role) ? `<button data-res="${f.ref}">सुलझ गया</button>` : ''}
+      ${f.against_id && f.against_id !== me.id && ['se', 'admin', 'hq', 'xen'].includes(me.role) ? `<button data-ask="${flags.indexOf(f)}">❓ स्पष्टीकरण माँगें</button>` : ''}
+      ${f.age_days >= 7 ? `<span class="pill bad">${f.age_days} दिन पुराना</span>` : ''}</div></div>`).join('') || '<div class="card"><span class="pill ok">कोई लाल झंडा नहीं 👍</span></div>'}</div>`;
+  main.querySelectorAll('[data-ask]').forEach((b) => (b.onclick = () => askExplanation(flags[Number(b.dataset.ask)])));
   main.querySelectorAll('[data-res]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/work-flags/${b.dataset.res}/resolve`, { note: '' }); show(); })));
 };
 
@@ -646,8 +663,8 @@ VIEWS.verify = async (main) => {
       ${v.contractor_status !== 'pending' && v.measured_amount != null ? `<p class="small">ठेकेदार: <span class="pill ${v.contractor_status === 'agreed' ? 'ok' : 'bad'}">${v.contractor_status === 'agreed' ? 'नाप से सहमत' : 'नाप से असहमत'}</span> ${esc(v.contractor_note)}</p>` : ''}
       ${photo(v.jen_photo)}
       <div class="row" style="margin-top:8px"><button data-vopen="${v.id}">विवरण</button>
-        ${me.role === 'jen' && v.status === 'pending_jen' ? `<button class="primary" data-vmeasure="${v.id}">📏 साइट पर नाप दर्ज करें</button>` : ''}
-        ${me.role === 'aen' && v.status === 'pending_aen' ? `<button class="primary" data-vapprove="${v.id}">✍️ अनुमोदन / वापस</button>` : ''}
+        ${v.status === 'pending_jen' && (me.role === 'jen' || (me.role === 'aen' && v.overdue_hours >= settings.escalate_measure_aen_hours) || (me.role === 'xen' && v.overdue_hours >= settings.escalate_measure_xen_hours)) ? `<button class="primary" data-vmeasure="${v.id}">📏 साइट पर नाप दर्ज करें${me.role !== 'jen' ? ' (JEN नहीं आया)' : ''}</button>` : ''}
+        ${v.status === 'pending_aen' && v.jen_id !== me.id && (me.role === 'aen' || (me.role === 'xen' && (v.jen_id === v.w_aen || v.overdue_hours >= settings.escalate_approve_xen_hours))) ? `<button class="primary" data-vapprove="${v.id}">✍️ अनुमोदन / वापस</button>` : ''}
         ${me.role === 'contractor' && v.measured_amount != null && v.contractor_status === 'pending' ? `<button data-vagree="${v.id}">नाप से सहमत</button><button class="danger" data-vdis="${v.id}">असहमत</button>` : ''}</div></div>`).join('') || '<p class="muted">अभी कोई माइलस्टोन नहीं।</p>'}</div>`;
   const find = (id) => vs.find((v) => String(v.id) === String(id));
   main.querySelectorAll('[data-vopen]').forEach((b) => (b.onclick = () => verifyDialog(find(b.dataset.vopen), 'view')));
@@ -1143,6 +1160,75 @@ async function shareWork(id, name) {
   try { if (navigator.share) { await navigator.share({ title: name, url }); return; } } catch { return; }
   try { await navigator.clipboard.writeText(url); toast('लिंक कॉपी हुआ ✓'); } catch { prompt('लिंक:', url); }
 }
+
+// ---------- instruction register (निर्देश रजिस्टर) ----------
+const ISTATE = { pending: ['जवाब बाकी', 'warn'], deemed: ['जवाब नहीं आया: पुष्टि मानी', 'ok'], confirmed: ['पुष्टि', 'ok'], denied: ['खंडन: S.E./HQ देखेंगे', 'bad'] };
+VIEWS.instructions = async (main) => {
+  const [list, works] = await Promise.all([api('/api/instructions'), api('/api/works')]);
+  const mine = works.filter((w) => w.status === 'active' && w[me.role + '_id'] === me.id);
+  const canAdd = ['contractor', 'jen', 'aen', 'xen'].includes(me.role) && mine.length;
+  main.innerHTML = `<h2>निर्देश रजिस्टर</h2>
+    <div class="notice">काम से जुड़ा हर मौखिक निर्देश या वादा यहाँ लिखें। जैसे: "XEN ने 01.10 को कहा था कि पहला बिल अभी बनेगा, फ़ाइनल बाद में, पेनल्टी नहीं लगेगी"। जिसके नाम लिखा गया, उसे <b>${settings.instruction_response_days} दिन</b> में पुष्टि या खंडन करना होगा। <b>जवाब न दे तो बात पक्की मानी जाती है।</b> खंडन होने पर मामला लाल झंडे के रूप में S.E. और मुख्यालय तक जाता है।</div>
+    ${canAdd ? `<div class="card"><h3>नई प्रविष्टि</h3>
+      <label>काम</label><select id="iw">${mine.map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select>
+      ${me.role === 'contractor' ? `<label>किसने कहा</label><select id="ito">${['jen', 'aen', 'xen'].map((r) => `<option value="${r}">${ROLE[r]}</option>`).join('')}</select>
+      <label>प्रकार</label><select id="ik"><option value="instruction">निर्देश (यह काम करो, ऐसे करो)</option><option value="promise">वादा / आश्वासन (बिल, भुगतान, पेनल्टी नहीं…)</option></select>` : '<p class="small muted">यह प्रविष्टि ठेकेदार के नाम जाएगी।</p>'}
+      <label>कब कहा</label><input id="id" type="date" value="${today}">
+      <label>पूरी बात *</label><textarea id="it" placeholder="किसने, कहाँ, किसके सामने, क्या कहा"></textarea>
+      <p><button class="primary big" id="is">दर्ज करें</button></p></div>` : ''}
+    <div class="list">${list.map((i) => `<div class="card"><div class="spread"><b>${i.kind === 'promise' ? 'वादा' : 'निर्देश'}: ${esc(i.work)}</b><span class="pill ${ISTATE[i.state][1]}">${ISTATE[i.state][0]}</span></div>
+      <p class="small muted">${esc(i.by)} (${ROLE_SHORT[i.raised_role]}) → ${esc(i.to_name)} (${ROLE_SHORT[i.to_role]}) · कहा गया ${fmtDay(i.said_on)} · दर्ज ${fmtTime(i.created_ts)}</p>
+      <p>${esc(i.text)}</p>${i.response_note ? `<p class="small"><b>${esc(i.responder)}:</b> ${esc(i.response_note)}</p>` : ''}
+      ${i.state === 'pending' ? `<p class="small">जवाब की अंतिम तिथि ${fmtDay(i.respond_due_day)}</p>` : ''}
+      ${i.state === 'pending' && works.find((w) => w.id === i.work_id)?.[i.to_role + '_id'] === me.id ? `<div class="row"><button class="primary" data-iok="${i.id}">पुष्टि करें</button><button class="danger" data-ino="${i.id}">खंडन करें</button></div>` : ''}</div>`).join('') || '<p class="muted">अभी कोई प्रविष्टि नहीं।</p>'}</div>`;
+  if ($('#is')) $('#is').onclick = () => busy($('#is'), async () => {
+    await api('/api/instructions', { work_id: Number($('#iw').value), to_role: $('#ito')?.value, kind: $('#ik')?.value || 'instruction', said_on: $('#id').value, text: $('#it').value });
+    toast('दर्ज हुआ ✓ सामने वाले को सूचना गई'); show();
+  });
+  main.querySelectorAll('[data-iok]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/instructions/${b.dataset.iok}/respond`, { status: 'confirmed' }); show(); })));
+  main.querySelectorAll('[data-ino]').forEach((b) => (b.onclick = () => { const note = prompt('खंडन का कारण:'); if (note) busy(b, async () => { await api(`/api/instructions/${b.dataset.ino}/respond`, { status: 'denied', note }); show(); }); }));
+};
+
+// ---------- explanations (स्पष्टीकरण) ----------
+VIEWS.explanations = async (main) => {
+  const list = await api('/api/explanations');
+  main.innerHTML = `<h2>स्पष्टीकरण</h2>
+    <div class="notice">S.E., मुख्यालय या XEN किसी लाल झंडे पर ज़िम्मेदार व्यक्ति से कारण पूछते हैं। जवाब <b>${settings.explanation_days} दिन</b> में देना है। जवाब न आए तो उस व्यक्ति पर नया लाल झंडा लगता है।</div>
+    <div class="list">${list.map((e) => `<div class="card" style="box-shadow: inset 4px 0 ${e.reply ? 'var(--ok)' : e.overdue ? 'var(--bad)' : 'var(--warn)'}">
+      <div class="spread"><b>${esc(e.work)}</b><span class="small muted">${fmtTime(e.created_ts)}</span></div>
+      <p class="small">${esc(e.by)} → <b>${esc(e.to)}</b> · अंतिम तिथि ${fmtDay(e.due_day)} ${e.overdue ? '<span class="pill bad">🚩 देर</span>' : ''}</p>
+      ${e.flag_text ? `<p class="small muted">झंडा: ${esc(e.flag_text)}</p>` : ''}<p><b>प्रश्न:</b> ${esc(e.question)}</p>
+      ${e.reply ? `<p><b>जवाब (${fmtTime(e.replied_ts)}):</b> ${esc(e.reply)}</p>` : e.asked_to === me.id ? `<textarea data-rt="${e.id}" placeholder="आपका जवाब"></textarea><p><button class="primary" data-rs="${e.id}">जवाब भेजें</button></p>` : '<p class="small muted">जवाब बाकी</p>'}</div>`).join('') || '<p class="muted">कोई स्पष्टीकरण नहीं।</p>'}</div>`;
+  main.querySelectorAll('[data-rs]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/explanations/${b.dataset.rs}/reply`, { reply: $(`[data-rt="${b.dataset.rs}"]`).value }); toast('जवाब भेजा ✓'); show(); })));
+};
+function askExplanation(f) {
+  dialog(`<h3>स्पष्टीकरण माँगें: ${esc(f.against_name)}</h3><p class="small muted">${esc(f.work)} · ${esc(f.text)}</p>
+    <label>प्रश्न</label><textarea id="exq">${esc(f.type === 'jen_not_verified' ? 'नाप समय पर क्यों नहीं लिया गया? कब तक लेंगे?' : f.type === 'bill_delayed' || f.type === 'final_not_approved' ? 'बिल/भुगतान में देरी का कारण और तिथि बताएँ।' : 'देरी का कारण और समाधान की तिथि बताएँ।')}</textarea>
+    <div class="row" style="margin-top:10px"><button class="primary" id="exs">भेजें (${settings.explanation_days} दिन में जवाब)</button><button onclick="dlg.close()">रद्द</button></div>`, () => {
+    $('#exs').onclick = () => busy($('#exs'), async () => { await api('/api/explanations', { work_id: f.work_id, asked_to: f.against_id, question: $('#exq').value, flag_text: f.text }); $('#dlg').close(); toast('स्पष्टीकरण माँगा गया ✓'); });
+  });
+}
+
+// ---------- daily report (दैनिक रिपोर्ट) ----------
+VIEWS.daily = async (main, day) => {
+  const r = await api('/api/daily-report' + (day ? '?day=' + day : ''));
+  main.innerHTML = `<div class="spread"><h2>दैनिक रिपोर्ट: ${fmtDay(r.day)}</h2><div class="row">
+      ${r.past_days?.length ? `<select id="drd"><option value="">आज (लाइव)</option>${r.past_days.map((d) => `<option ${d === day ? 'selected' : ''}>${d}</option>`).join('')}</select>` : ''}<button onclick="print()">🖨 प्रिंट</button></div></div>
+    <p class="small muted">हर सुबह 9 बजे यह सार S.E. और मुख्यालय को SMS से जाता है और उस दिन की प्रति यहाँ सहेजी जाती है।</p>
+    <div class="stats">
+      <div class="stat"><b>${r.works_running}</b><span>काम चालू (कुल ${r.works_total})</span></div>
+      <div class="stat"><b style="color:var(--bad)">${r.flags_by_severity.high}</b><span>गंभीर लाल झंडे</span></div>
+      <div class="stat"><b>${r.flags_total}</b><span>कुल झंडे</span></div>
+      <div class="stat"><b style="color:var(--bad)">${r.flags_old}</b><span>7+ दिन पुराने झंडे</span></div>
+      <div class="stat"><b>${r.explanations_pending}</b><span>स्पष्टीकरण जवाब बाकी</span></div>
+    </div>
+    <div class="card"><h3>किस पर कितने झंडे</h3><div class="row">${['jen', 'aen', 'xen', 'se', 'hq', 'contractor'].map((k) => `<span class="pill ${r.flags_by_role[k] ? 'bad' : 'ok'}">${ROLE_SHORT[k]}: ${r.flags_by_role[k] || 0}</span>`).join(' ')}</div></div>
+    <div class="card"><h3>कल क्या हुआ</h3><p>साइट विज़िट ${r.yesterday.visits} · ठेकेदार अपडेट ${r.yesterday.progress} · DPR ${r.yesterday.dprs} · नाप ${r.yesterday.measured} · बिल जमा ${r.yesterday.bills} · भुगतान ${r.yesterday.paid}</p></div>
+    <div class="card"><h3>गंभीर और मध्यम झंडे (पुराने पहले देखें)</h3><div class="table-wrap"><table><thead><tr><th>काम</th><th>किस पर</th><th>क्या</th><th>कितने दिन</th></tr></thead><tbody>
+      ${r.flags.map((f) => `<tr class="${f.severity === 'high' ? 'bad' : 'warn'}"><td>${esc(f.work)}</td><td>${esc(f.against_name) || ROLE_SHORT[f.against_role] || ''} <span class="small muted">${ROLE_SHORT[f.against_role] || ''}</span></td><td class="small">${esc(f.text)}</td><td>${f.age_days ?? ''}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">कोई नहीं 👍</td></tr>'}
+    </tbody></table></div></div>`;
+  if ($('#drd')) $('#drd').onchange = () => VIEWS.daily(main, $('#drd').value || undefined);
+};
 
 window.dlg = $('#dlg');
 boot();
