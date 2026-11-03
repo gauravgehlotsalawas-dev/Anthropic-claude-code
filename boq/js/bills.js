@@ -303,6 +303,7 @@ function onClick(e) {
   const t = e.target.closest("[data-btab]")?.dataset.btab;
   if (t) { view.tab = t; renderBills(); return; }
   const pr = e.target.closest("[data-print]")?.dataset.print;
+  if (pr === "deviation") { openDeviationPdf(ctx.project(), contract(ctx.project())); return; }
   if (pr) { printView(pr); return; }
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (!act) return;
@@ -970,6 +971,124 @@ function deviationSheet(p, c) {
   if (used + H.signs > PAGE) pages.push([]);
   return pages.map((pg, pi) => `<section class="p-page p-rot d-rot"><div class="p-rot-in f27 d-dev">${pi ? "" : head}${pg.length ? table(pg.join("")) : ""}${pi === pages.length - 1 ? signs : ""}
     <div class="d-pg">Page ${pi + 1} of ${pages.length}</div></div></section>`).join("");
+}
+
+// ---------------------------------------------------------------------------
+// Deviation statement as a real PDF: landscape A4 pages filled edge to edge, like the
+// department's statements (browsers, Safari above all, cannot be trusted to print landscape).
+// ---------------------------------------------------------------------------
+
+async function deviationPdf(p, c) {
+  const { PDFDocument, StandardFonts, rgb } = await import("../vendor/pdf-lib.esm.min.js");
+  const doc = await PDFDocument.create();
+  const F = await doc.embedFont(StandardFonts.TimesRoman), B = await doc.embedFont(StandardFonts.TimesRomanBold);
+  const land = (c.devOrient || "landscape") !== "portrait";
+  const PW = land ? 841.89 : 595.28, PH = land ? 595.28 : 841.89, M = 22, W = PW - 2 * M;
+  const d = deviationRows(p);
+  const FS = land ? 7.6 : 6.6, LH = FS * 1.18, PAD = 2.2;
+  const fr = [3, 23, 6, 4, 6.5, 8, 6, 4, 6.5, 8, 6.5, 6.5, 7.5, 4.5], sum = fr.reduce((a, x) => a + x, 0);
+  const cw = fr.map((x) => (x / sum) * W), cx = cw.map((_, i) => M + cw.slice(0, i).reduce((a, x) => a + x, 0));
+  const clean = (t) => String(t ?? "").replace(/[^\x20-\x7E -ÿ]/g, (ch) => ({ "½": "1/2", "¼": "1/4", "¾": "3/4", "–": "-", "—": "-", "‘": "'", "’": "'", "“": '"', "”": '"', "×": "x", "₹": "Rs." }[ch] ?? " "));
+  const wrap = (text, font, size, width) => {
+    const out = [];
+    for (const para of clean(text).split("\n")) {
+      let line = "";
+      for (const word of para.split(/\s+/).filter(Boolean)) {
+        const t = line ? line + " " + word : word;
+        if (font.widthOfTextAtSize(t, size) <= width) line = t;
+        else { if (line) out.push(line); line = word; while (font.widthOfTextAtSize(line, size) > width && line.length > 1) { let k = line.length; while (k > 1 && font.widthOfTextAtSize(line.slice(0, k), size) > width) k--; out.push(line.slice(0, k)); line = line.slice(k); } }
+      }
+      out.push(line);
+    }
+    return out;
+  };
+  let page, y, pageNo = 0;
+  const pages = [];
+  const line = (x1, y1, x2, y2, t = 0.6) => page.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness: t, color: rgb(0, 0, 0) });
+  const text = (t, x, yy, font = F, size = FS) => page.drawText(clean(t), { x, y: yy, size, font, color: rgb(0, 0, 0) });
+  const cellText = (t, i, top, h, { font = F, align = "left", valign = "top" } = {}) => {
+    const ls = wrap(t, font, FS, cw[i] - 2 * PAD);
+    const block = ls.length * LH;
+    let yy = valign === "middle" ? top - (h - block) / 2 - FS : valign === "bottom" ? top - h + PAD + (ls.length - 1) * LH + 1 : top - PAD - FS + 1;
+    for (const l of ls) {
+      const w = font.widthOfTextAtSize(l, FS);
+      text(l, align === "right" ? cx[i] + cw[i] - PAD - w : align === "center" ? cx[i] + (cw[i] - w) / 2 : cx[i] + PAD, yy, font);
+      yy -= LH;
+    }
+  };
+  const newPage = () => {
+    page = doc.addPage([PW, PH]); pages.push(page); pageNo++; y = PH - M;
+    if (pageNo === 1) {
+      const t = "DEVIATION STATEMENT"; const tw = B.widthOfTextAtSize(t, 13); text(t, (PW - tw) / 2, y - 12, B, 13); line((PW - tw) / 2, y - 14, (PW + tw) / 2, y - 14, 0.8); y -= 26;
+      for (const [k, v] of [["Name of Work :", p.name], ["Name of Agency", c.contractor], ["Work Order No.", `${c.workOrderNo || ""}${c.woDate ? ` Dated ${fd(c.woDate)}` : ""}`]]) {
+        const ls = wrap(v || "", F, 9.5, W - 150); text(k, M + 4, y - 9.5, F, 9.5);
+        ls.forEach((l, i) => text(l, M + 150, y - 9.5 - i * 11.5, F, 9.5)); y -= ls.length * 11.5 + 2;
+      }
+      y -= 4;
+    }
+    // column heads
+    const h1 = 13, h2 = 13, top = y;
+    const span = (a, b) => [cx[a], cx[b] + cw[b]];
+    line(M, top, M + W, top); line(M, top - h1 - h2, M + W, top - h1 - h2);
+    for (const [a, b, label] of [[2, 5, 'As per "G" Schedule'], [6, 9, "As per Actual Executed of work"], [10, 12, "Amount"]]) {
+      const [x1, x2] = span(a, b); const w = B.widthOfTextAtSize(label, FS); text(label, (x1 + x2 - w) / 2, top - h1 + 4, B); line(x1, top - h1, x2, top - h1);
+    }
+    for (const [i, label] of [[0, "S.\nNo."], [1, "Particular"], [13, "Remarks"]]) cellText(label, i, top, h1 + h2, { font: B, align: "center", valign: "middle" });
+    ["Qty", "Unit", "Rate", "Amount", "Qty", "Unit", "Rate", "Amount", "Excess", "Extra", "Saving"].forEach((l, k) => cellText(l, k + 2, top - h1, h2, { font: B, align: "center", valign: "middle" }));
+    const v = [M, ...cx.slice(1), M + W];
+    for (const x of v) { const sub = cx.indexOf(x); const spanTop = [3, 4, 5, 7, 8, 9, 11, 12].includes(sub) ? top - h1 : top; line(x, spanTop, x, top - h1 - h2); }
+    y = top - h1 - h2;
+  };
+  const vlines = (top, bottom) => { for (const x of [M, ...cx.slice(1), M + W]) line(x, top, x, bottom); line(M, bottom, M + W, bottom, 0.4); };
+  const SIGN_H = 60;
+  const row = (cells, { bold = false, mergeLabel = false } = {}) => {
+    const font = bold ? B : F;
+    const h = Math.max(...cells.map((t, i) => (t == null || t === "" ? 1 : wrap(t, font, FS, cw[i] - 2 * PAD).length)), 1) * LH + 2 * PAD + 1;
+    if (y - h < M + 14) newPage();
+    const top = y;
+    cells.forEach((t, i) => { if (t !== "" && t != null) cellText(t, i, top, h, { font, align: i === 1 ? (mergeLabel ? "left" : "left") : i === 3 || i === 7 || i === 0 ? "center" : "right", valign: i === 1 ? "top" : "middle" }); });
+    vlines(top, top - h); y = top - h;
+  };
+  newPage();
+  const v = (x) => (x ? n2(x) : "");
+  const itemCells = (r, i) => [String(i + 1), r.desc, q3(r.extra ? 0 : r.tqty), r.unit, n2(r.rate), n2(r.tamt), q3(r.qty), r.unit, n2(r.applied), n2(r.amt), v(r.excess), v(r.extraAmt), v(r.saving), ""];
+  const totCells = (label, o) => ["", label, "", "", "", n2(o.tamt), "", "", "", n2(o.amt), n2(o.excess), n2(o.extraAmt), n2(o.saving), ""];
+  let n = 0, extrasHead = false;
+  for (const r of d.G) {
+    if (r.extra && !extrasHead) { row(["", "Extra Items", "", "", "", "", "", "", "", "", "", "", "", ""], { bold: true }); extrasHead = true; }
+    row(itemCells(r, n++));
+  }
+  row(totCells("Total", d.gT), { bold: true });
+  // "Less ..." already says it is deducted, so the amounts print without a minus sign, as on the department's statements.
+  const tpRow = Object.fromEntries(Object.entries(d.gTp).map(([k, x]) => [k, /^Less/.test(tpLabel(d.c)) ? Math.abs(x) : x]));
+  row(totCells(tpLabel(d.c).replace(/^Less T\.P\. ([\d.]+)% Below$/, "Less: $1% as per T.P."), tpRow));
+  row(totCells("G-Schedule Total", d.gNet), { bold: true });
+  if (d.H.length) {
+    row(["", "H-Schedule Items", "", "", "", "", "", "", "", "", "", "", "", ""], { bold: true });
+    d.H.forEach((r, i) => row(itemCells(r, i)));
+    row(totCells("G. Total", d.grand), { bold: true });
+  }
+  // signatures
+  if (y - SIGN_H < M) newPage();
+  const office = (c.office || p.client || "").replace(/^.*?(Corporation|Nigam)/i, "Nagar Nigam");
+  ["Junior Engineer", "Assistant Engineer", "Executive Engineer"].forEach((t, i) => {
+    const xc = M + W * (i * 2 + 1) / 6;
+    for (const [k, s] of [[t, B], [office, B]]) { const ls = wrap(k, s, 8.5, W / 3 - 20); ls.forEach((l, j) => { const w = s.widthOfTextAtSize(l, 8.5); text(l, xc - w / 2, y - 36 - (k === t ? 0 : 11) - j * 10, s, 8.5); }); }
+  });
+  pages.forEach((pg, i) => { const t = `Page ${i + 1} of ${pages.length}`; pg.drawText(t, { x: PW - M - F.widthOfTextAtSize(t, 7), y: M - 12, size: 7, font: F }); });
+  return new Blob([await doc.save()], { type: "application/pdf" });
+}
+
+/** Opens (or, where the browser blocks it, downloads) the deviation PDF. */
+async function openDeviationPdf(p, c) {
+  const win = window.open("", "_blank"); // opened during the tap, so browsers allow it
+  try {
+    const blob = await deviationPdf(p, c);
+    const name = `Deviation_${(c.workOrderNo || p.name).replace(/[^\w-]+/g, "_").slice(0, 40)}.pdf`;
+    const url = URL.createObjectURL(blob);
+    if (win) { win.location.href = url; } else ctx.download(blob, name);
+    setTimeout(() => URL.revokeObjectURL(url), 600000);
+  } catch (e) { if (win) win.close(); console.error(e); ctx.toast("Could not make the PDF: " + e.message, 6000); }
 }
 
 // ---------------------------------------------------------------------------
