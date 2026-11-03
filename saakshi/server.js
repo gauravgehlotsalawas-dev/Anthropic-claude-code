@@ -50,6 +50,9 @@ const DEFAULT_SETTINGS = {
   escalate_approve_xen_hours: 24,  // AEN this late in approving → the XEN may approve
   instruction_response_days: 3,    // a written-down instruction/promise not denied in this time stands confirmed
   explanation_days: 3,             // reply time for an explanation asked by S.E./HQ/XEN
+  deemed_approval: true,           // officers who do not act in time: it goes in the contractor's favour
+  deemed_measure_hours: 96,        // after the JEN's deadline (AEN at 24 h, XEN at 72 h, deemed at 96 h)
+  deemed_approve_hours: 72,        // after the AEN's deadline
   penalty_percent_per_week: 1.25,  // same rate for the contractor's delay and for the department's (set as per the state's contract)
   penalty_max_percent: 10,         // same cap both ways
   penalties_in_final_bill: true,   // the final bill deducts the contractor's penalty and adds the department's compensation
@@ -144,6 +147,7 @@ CREATE INDEX IF NOT EXISTS visits_photo ON visits(photo);
 for (const [table, col, def] of [['users', 'verified', 'INTEGER DEFAULT 0'], ['works', 'wo_amount', 'REAL'], ['works', 'tia', "TEXT DEFAULT ''"], ['works', 'created_by', 'INTEGER'],
   ['works', 'award_date', 'TEXT'], ['works', 'wo_date', 'TEXT'], ['works', 'duration_days', 'INTEGER'], ['works', 'tp_percent', 'REAL DEFAULT 0'], ['works', 'completed_ts', 'TEXT'], ['works', 'department', "TEXT DEFAULT ''"],
   ['users', 'department', "TEXT DEFAULT ''"], ['users', 'reg_no', "TEXT DEFAULT ''"], ['users', 'gstin', "TEXT DEFAULT ''"], ['verifications', 'kind', "TEXT DEFAULT 'milestone'"],
+  ['verifications', 'deemed', 'TEXT'], ['bills', 'deemed', 'TEXT'],
   ['bills', 'penalty_contractor', 'REAL DEFAULT 0'], ['bills', 'compensation_department', 'REAL DEFAULT 0'], ['bills', 'work_amount', 'REAL']]) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
 }
@@ -414,6 +418,14 @@ function redFlags(works, s) {
       if (d && today > d.due) add(w, { type: b.is_final && b.status === 'submitted' ? 'final_not_approved' : 'bill_delayed', severity: 'high', against_role: d.by, against_id: d.by === 'xen' ? w.xen_id : null, since: d.due, days: daysBetween(d.due, today), ref: b.id,
         text: `${b.is_final ? 'अंतिम बिल' : `${b.bill_no}वाँ रनिंग बिल`} (₹${Math.round(b.net_amount).toLocaleString('en-IN')}): ${d.what} ${daysBetween(d.due, today)} दिन से बाकी` });
     }
+    for (const v of q("SELECT * FROM verifications WHERE work_id = ? AND deemed IS NOT NULL AND jen_ts >= ?").all(w.id, new Date(Date.now() - 30 * 86400e3).toISOString())) {
+      const roles = v.deemed === 'measure' ? ['jen', 'aen', 'xen'] : ['aen'];
+      for (const r of roles) if (w[r + '_id']) add(w, { type: 'deemed_by_default', severity: 'high', against_role: r, against_id: w[r + '_id'], since: v.jen_ts, ref: v.id,
+        text: v.deemed === 'measure' ? `तय समय में कोई नाप लेने नहीं आया: ठेकेदार का दावा ₹${Math.round(v.measured_amount).toLocaleString('en-IN')} बिना साइट-जाँच के मान्य हुआ` : 'तय समय में अनुमोदन नहीं किया: नाप अपने-आप मान्य हुआ' });
+    }
+    for (const b of q("SELECT * FROM bills WHERE work_id = ? AND deemed IS NOT NULL AND created_ts >= ?").all(w.id, new Date(Date.now() - 60 * 86400e3).toISOString()))
+      add(w, { type: 'deemed_by_default', severity: 'high', against_role: b.deemed === 'hq' ? 'hq' : 'xen', against_id: b.deemed === 'hq' ? null : w.xen_id, since: b.passed_ts || b.hq_ts, ref: b.id,
+        text: `${b.is_final ? 'अंतिम बिल' : b.bill_no + 'वाँ बिल'}: तय समय में निर्णय नहीं, बिल अपने-आप मान्य` });
     for (const e of q('SELECT * FROM explanations WHERE work_id = ? AND reply IS NULL AND due_day < ?').all(w.id, today)) {
       const u = q('SELECT role FROM users WHERE id = ?').get(e.asked_to);
       add(w, { type: 'explanation_overdue', severity: 'high', against_role: u?.role || '', against_id: e.asked_to, since: e.due_day, days: daysBetween(e.due_day, today), ref: e.id,
@@ -540,6 +552,59 @@ function createVerification(w, kind, s) {
   return id;
 }
 // weekly: if the contractor has claimed work that no one has measured for a week, a measurement falls due
+// ---------- deemed approval: when the officers do not act in time, it goes in the contractor's favour ----------
+// What is deemed is only what the contractor showed at the site: quantities uploaded from inside the site fence with
+// live, accurate, unreused photos, and never more than the BOQ quantity. A later real measurement still counts:
+// if it is lower, the next bill recovers the difference and the contractor gets an over-claim flag; the officers
+// who let it lapse carry their own flag for good.
+function eligibleClaimedQty(workId, uptoTs) {
+  const m = {};
+  const rows = q(`SELECT pl.item_id, pl.qty, p.flags FROM progress_lines pl JOIN progress p ON p.id = pl.progress_id
+    WHERE p.work_id = ? AND p.in_fence = 1 AND p.server_ts <= ?`).all(workId, uptoTs);
+  for (const r of rows) {
+    const f = r.flags ? r.flags.split(',') : [];
+    if (f.includes('from_gallery') || f.includes('photo_reused') || f.includes('low_accuracy')) continue;
+    m[r.item_id] = (m[r.item_id] || 0) + r.qty;
+  }
+  for (const it of items(workId)) if (m[it.id] > it.qty) m[it.id] = it.qty;
+  return m;
+}
+function deemedTick() {
+  const s = getSettings();
+  if (!s.deemed_approval) return;
+  const now = nowIso(), today = istDay();
+  for (const v of q("SELECT * FROM verifications WHERE status = 'pending_jen'").all()) {
+    if (hoursBetween(v.jen_due_ts, now) < s.deemed_measure_hours) continue;
+    const ok = eligibleClaimedQty(v.work_id, v.created_ts);
+    const its = Object.fromEntries(items(v.work_id).map((i) => [i.id, i]));
+    db.exec('BEGIN');
+    try {
+      const have = new Set();
+      for (const l of q('SELECT * FROM verification_lines WHERE verification_id = ?').all(v.id)) { q('UPDATE verification_lines SET measured_qty = ? WHERE id = ?').run(ok[l.item_id] || 0, l.id); have.add(l.item_id); }
+      for (const [id, qty] of Object.entries(ok)) if (!have.has(Number(id)) && qty) q('INSERT INTO verification_lines (verification_id, item_id, claimed_qty, measured_qty) VALUES (?,?,?,?)').run(v.id, Number(id), qty, qty);
+      const amt = Object.entries(ok).reduce((t, [id, qn]) => t + qn * (its[id]?.rate || 0), 0);
+      q(`UPDATE verifications SET status = 'approved', deemed = 'measure', jen_id = NULL, jen_ts = ?, aen_ts = ?, measured_amount = ?, jen_late_hours = ?,
+        contractor_status = 'agreed', jen_note = 'मान्य: तय समय में कोई अधिकारी नाप लेने नहीं आया; ठेकेदार की GPS-फ़ोटो वाली मात्रा मानी गई' WHERE id = ?`)
+        .run(now, now, Math.round(amt), Math.round(hoursBetween(v.jen_due_ts, now) * 10) / 10, v.id);
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    audit(null, 'verification_deemed', { id: v.id, work: v.work_id });
+  }
+  for (const v of q("SELECT * FROM verifications WHERE status = 'pending_aen'").all()) {
+    if (!v.aen_due_ts || hoursBetween(v.aen_due_ts, now) < s.deemed_approve_hours) continue;
+    q(`UPDATE verifications SET status = 'approved', deemed = 'approve', aen_ts = ?, aen_late_hours = ?, aen_note = 'मान्य: तय समय में अनुमोदन नहीं हुआ; नाप स्वीकार माना गया' WHERE id = ?`)
+      .run(now, Math.round(hoursBetween(v.aen_due_ts, now) * 10) / 10, v.id);
+    audit(null, 'approval_deemed', { id: v.id });
+  }
+  for (const b of q("SELECT * FROM bills WHERE status = 'submitted'").all()) {
+    const due = addDays(istDay(new Date(b.created_ts)), b.is_final ? s.final_approval_days : s.bill_pass_days);
+    if (today <= due) continue;
+    if (b.is_final) q("UPDATE bills SET status = 'hq_approved', hq_ts = ?, hq_note = 'मान्य: मुख्यालय ने तय समय में निर्णय नहीं दिया', deemed = 'hq' WHERE id = ?").run(now, b.id);
+    else q("UPDATE bills SET status = 'passed', passed_ts = ?, deemed = 'pass' WHERE id = ?").run(now, b.id);
+    audit(null, 'bill_deemed', { id: b.id });
+  }
+}
+
 function weeklyVerifications() {
   const s = getSettings();
   if (!s.weekly_verification) return;
@@ -1591,7 +1656,7 @@ route('GET', '/api/public/overview', async (req, res) => {
   send(res, 200, { ...publicCache.data, settings: publicSettings(s) });
 }, { public: true });
 function publicSettings(s) {
-  const keys = ['penalty_percent_per_week', 'penalty_max_percent', 'visits_per_week', 'milestone_percent', 'milestone_max_amount', 'jen_verify_hours', 'aen_approve_hours', 'wo_issue_days', 'start_within_days', 'hindrance_response_days', 'hindrance_decision_days', 'bill_pass_days', 'payment_days', 'final_approval_days', 'sla_days'];
+  const keys = ['deemed_measure_hours', 'deemed_approval', 'penalty_percent_per_week', 'penalty_max_percent', 'visits_per_week', 'milestone_percent', 'milestone_max_amount', 'jen_verify_hours', 'aen_approve_hours', 'wo_issue_days', 'start_within_days', 'hindrance_response_days', 'hindrance_decision_days', 'bill_pass_days', 'payment_days', 'final_approval_days', 'sla_days'];
   return Object.fromEntries(keys.map((k) => [k, s[k]]));
 }
 
@@ -1630,14 +1695,17 @@ function workEvents(w, s, limit = 200) {
     const label = { weekly: 'साप्ताहिक नाप', on_demand: 'ठेकेदार द्वारा माँगा नाप', final: 'अंतिम नाप (काम पूरा)' }[v.kind] || `${v.milestone_no * s.milestone_percent}% माइलस्टोन का नाप`;
     add(v.created_ts, 'verification_due', `${label} देय: JEN को ${s.jen_verify_hours} घंटे में साइट पर नाप लेना है (दावा ₹${Math.round(v.claimed_amount).toLocaleString('en-IN')})`);
     const mRole = v.jen_id ? q('SELECT role FROM users WHERE id = ?').get(v.jen_id)?.role || 'jen' : 'jen';
-    if (v.jen_ts) add(v.jen_ts, 'measured', `${mRole.toUpperCase()} ने साइट पर नाप लिया: ₹${Math.round(v.measured_amount).toLocaleString('en-IN')}${v.jen_late_hours ? ` (${v.jen_late_hours} घंटे देर से)` : ' (समय पर)'}`, { by: nm(v.jen_id), role: mRole });
-    if (v.aen_ts) add(v.aen_ts, 'approved', `AEN ने नाप अनुमोदित किया${v.aen_late_hours ? ` (${v.aen_late_hours} घंटे देर से)` : ' (समय पर)'}`, { by: nm(v.aen_id), role: 'aen' });
+    if (v.deemed === 'measure') add(v.jen_ts, 'deemed', `⚖️ कोई अधिकारी ${v.jen_late_hours} घंटे देर तक नाप लेने नहीं आया: ठेकेदार की GPS-फ़ोटो वाली मात्रा ₹${Math.round(v.measured_amount).toLocaleString('en-IN')} मान्य`);
+    else if (v.jen_ts) add(v.jen_ts, 'measured', `${mRole.toUpperCase()} ने साइट पर नाप लिया: ₹${Math.round(v.measured_amount).toLocaleString('en-IN')}${v.jen_late_hours ? ` (${v.jen_late_hours} घंटे देर से)` : ' (समय पर)'}`, { by: nm(v.jen_id), role: mRole });
+    if (v.deemed === 'approve') add(v.aen_ts, 'deemed', '⚖️ AEN/XEN ने तय समय में अनुमोदन नहीं किया: नाप मान्य');
+    else if (v.aen_ts && v.deemed !== 'measure') add(v.aen_ts, 'approved', `AEN ने नाप अनुमोदित किया${v.aen_late_hours ? ` (${v.aen_late_hours} घंटे देर से)` : ' (समय पर)'}`, { by: nm(v.aen_id), role: 'aen' });
   }
   for (const b of q('SELECT * FROM bills WHERE work_id = ?').all(w.id)) {
     const t = b.is_final ? 'अंतिम बिल' : `${b.bill_no}वाँ रनिंग बिल`;
     add(b.created_ts, 'bill', `${t} ₹${Math.round(b.net_amount).toLocaleString('en-IN')} जमा`, { by: nm(b.created_by), role: 'contractor' });
-    if (b.passed_ts) add(b.passed_ts, 'bill_passed', `${t} XEN ने पास किया`, { by: nm(b.passed_by), role: 'xen' });
-    if (b.hq_ts) add(b.hq_ts, 'bill_hq', `${t}: मुख्यालय ने काम सत्यापित कर भुगतान अनुमोदित किया`, { by: nm(b.hq_by), role: 'hq' });
+    if (b.deemed) add(b.passed_ts || b.hq_ts, 'deemed', `⚖️ ${t}: ${b.deemed === 'hq' ? 'मुख्यालय' : 'XEN'} ने तय समय में निर्णय नहीं दिया, बिल मान्य`);
+    else if (b.passed_ts) add(b.passed_ts, 'bill_passed', `${t} XEN ने पास किया`, { by: nm(b.passed_by), role: 'xen' });
+    if (b.hq_ts && !b.deemed) add(b.hq_ts, 'bill_hq', `${t}: मुख्यालय ने काम सत्यापित कर भुगतान अनुमोदित किया`, { by: nm(b.hq_by), role: 'hq' });
     if (b.paid_ts) add(b.paid_ts, 'paid', `${t} का भुगतान हुआ ₹${Math.round(b.net_amount).toLocaleString('en-IN')}`);
   }
   for (const h of q('SELECT * FROM hindrances WHERE work_id = ?').all(w.id)) {
@@ -1680,6 +1748,7 @@ function personPerformance(u, s) {
     const a = q('SELECT aen_late_hours FROM verifications WHERE aen_id = ? AND aen_ts IS NOT NULL').all(u.id);
     out.approvals = { count: a.length, late: a.filter((x) => x.aen_late_hours > 0).length };
   }
+  if (['jen', 'aen', 'xen'].includes(u.role)) out.deemed_count = works.reduce((t, w) => t + q('SELECT COUNT(*) AS n FROM verifications WHERE work_id = ? AND deemed IS NOT NULL').get(w.id).n, 0);
   if (['jen', 'aen', 'xen'].includes(u.role)) out.compensation_caused = works.reduce((t, w) => { const r = penalties(w, s).department.by_role[u.role]; return t + (r && r.officer_id === u.id ? r.amount : 0); }, 0);
   if (u.role === 'xen') out.bills_passed = q('SELECT COUNT(*) AS n FROM bills WHERE passed_by = ?').get(u.id).n;
   if (u.role === 'contractor') {
@@ -1951,6 +2020,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method !== 'GET') return send(res, 405, 'Method not allowed');
       return serveStatic(req, res, url.pathname);
     }
+    deemedTick();
     for (const r of routes) {
       if (r.method !== req.method) continue;
       const m = r.re.exec(url.pathname);
@@ -2045,6 +2115,7 @@ function seedDemo() {
 firstRun();
 weeklyVerifications();
 dailyTick();
-setInterval(() => { weeklyVerifications(); dailyTick(); }, 10 * 60e3).unref();
+deemedTick();
+setInterval(() => { deemedTick(); weeklyVerifications(); dailyTick(); }, 10 * 60e3).unref();
 server.listen(PORT, () => console.log(`SiteSaakshi running at http://localhost:${PORT}`));
 module.exports = { server, haversine, weekStart };

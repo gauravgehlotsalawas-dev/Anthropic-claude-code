@@ -343,6 +343,27 @@ async function main() {
   assert.ok(rep.flags_total > 0 && rep.works_total >= 3 && rep.yesterday);
   assert.equal((await jen('GET', '/api/daily-report')).status, 403);
 
+  // ---- deemed approval: nobody came to measure in time → the contractor's site-photo quantities stand ----
+  await admin('PUT', '/api/settings', { jen_verify_hours: 0, deemed_measure_hours: 0 });
+  const awItem = (await newCon('GET', '/api/works/' + aw)).data.items[0];
+  const upA = (qty, lat) => newCon('POST', '/api/progress', { work_id: aw, lines: [{ item_id: awItem.id, qty }], photos: [fakePhoto()], lat, lng: site.lng, accuracy: 8 });
+  assert.equal((await upA(4, site.lat)).status, 201);
+  assert.equal((await upA(3, site.lat + 0.2)).status, 201); // from outside the fence: not deemed
+  // each upload crossed a 10% milestone; with no officer in time both measurements were deemed at once
+  await new Promise((ok) => setTimeout(ok, 5));
+  const dvs = (await newCon('GET', '/api/verifications?work_id=' + aw)).data;
+  assert.ok(dvs.length >= 2 && dvs.every((v) => v.status === 'approved' && v.deemed === 'measure'));
+  assert.equal(dvs[0].claimed_amount, 70000);
+  assert.equal(dvs[0].measured_amount, 4 * 10000, 'only what was shown inside the fence, not the 3 from outside');
+  r = await newCon('POST', '/api/bills', { work_id: aw });
+  assert.equal(r.status, 201); assert.equal(r.data.net_amount, 40000);
+  await admin('PUT', '/api/settings', { bill_pass_days: -1 });
+  const dBill = (await newCon('GET', '/api/bills?work_id=' + aw)).data[0];
+  assert.equal(dBill.status, 'passed'); assert.equal(dBill.deemed, 'pass');
+  const dFlags = (await hq('GET', '/api/flags')).data.filter((f) => f.work_id === aw && f.type === 'deemed_by_default');
+  assert.ok(dFlags.some((f) => f.against_role === 'jen') && dFlags.some((f) => f.against_role === 'xen'));
+  await admin('PUT', '/api/settings', { jen_verify_hours: 24, deemed_measure_hours: 96, bill_pass_days: 7 });
+
   // ---- public portal: works and stats for citizens, with no person's name or mobile ----
   r = await anon('GET', '/api/public/overview');
   assert.equal(r.status, 200); assert.equal(r.data.enabled, true);

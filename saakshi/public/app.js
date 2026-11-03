@@ -9,7 +9,7 @@ const REQ_TYPE = { measurement: 'नाप (MB में माप)', bill: 'ब
 const BILL_STAGE = { submitted: 'बिल जमा', mb_recorded: 'MB दर्ज (JEN)', checked_aen: 'जाँचा (AEN)', passed_xen: 'पास (XEN)', paid: 'भुगतान हुआ' };
 const STATUS = { open: ['खुला', 'warn'], reopened: ['दोबारा खुला', 'bad'], done: ['विभाग ने पूरा बताया', 'ok'], closed: ['बंद', ''] };
 const FLAG_TYPE = { jen_not_verified: 'JEN ने नाप नहीं लिया', aen_not_approved: 'AEN ने अनुमोदन नहीं किया', contractor_overclaim: 'ठेकेदार का ज़्यादा दावा', contractor_no_update: 'ठेकेदार ने अपडेट नहीं डाला',
-  request_overdue: 'अनुरोध समय-सीमा पार', measure_escalated: 'नाप की ज़िम्मेदारी ऊपर गई', explanation_overdue: 'स्पष्टीकरण नहीं दिया', instruction_disputed: 'निर्देश/वादे पर विवाद', wo_not_issued: 'वर्क ऑर्डर जारी नहीं', contractor_not_started: 'काम शुरू नहीं', hindrance_undecided: 'बाधा पर निर्णय बाकी',
+  request_overdue: 'अनुरोध समय-सीमा पार', deemed_by_default: 'समय पर नहीं आए: ठेकेदार के पक्ष में मान्य', measure_escalated: 'नाप की ज़िम्मेदारी ऊपर गई', explanation_overdue: 'स्पष्टीकरण नहीं दिया', instruction_disputed: 'निर्देश/वादे पर विवाद', wo_not_issued: 'वर्क ऑर्डर जारी नहीं', contractor_not_started: 'काम शुरू नहीं', hindrance_undecided: 'बाधा पर निर्णय बाकी',
   department_delay: 'विभाग के कारण देरी', contractor_delay: 'ठेकेदार की देरी', bill_delayed: 'बिल/भुगतान में देरी', final_not_approved: 'अंतिम बिल: मुख्यालय का अनुमोदन बाकी', assignment_disputed: 'काम सौंपने पर आपत्ति', officer_not_joined: 'अधिकारी ने लॉगिन नहीं किया' };
 const VSTATUS = { pending_jen: ['JEN का साइट-नाप बाकी', 'warn'], pending_aen: ['AEN का अनुमोदन बाकी', 'warn'], approved: ['JEN + AEN से सत्यापित', 'ok'] };
 const FLAG = { exceeds_boq: 'BOQ मात्रा से ज़्यादा',  outside_fence: 'साइट से बाहर', low_accuracy: 'GPS कमज़ोर', photo_reused: 'पुरानी फ़ोटो', no_photo: 'फ़ोटो नहीं', clock_mismatch: 'फ़ोन का समय गलत', from_gallery: 'गैलरी से फ़ोटो' };
@@ -487,6 +487,9 @@ VIEWS.admin = async (main) => {
       <div><label>रनिंग बिल पास (दिन)</label><input id="sbp" type="number" min="1" value="${settings.bill_pass_days}"></div>
       <div><label>भुगतान (दिन)</label><input id="spd" type="number" min="1" value="${settings.payment_days}"></div>
       <div><label>काम पूरा: मुख्यालय का सत्यापन व भुगतान-अनुमोदन (दिन)</label><input id="sfa" type="number" min="1" value="${settings.final_approval_days}"></div>
+      <div><label><input type="checkbox" id="sdm" ${settings.deemed_approval ? 'checked' : ''} style="width:auto"> मान्य अनुमोदन: अधिकारी समय पर न आएँ तो ठेकेदार के पक्ष में</label></div>
+      <div><label>नाप मान्य: JEN की समय-सीमा के कितने घंटे बाद</label><input id="sdmh" type="number" min="0" value="${settings.deemed_measure_hours}"></div>
+      <div><label>अनुमोदन मान्य: AEN की समय-सीमा के कितने घंटे बाद</label><input id="sdah" type="number" min="0" value="${settings.deemed_approve_hours}"></div>
       <div><label>पेनल्टी दर % प्रति सप्ताह (ठेकेदार और विभाग, दोनों पर)</label><input id="spr" type="number" step="0.01" min="0" value="${settings.penalty_percent_per_week}"></div>
       <div><label>पेनल्टी अधिकतम % (दोनों पर)</label><input id="spm" type="number" step="0.1" min="0" value="${settings.penalty_max_percent}"></div>
       <div><label><input type="checkbox" id="spf" ${settings.penalties_in_final_bill ? 'checked' : ''} style="width:auto"> अंतिम बिल में पेनल्टी घटाएँ और क्षतिपूर्ति जोड़ें</label></div>
@@ -516,7 +519,7 @@ VIEWS.admin = async (main) => {
       sla_days: Object.fromEntries(Object.keys(REQ_TYPE).map((k) => [k, n('#sl_' + k)])),
       max_gps_accuracy_m: n('#sg'), min_visit_minutes: n('#sm'), escalate_after_days: n('#se'),
       milestone_percent: n('#smp'), milestone_max_amount: n('#sma'), jen_verify_hours: n('#sjh'), aen_approve_hours: n('#sah'), overclaim_tolerance_percent: n('#sot'), progress_gap_days: n('#spg'),
-      wo_issue_days: n('#swo'), start_within_days: n('#sst'), hindrance_response_days: n('#shr'), hindrance_decision_days: n('#shd'), bill_pass_days: n('#sbp'), payment_days: n('#spd'), final_approval_days: n('#sfa'), weekly_verification: $('#swv').checked, public_board: $('#spb').checked, penalty_percent_per_week: n('#spr'), penalty_max_percent: n('#spm'), penalties_in_final_bill: $('#spf').checked, escalate_measure_aen_hours: n('#sea'), escalate_measure_xen_hours: n('#sex'), escalate_approve_xen_hours: n('#sexa'), instruction_response_days: n('#sir'), explanation_days: n('#sexd'), public_names: $('#spn').checked, public_photos: $('#spp').checked,
+      wo_issue_days: n('#swo'), start_within_days: n('#sst'), hindrance_response_days: n('#shr'), hindrance_decision_days: n('#shd'), bill_pass_days: n('#sbp'), payment_days: n('#spd'), final_approval_days: n('#sfa'), weekly_verification: $('#swv').checked, public_board: $('#spb').checked, deemed_approval: $('#sdm').checked, deemed_measure_hours: n('#sdmh'), deemed_approve_hours: n('#sdah'), penalty_percent_per_week: n('#spr'), penalty_max_percent: n('#spm'), penalties_in_final_bill: $('#spf').checked, escalate_measure_aen_hours: n('#sea'), escalate_measure_xen_hours: n('#sex'), escalate_approve_xen_hours: n('#sexa'), instruction_response_days: n('#sir'), explanation_days: n('#sexd'), public_names: $('#spn').checked, public_photos: $('#spp').checked,
     }, 'PUT');
     toast('नियम सहेजे गए ✓');
   });
@@ -652,9 +655,9 @@ const progressCards = (rows) => rows.map((p) => `<div class="card"><div class="s
 VIEWS.verify = async (main) => {
   const vs = await api('/api/verifications');
   main.innerHTML = `<h2>${settings.milestone_percent}% माइलस्टोन सत्यापन</h2>
-    <div class="notice">ठेकेदार का दावा हर ${settings.milestone_percent}%${settings.milestone_max_amount ? ` (या ${rupees(settings.milestone_max_amount)})` : ''} पार करते ही: <b>JEN ${settings.jen_verify_hours} घंटे में साइट पर</b> (GPS घेरे के अंदर, लाइव फ़ोटो के साथ) नाप दर्ज करेगा, फिर <b>AEN ${settings.aen_approve_hours} घंटे में</b> अनुमोदन करेगा। देर होते ही लाल झंडा लगता है और मुख्यालय तक दिखता है।</div>
+    <div class="notice">${settings.deemed_approval ? `<b>⚖️ मान्य अनुमोदन:</b> JEN की समय-सीमा के ${settings.deemed_measure_hours} घंटे बाद तक भी JEN, AEN या XEN में से कोई नाप न ले, तो ठेकेदार की साइट-घेरे के अंदर से GPS-फ़ोटो के साथ डाली मात्रा अपने-आप मान्य हो जाती है (BOQ की सीमा तक), और ठेकेदार उस पर बिल बना सकता है। अनुमोदन ${settings.deemed_approve_hours} घंटे देर हो तो नाप मान्य। बाद के असली नाप में कम निकले तो अगले बिल में समायोजन। <br>` : ''}ठेकेदार का दावा हर ${settings.milestone_percent}%${settings.milestone_max_amount ? ` (या ${rupees(settings.milestone_max_amount)})` : ''} पार करते ही: <b>JEN ${settings.jen_verify_hours} घंटे में साइट पर</b> (GPS घेरे के अंदर, लाइव फ़ोटो के साथ) नाप दर्ज करेगा, फिर <b>AEN ${settings.aen_approve_hours} घंटे में</b> अनुमोदन करेगा। देर होते ही लाल झंडा लगता है और मुख्यालय तक दिखता है।</div>
     <div class="list">${vs.map((v) => `<div class="card" style="box-shadow: inset 4px 0 ${v.overdue_hours ? 'var(--bad)' : v.status === 'approved' ? 'var(--ok)' : 'var(--warn)'}">
-      <div class="spread"><b>${esc(v.work)}: ${vkind(v)}</b><span class="pill ${VSTATUS[v.status][1]}">${VSTATUS[v.status][0]}</span></div>
+      <div class="spread"><b>${esc(v.work)}: ${vkind(v)}</b><span class="pill ${VSTATUS[v.status][1]}">${v.deemed === 'measure' ? '⚖️ मान्य: कोई अधिकारी नहीं आया' : v.deemed === 'approve' ? '⚖️ मान्य: अनुमोदन नहीं हुआ' : VSTATUS[v.status][0]}</span></div>
       <p class="small">ठेकेदार का दावा <b>${rupees(v.claimed_amount)}</b> · ${fmtTime(v.created_ts)}
         ${v.measured_amount != null ? ` · JEN का नाप <b>${rupees(v.measured_amount)}</b>${v.overclaim ? ' <span class="pill bad">दावा ज़्यादा</span>' : ''}` : ''}
         ${v.rounds > 1 ? ` · <span class="pill warn">${v.rounds - 1} बार वापस भेजा</span>` : ''}</p>
@@ -873,7 +876,8 @@ VIEWS.bills = async (main) => {
         ${!w.completed_ts ? `<button data-done="${w.id}">✅ काम पूरा घोषित करें</button>` : '<span class="pill ok">काम पूरा घोषित</span>'}
       </div></div>`).join('') : ''}
     <div class="list">${bills.map((b) => `<div class="card" style="box-shadow: inset 4px 0 ${b.overdue_days ? 'var(--bad)' : b.status === 'paid' ? 'var(--ok)' : 'var(--warn)'}">
-      <div class="spread"><b>${b.is_final ? 'अंतिम बिल' : ordinal(b.bill_no) + ' रनिंग बिल'}: ${esc(b.work)}</b><span class="pill ${BSTATUS[b.status][1]}">${BSTATUS[b.status][0]}</span></div>
+      <div class="spread"><b>${b.is_final ? 'अंतिम बिल' : ordinal(b.bill_no) + ' रनिंग बिल'}: ${esc(b.work)}</b><span class="pill ${BSTATUS[b.status][1]}">${b.deemed ? '⚖️ मान्य: ' : ''}${BSTATUS[b.status][0]}</span></div>
+      ${b.net_amount < 0 ? `<p class="small"><span class="pill bad">वसूली: पिछले मान्य दावे से असली नाप कम निकला</span></p>` : ''}
       ${b.is_final && (b.penalty_contractor || b.compensation_department) ? `<p class="small">काम ${rupees(b.work_amount)}${b.penalty_contractor ? ` · ठेकेदार पेनल्टी −${rupees(b.penalty_contractor)}` : ''}${b.compensation_department ? ` · <b>विभाग की क्षतिपूर्ति +${rupees(b.compensation_department)}</b>` : ''}</p>` : ''}
       <p class="small">इस बिल की राशि <b>${rupees(b.net_amount)}</b> · अब तक कुल ${rupees(b.gross_upto)}${b.tp_percent ? ` (T.P. ${b.tp_percent > 0 ? '+' : ''}${b.tp_percent}%)` : ''} · जमा ${fmtTime(b.created_ts)}</p>
       ${b.due ? `<p class="small">${ROLE_SHORT[b.due.by]}: ${b.due.what}, अंतिम तिथि ${fmtDay(b.due.due)} ${b.overdue_days ? `<span class="pill bad">🚩 ${b.overdue_days} दिन देर</span>` : ''}</p>` : ''}
@@ -973,6 +977,8 @@ async function renderHome(scrollTo) {
     <tr><td>रनिंग बिल पास करना</td><td>XEN</td><td>${s.bill_pass_days} दिन</td></tr>
     <tr><td>काम पूरा: सत्यापन और भुगतान-अनुमोदन</td><td>मुख्यालय / निविदा प्राधिकारी</td><td>${s.final_approval_days} दिन</td></tr>
     <tr><td>बिल पास होने के बाद भुगतान</td><td>XEN / लेखा</td><td>${s.payment_days} दिन</td></tr>
+    <tr><td><b>⚖️ कोई अधिकारी नाप लेने न आए</b></td><td>JEN → AEN → XEN</td><td>${s.deemed_measure_hours != null ? `${Math.round((s.jen_verify_hours + s.deemed_measure_hours) / 24)} दिन बाद ठेकेदार की GPS-फ़ोटो वाली मात्रा मान्य` : ''}</td></tr>
+    <tr><td><b>⚖️ बिल पर फ़ैसला न हो</b></td><td>XEN / मुख्यालय</td><td>समय-सीमा के बाद बिल अपने-आप मान्य</td></tr>
   </tbody></table></div><p class="small muted">विभाग के कारण हुई देरी (बाधा) के दिन अपने-आप समय-वृद्धि बनते हैं। उन दिनों की देरी पर ठेकेदार पर कोई पेनल्टी नहीं लगती।</p>
     <div class="card penalty"><h3>⚖️ पेनल्टी: दोनों तरफ़ बराबर</h3><p class="small">ठेकेदार अपनी वजह से देर करे तो उस पर <b>${s.penalty_percent_per_week}% प्रति सप्ताह (अधिकतम ${s.penalty_max_percent}%)</b> पेनल्टी लगती है। विभाग की वजह से देरी हो (वर्क ऑर्डर देर से, काम न बताना, बाधा, नाप/अनुमोदन/बिल/भुगतान में देरी), तो <b>उसी दर और उसी सीमा तक पूरे टेंडर पर विभाग ठेकेदार को क्षतिपूर्ति देता है</b>। यह राशि ज़िम्मेदार अधिकारियों के नाम दर्ज होती है।</p></div></section>
   <section id="board"><div class="spread"><h2>जनता बोर्ड: सरकारी काम की स्थिति</h2></div>
@@ -1030,7 +1036,7 @@ function route() {
 window.addEventListener('hashchange', route);
 
 // ---------- public: one work, updates feed, contractors and officers ----------
-const EV_ICON = { award: '📜', wo: '📄', progress: '📷', verification_due: '⏳', measured: '📏', approved: '✍️', bill: '🧾', bill_passed: '✅', bill_hq: '🏛️', paid: '💰', hindrance: '⛔', hindrance_reply: '💬', hindrance_decided: '⚖️', visit: '📍', dpr: '📝', completed: '🏁' };
+const EV_ICON = { deemed: '⚖️', award: '📜', wo: '📄', progress: '📷', verification_due: '⏳', measured: '📏', approved: '✍️', bill: '🧾', bill_passed: '✅', bill_hq: '🏛️', paid: '💰', hindrance: '⛔', hindrance_reply: '💬', hindrance_decided: '⚖️', visit: '📍', dpr: '📝', completed: '🏁' };
 const pubPhoto = (h) => `<img class="thumb" src="/api/public/photo/${esc(h)}" data-zoom="/api/public/photo/${esc(h)}" loading="lazy" alt="साइट फ़ोटो">`;
 const eventsHtml = (list, showWork) => `<div class="timeline">${list.map((e) => `<div><span>${EV_ICON[e.kind] || '•'}</span> <span class="small muted">${fmtTime(e.ts)}${showWork ? ` · <a href="#work/${e.work_id}">${esc(e.work)}</a>` : ''}</span><br>
   ${esc(e.text)}${e.by ? ` <span class="small muted">: ${esc(e.by)}${e.role ? ` (${ROLE_SHORT[e.role] || ''})` : ''}</span>` : ''}
@@ -1100,6 +1106,7 @@ async function renderPeople(kind) {
       <div class="spread"><b>${esc(p.name)}</b><span class="pill">${isC ? 'ठेकेदार' : ROLE_SHORT[p.role]}</span></div>
       <div class="small muted">${esc(p.department)} ${esc(p.office)}${p.reg_no ? ` · पंजीकरण ${esc(p.reg_no)}` : ''}${p.verified ? ' · ✓ विभाग से जाँचा' : ''}</div>
       <p class="small">काम: ${p.works_total} (${p.works_active} जारी) · ${crore(p.works_value)}</p>
+      ${!isC && p.deemed_count ? `<p class="small"><span class="pill bad">⚖️ ${p.deemed_count} बार समय पर नहीं आए: ठेकेदार के पक्ष में मान्य</span></p>` : ''}
       ${!isC && p.compensation_caused ? `<p class="small"><span class="pill bad">इनकी देरी से विभाग पर क्षतिपूर्ति ${crore(p.compensation_caused)}</span></p>` : ''}
       ${isC && (p.penalty_amount || p.compensation_due) ? `<p class="small">ठेकेदार पर पेनल्टी ${crore(p.penalty_amount)} · विभाग से क्षतिपूर्ति ${crore(p.compensation_due)}</p>` : ''}
       ${isC ? `<p class="small">पूरे काम ${p.completed} · JEN के नाप ${p.measurements} · ज़्यादा दावे <b>${p.overclaims}</b> · ठेकेदार की देरी <b>${p.contractor_delay_days}</b> दिन · विभाग की देरी ${p.department_delay_days} दिन</p>` : ''}
