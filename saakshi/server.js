@@ -19,9 +19,10 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const DEMO = process.argv.includes('--demo');
 fs.mkdirSync(PHOTO_DIR, { recursive: true });
 
-const ROLES = ['admin', 'se', 'xen', 'aen', 'jen', 'contractor'];
+const ROLES = ['admin', 'hq', 'se', 'xen', 'aen', 'jen', 'contractor'];
 const OFFICER_ROLES = ['xen', 'aen', 'jen'];
-const OVERSIGHT = ['admin', 'se'];
+const OVERSIGHT = ['admin', 'hq', 'se']; // hq = tender inviting authority / head office (Jaipur, Delhi…)
+const SELF_SIGNUP_ROLES = ['contractor', 'jen', 'aen', 'xen'];
 const REQUEST_TYPES = ['measurement', 'bill', 'inspection', 'decision', 'other'];
 const BILL_STAGES = ['submitted', 'mb_recorded', 'checked_aen', 'passed_xen', 'paid'];
 const DEFAULT_SETTINGS = {
@@ -30,6 +31,12 @@ const DEFAULT_SETTINGS = {
   max_gps_accuracy_m: 100,
   min_visit_minutes: 0,
   escalate_after_days: 7,
+  milestone_percent: 10,        // every 10% of the work order value…
+  milestone_max_amount: 0,      // …or every this many rupees, whichever comes first (0 = off)
+  jen_verify_hours: 24,         // JEN must measure at site within this time of a milestone
+  aen_approve_hours: 48,        // AEN must approve within this time of the JEN measurement
+  overclaim_tolerance_percent: 5,
+  progress_gap_days: 2,         // contractor red flag after this many days without a work update
 };
 
 // ---------- database ----------
@@ -74,9 +81,31 @@ CREATE TABLE IF NOT EXISTS complaints (
   responded_by INTEGER, responded_ts TEXT);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, user_id INTEGER, action TEXT NOT NULL, detail TEXT);
+CREATE TABLE IF NOT EXISTS otps (mobile TEXT PRIMARY KEY, code_hash TEXT NOT NULL, expires INTEGER NOT NULL, tries INTEGER DEFAULT 0, sent_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS work_items (
+  id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, code TEXT DEFAULT '', description TEXT NOT NULL,
+  unit TEXT DEFAULT '', qty REAL NOT NULL DEFAULT 0, rate REAL NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS progress (
+  id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, user_id INTEGER NOT NULL, day TEXT NOT NULL, server_ts TEXT NOT NULL,
+  lat REAL, lng REAL, accuracy REAL, distance_m REAL, in_fence INTEGER, note TEXT DEFAULT '', photos TEXT DEFAULT '[]',
+  amount REAL NOT NULL DEFAULT 0, flags TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS progress_lines (id INTEGER PRIMARY KEY, progress_id INTEGER NOT NULL, item_id INTEGER NOT NULL, qty REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS verifications (
+  id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, milestone_no INTEGER NOT NULL, claimed_amount REAL NOT NULL,
+  created_ts TEXT NOT NULL, jen_due_ts TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending_jen', rounds INTEGER DEFAULT 1,
+  jen_id INTEGER, jen_ts TEXT, jen_lat REAL, jen_lng REAL, jen_accuracy REAL, jen_distance_m REAL, jen_photo TEXT, jen_note TEXT DEFAULT '',
+  measured_amount REAL, jen_late_hours REAL,
+  aen_due_ts TEXT, aen_id INTEGER, aen_ts TEXT, aen_note TEXT DEFAULT '', aen_lat REAL, aen_lng REAL, aen_late_hours REAL,
+  contractor_status TEXT DEFAULT 'pending', contractor_note TEXT DEFAULT '', contractor_ts TEXT);
+CREATE TABLE IF NOT EXISTS verification_lines (id INTEGER PRIMARY KEY, verification_id INTEGER NOT NULL, item_id INTEGER NOT NULL, claimed_qty REAL NOT NULL, measured_qty REAL);
+CREATE TABLE IF NOT EXISTS work_flags (id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, user_id INTEGER NOT NULL, ts TEXT NOT NULL, kind TEXT NOT NULL, note TEXT DEFAULT '', status TEXT DEFAULT 'open');
 CREATE INDEX IF NOT EXISTS visits_work_day ON visits(work_id, day);
 CREATE INDEX IF NOT EXISTS visits_photo ON visits(photo);
 `);
+// columns added after the first release
+for (const [table, col, def] of [['users', 'verified', 'INTEGER DEFAULT 0'], ['works', 'wo_amount', 'REAL'], ['works', 'tia', "TEXT DEFAULT ''"], ['works', 'created_by', 'INTEGER']]) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+}
 // Records of attendance, DPRs and request history are append-only: no API updates the facts
 // (time, place, photo) once saved, and nothing is ever deleted.
 
@@ -110,19 +139,21 @@ function hashPin(pin) {
   return salt + ':' + crypto.scryptSync(String(pin), salt, 32).toString('hex');
 }
 function checkPin(pin, stored) {
+  if (!stored) return false;
   const [salt, hash] = stored.split(':');
   const test = crypto.scryptSync(String(pin), salt, 32);
   return crypto.timingSafeEqual(test, Buffer.from(hash, 'hex'));
 }
 const failedLogins = new Map(); // mobile -> {count, until}
 
-function createUser({ name, mobile, role, office = '', pin }) {
+function createUser({ name, mobile, role, office = '', pin, verified = 1 }) {
   if (!name || !/^\d{10}$/.test(String(mobile))) throw httpErr(400, 'नाम और 10 अंकों का मोबाइल नंबर ज़रूरी है');
   if (!ROLES.includes(role)) throw httpErr(400, 'गलत भूमिका (role)');
-  if (!/^\d{4,8}$/.test(String(pin))) throw httpErr(400, 'PIN 4 से 8 अंकों का हो');
+  if (pin !== null && !/^\d{4,8}$/.test(String(pin))) throw httpErr(400, 'PIN 4 से 8 अंकों का हो');
   if (q('SELECT id FROM users WHERE mobile = ?').get(String(mobile))) throw httpErr(409, 'यह मोबाइल नंबर पहले से दर्ज है');
-  const r = q('INSERT INTO users (name, mobile, role, office, pin_hash, created_at) VALUES (?,?,?,?,?,?)')
-    .run(name.trim(), String(mobile), role, office, hashPin(pin), nowIso());
+  // pin null: account made for someone else (officer named on a project); they set a PIN by OTP
+  const r = q('INSERT INTO users (name, mobile, role, office, pin_hash, created_at, verified) VALUES (?,?,?,?,?,?,?)')
+    .run(String(name).trim().slice(0, 120), String(mobile), role, office, pin === null ? '' : hashPin(pin), nowIso(), verified ? 1 : 0);
   return Number(r.lastInsertRowid);
 }
 
@@ -162,7 +193,7 @@ function workOr404(user, id) {
   return w;
 }
 const userNames = () => Object.fromEntries(q('SELECT id, name FROM users').all().map((u) => [u.id, u.name]));
-function publicUser(u) { return u && { id: u.id, name: u.name, mobile: u.mobile, role: u.role, office: u.office, active: u.active }; }
+function publicUser(u) { return u && { id: u.id, name: u.name, mobile: u.mobile, role: u.role, office: u.office, active: u.active, verified: u.verified, has_pin: !!u.pin_hash }; }
 
 // ---------- attendance rules ----------
 // A visit counts when it was inside the site fence, the GPS was accurate enough, the photo was not
@@ -240,6 +271,99 @@ function decorateRequest(r, s) {
   };
 }
 
+// ---------- work progress, milestones and verification ----------
+const hoursBetween = (a, b) => (new Date(b) - new Date(a)) / 3600e3;
+const addHours = (iso, h) => new Date(new Date(iso).getTime() + h * 3600e3).toISOString();
+const items = (workId) => q('SELECT * FROM work_items WHERE work_id = ? ORDER BY id').all(workId);
+const boqTotal = (workId) => items(workId).reduce((t, i) => t + i.qty * i.rate, 0);
+function claimedQty(workId) {
+  const m = {};
+  for (const r of q('SELECT pl.item_id, SUM(pl.qty) AS qty FROM progress_lines pl JOIN progress p ON p.id = pl.progress_id WHERE p.work_id = ? GROUP BY pl.item_id').all(workId)) m[r.item_id] = r.qty;
+  return m;
+}
+function claimedAmount(workId) {
+  const c = claimedQty(workId);
+  return items(workId).reduce((t, i) => t + (c[i.id] || 0) * i.rate, 0);
+}
+// The step at which a JEN measurement + AEN approval becomes mandatory.
+function milestoneStep(w, s) {
+  const base = w.wo_amount || boqTotal(w.id);
+  let step = base * (s.milestone_percent / 100);
+  if (s.milestone_max_amount > 0) step = step > 0 ? Math.min(step, s.milestone_max_amount) : s.milestone_max_amount;
+  return step > 0 ? step : null;
+}
+function maybeCreateVerification(w, before, after, s) {
+  const step = milestoneStep(w, s);
+  if (!step) return null;
+  const k0 = Math.floor(before / step + 1e-9), k1 = Math.floor(after / step + 1e-9);
+  if (k1 <= k0) return null;
+  const ts = nowIso();
+  const id = Number(q(`INSERT INTO verifications (work_id, milestone_no, claimed_amount, created_ts, jen_due_ts, jen_id) VALUES (?,?,?,?,?,?)`)
+    .run(w.id, k1, Math.round(after), ts, addHours(ts, s.jen_verify_hours), w.jen_id).lastInsertRowid);
+  const c = claimedQty(w.id);
+  for (const it of items(w.id)) if (c[it.id]) q('INSERT INTO verification_lines (verification_id, item_id, claimed_qty) VALUES (?,?,?)').run(id, it.id, c[it.id]);
+  const jen = w.jen_id && q('SELECT mobile FROM users WHERE id = ?').get(w.jen_id);
+  if (jen) sendSms(jen.mobile, `SiteSaakshi: "${w.name}" का ${k1 * s.milestone_percent}% माइलस्टोन। ${s.jen_verify_hours} घंटे में साइट पर जाकर नाप लें।`);
+  return id;
+}
+function decorateVerification(v, s) {
+  const now = nowIso();
+  const out = { ...v, lines: q('SELECT vl.*, i.description, i.unit, i.rate, i.code FROM verification_lines vl JOIN work_items i ON i.id = vl.item_id WHERE vl.verification_id = ? ORDER BY i.id').all(v.id) };
+  if (v.status === 'pending_jen') out.overdue_hours = Math.max(0, Math.round(hoursBetween(v.jen_due_ts, now)));
+  else if (v.status === 'pending_aen') out.overdue_hours = Math.max(0, Math.round(hoursBetween(v.aen_due_ts, now)));
+  else out.overdue_hours = 0;
+  out.overclaim = v.measured_amount != null && v.measured_amount < v.claimed_amount * (1 - s.overclaim_tolerance_percent / 100);
+  return out;
+}
+
+// Red flags are computed, never typed in: they can only clear when the work is actually done.
+// They go both ways: against officers who do not verify, and against contractors who over-claim or go silent.
+function redFlags(works, s) {
+  const names = userNames();
+  const now = nowIso(), today = istDay();
+  const flags = [];
+  const add = (w, f) => flags.push({ work_id: w.id, work: w.name, tia: w.tia || '', ...f, against_name: names[f.against_id] || '' });
+  for (const w of works.filter((x) => x.status === 'active')) {
+    for (const v of q("SELECT * FROM verifications WHERE work_id = ? AND status IN ('pending_jen','pending_aen')").all(w.id)) {
+      const pct = v.milestone_no * s.milestone_percent;
+      if (v.status === 'pending_jen' && now > v.jen_due_ts) add(w, { type: 'jen_not_verified', severity: 'high', against_role: 'jen', against_id: w.jen_id, since: v.jen_due_ts, hours: Math.round(hoursBetween(v.jen_due_ts, now)), ref: v.id,
+        text: `ठेकेदार ने ₹${Math.round(v.claimed_amount).toLocaleString('en-IN')} का काम (${pct}% माइलस्टोन) अपलोड किया; JEN ने ${s.jen_verify_hours} घंटे में साइट पर नाप नहीं लिया` });
+      if (v.status === 'pending_aen' && now > v.aen_due_ts) add(w, { type: 'aen_not_approved', severity: 'high', against_role: 'aen', against_id: w.aen_id, since: v.aen_due_ts, hours: Math.round(hoursBetween(v.aen_due_ts, now)), ref: v.id,
+        text: `JEN का नाप (${pct}% माइलस्टोन) ${s.aen_approve_hours} घंटे से AEN के अनुमोदन के बिना पड़ा है` });
+    }
+    const lastV = q("SELECT * FROM verifications WHERE work_id = ? AND measured_amount IS NOT NULL ORDER BY id DESC LIMIT 1").get(w.id);
+    if (lastV && lastV.measured_amount < lastV.claimed_amount * (1 - s.overclaim_tolerance_percent / 100)) add(w, { type: 'contractor_overclaim', severity: 'medium', against_role: 'contractor', against_id: w.contractor_id, since: lastV.jen_ts, ref: lastV.id,
+      text: `ठेकेदार का दावा ₹${Math.round(lastV.claimed_amount).toLocaleString('en-IN')}, JEN का साइट नाप ₹${Math.round(lastV.measured_amount).toLocaleString('en-IN')} (${Math.round(100 - lastV.measured_amount / lastV.claimed_amount * 100)}% कम)` });
+    if (w.contractor_id && items(w.id).length) {
+      const last = q('SELECT day FROM progress WHERE work_id = ? ORDER BY day DESC LIMIT 1').get(w.id);
+      const from = last ? last.day : (w.start_date || istDay(new Date(w.created_at)));
+      const gap = daysBetween(from, today);
+      if (gap > s.progress_gap_days) add(w, { type: 'contractor_no_update', severity: 'low', against_role: 'contractor', against_id: w.contractor_id, since: from, days: gap,
+        text: `ठेकेदार ने ${gap} दिन से रोज़ का काम/फ़ोटो अपलोड नहीं किया` });
+    }
+    for (const r of q("SELECT * FROM requests WHERE work_id = ? AND status IN ('open','reopened')").all(w.id)) {
+      const late = daysBetween(r.due_day, today);
+      if (late > 0) add(w, { type: 'request_overdue', severity: late > s.escalate_after_days ? 'high' : 'medium', against_role: r.type === 'bill' ? 'xen' : 'jen', against_id: r.type === 'bill' ? w.xen_id : w.jen_id, since: r.due_day, days: late, ref: r.id,
+        text: `${r.type === 'bill' ? 'बिल' : r.type === 'measurement' ? 'नाप' : 'अनुरोध'} "${r.title}" ${late} दिन से समय-सीमा पार` });
+    }
+    for (const f of q("SELECT * FROM work_flags WHERE work_id = ? AND status = 'open'").all(w.id)) add(w, { type: f.kind, severity: 'medium', against_role: '', against_id: null, since: f.ts, ref: f.id,
+      text: `${names[f.user_id]}: ${f.kind === 'assignment_disputed' ? 'यह काम मुझे सौंपा नहीं गया / जानकारी गलत है' : 'आपत्ति'}: ${f.note}` });
+    for (const role of OFFICER_ROLES) {
+      const u = w[role + '_id'] && q('SELECT verified, pin_hash FROM users WHERE id = ?').get(w[role + '_id']);
+      if (u && !u.pin_hash) add(w, { type: 'officer_not_joined', severity: 'low', against_role: role, against_id: w[role + '_id'], since: w.created_at, text: `${role.toUpperCase()} ने अभी तक ऐप में लॉगिन नहीं किया` });
+    }
+  }
+  const rank = { high: 0, medium: 1, low: 2 };
+  return flags.sort((a, b) => rank[a.severity] - rank[b.severity] || String(a.since).localeCompare(String(b.since)));
+}
+
+// SMS: set SMS_WEBHOOK_URL to any gateway that accepts POST {to, message}. Otherwise messages go to the server log.
+function sendSms(to, message) {
+  if (process.env.SMS_WEBHOOK_URL) {
+    fetch(process.env.SMS_WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to, message }) }).catch((e) => console.error('SMS failed', e.message));
+  } else if (!process.env.QUIET) console.log(`[SMS to ${to}] ${message}`);
+}
+
 // ---------- HTTP helpers ----------
 function send(res, status, body, headers = {}) {
   const isBuf = Buffer.isBuffer(body);
@@ -290,6 +414,7 @@ route('POST', '/api/login', async (req, res) => {
   const f = failedLogins.get(key);
   if (f && f.until > Date.now()) throw httpErr(429, 'बहुत बार गलत PIN। 15 मिनट बाद कोशिश करें');
   const u = q('SELECT * FROM users WHERE mobile = ?').get(key);
+  if (u && u.active && !u.pin_hash) throw httpErr(401, 'पहली बार है: "OTP से लॉगिन" चुनें और अपना PIN बनाएँ');
   if (!u || !u.active || !checkPin(pin, u.pin_hash)) {
     const c = (f?.count || 0) + 1;
     failedLogins.set(key, { count: c, until: c >= 5 ? Date.now() + 15 * 60e3 : 0 });
@@ -351,6 +476,7 @@ route('PUT', '/api/users/:id', async (req, res, { user, params }) => {
     q('DELETE FROM sessions WHERE user_id = ?').run(u.id);
   }
   if (b.active === false) q('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  if (b.verified !== undefined) q('UPDATE users SET verified = ? WHERE id = ?').run(b.verified ? 1 : 0, u.id);
   audit(user.id, 'user_updated', { id: u.id, changes: { ...b, pin: b.pin ? '(reset)' : undefined } });
   send(res, 200, { ok: true });
 });
@@ -371,6 +497,9 @@ route('GET', '/api/works', async (req, res, { user }) => {
       last_visit: last,
       open_requests: q("SELECT COUNT(*) AS n FROM requests WHERE work_id = ? AND status IN ('open','reopened')").get(w.id).n,
       dpr_today: !!q('SELECT 1 FROM dprs WHERE work_id = ? AND day = ?').get(w.id, today),
+      claimed_amount: claimedAmount(w.id), boq_total: boqTotal(w.id), items_count: items(w.id).length,
+      progress_today: !!q('SELECT 1 FROM progress WHERE work_id = ? AND day = ?').get(w.id, today),
+      pending_verification: q("SELECT status FROM verifications WHERE work_id = ? AND status IN ('pending_jen','pending_aen') ORDER BY id LIMIT 1").get(w.id)?.status || null,
     };
   }));
 });
@@ -405,7 +534,9 @@ route('PUT', '/api/works/:id', async (req, res, { user, params }) => {
   need(user, OVERSIGHT);
   const old = q('SELECT * FROM works WHERE id = ?').get(Number(params.id));
   if (!old) throw httpErr(404, 'काम नहीं मिला');
-  const f = workFields(await readJson(req), old);
+  const body = await readJson(req);
+  const f = workFields(body, old);
+  if (body.wo_amount !== undefined || body.tia !== undefined) q('UPDATE works SET wo_amount = ?, tia = ? WHERE id = ?').run(body.wo_amount !== undefined ? num(body.wo_amount) : old.wo_amount, body.tia !== undefined ? str(body.tia, 200) : old.tia, old.id);
   q(`UPDATE works SET name=?, wo_no=?, office=?, contractor_id=?, jen_id=?, aen_id=?, xen_id=?, lat=?, lng=?, radius_m=?, start_date=?, end_date=?, status=? WHERE id=?`)
     .run(f.name, f.wo_no, f.office, f.contractor_id, f.jen_id, f.aen_id, f.xen_id, f.lat, f.lng, f.radius_m, f.start_date, f.end_date, f.status, old.id);
   // the old fence is kept in the audit log so a moved fence can always be seen
@@ -651,6 +782,8 @@ route('GET', '/api/dashboard', async (req, res, { user, query }) => {
     missing_dprs: missingDprs(works, week),
     requests: { open: open.length, overdue: open.filter((r) => r.overdue_days > 0), done_awaiting_close: reqs.filter((r) => r.status === 'done').length },
     pending_visit_confirmations: pendingConfirm,
+    red_flags: redFlags(works, s),
+    pending_verifications: q(`SELECT COUNT(*) AS n FROM verifications WHERE status IN ('pending_jen','pending_aen') AND work_id IN (${works.map((w) => w.id).join(',') || 0})`).get().n,
     open_complaints: OVERSIGHT.includes(user.role) ? q("SELECT COUNT(*) AS n FROM complaints WHERE status != 'closed'").get().n : null,
   };
   if (query.format === 'csv') {
@@ -658,6 +791,277 @@ route('GET', '/api/dashboard', async (req, res, { user, query }) => {
       { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="attendance-${week}.csv"` });
   }
   send(res, 200, out);
+});
+
+// ---- OTP: self sign-up and first login for officers that a project named ----
+route('POST', '/api/otp/send', async (req, res) => {
+  const { mobile } = await readJson(req);
+  if (!/^\d{10}$/.test(String(mobile))) throw httpErr(400, '10 अंकों का मोबाइल नंबर लिखें');
+  const prev = q('SELECT sent_at FROM otps WHERE mobile = ?').get(String(mobile));
+  if (prev && Date.now() - prev.sent_at < 60e3) throw httpErr(429, '1 मिनट बाद दोबारा OTP माँगें');
+  const code = String(crypto.randomInt(100000, 999999));
+  q('INSERT INTO otps (mobile, code_hash, expires, tries, sent_at) VALUES (?,?,?,0,?) ON CONFLICT(mobile) DO UPDATE SET code_hash = excluded.code_hash, expires = excluded.expires, tries = 0, sent_at = excluded.sent_at')
+    .run(String(mobile), hashPin(code), Date.now() + 10 * 60e3, Date.now());
+  sendSms(String(mobile), `SiteSaakshi OTP: ${code} (10 मिनट तक मान्य)`);
+  const u = q('SELECT name, role FROM users WHERE mobile = ?').get(String(mobile));
+  // without an SMS gateway (demo / testing) the code is shown on screen
+  send(res, 200, { existing: u ? { name: u.name, role: u.role } : null, dev_otp: !process.env.SMS_WEBHOOK_URL && (DEMO || process.env.DEV_SHOW_OTP) ? code : undefined });
+}, { public: true });
+route('POST', '/api/otp/verify', async (req, res) => {
+  const b = await readJson(req);
+  const mobile = String(b.mobile);
+  const o = q('SELECT * FROM otps WHERE mobile = ?').get(mobile);
+  if (!o || o.expires < Date.now() || o.tries >= 5) throw httpErr(400, 'OTP की समय-सीमा ख़त्म, नया OTP माँगें');
+  if (!checkPin(String(b.code), o.code_hash)) { q('UPDATE otps SET tries = tries + 1 WHERE mobile = ?').run(mobile); throw httpErr(400, 'OTP गलत है'); }
+  if (!/^\d{4,8}$/.test(String(b.pin))) throw httpErr(400, 'नया PIN 4 से 8 अंकों का हो');
+  let u = q('SELECT * FROM users WHERE mobile = ?').get(mobile);
+  if (!u) {
+    if (!SELF_SIGNUP_ROLES.includes(b.role)) throw httpErr(400, 'अपनी भूमिका चुनें');
+    if (!str(b.name)) throw httpErr(400, 'अपना नाम लिखें');
+    const id = createUser({ name: str(b.name, 120), mobile, role: b.role, office: str(b.office, 200), pin: b.pin, verified: 0 });
+    audit(id, 'self_signup', { role: b.role });
+    u = q('SELECT * FROM users WHERE id = ?').get(id);
+  } else {
+    if (!u.active) throw httpErr(403, 'यह खाता बंद है');
+    q('UPDATE users SET pin_hash = ? WHERE id = ?').run(hashPin(b.pin), u.id);
+    if (str(b.name) && !u.verified) q('UPDATE users SET name = ? WHERE id = ?').run(str(b.name, 120), u.id);
+    if (str(b.office)) q('UPDATE users SET office = ? WHERE id = ?').run(str(b.office, 200), u.id);
+    audit(u.id, u.pin_hash ? 'pin_reset_otp' : 'first_login', {});
+  }
+  q('DELETE FROM otps WHERE mobile = ?').run(mobile);
+  const token = crypto.randomBytes(32).toString('hex');
+  q('INSERT INTO sessions (token, user_id, created_at) VALUES (?,?,?)').run(token, u.id, nowIso());
+  const secure = req.headers['x-forwarded-proto'] === 'https' || req.socket.encrypted ? '; Secure' : '';
+  send(res, 200, { user: publicUser(q('SELECT * FROM users WHERE id = ?').get(u.id)) }, { 'Set-Cookie': `ss_token=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}` });
+}, { public: true });
+
+// ---- a project created by the contractor or an officer; the other people are assigned on the spot ----
+function findOrCreatePerson(p, role, creator) {
+  if (!p || !p.mobile) return null;
+  const mobile = String(p.mobile).trim();
+  if (!/^\d{10}$/.test(mobile)) throw httpErr(400, `${role.toUpperCase()} का 10 अंकों का मोबाइल नंबर लिखें`);
+  const u = q('SELECT * FROM users WHERE mobile = ?').get(mobile);
+  if (u) {
+    if (u.role !== role) throw httpErr(400, `${mobile} पहले से ${u.role.toUpperCase()} के रूप में दर्ज है, ${role.toUpperCase()} नहीं`);
+    return { id: u.id, created: false };
+  }
+  if (!str(p.name)) throw httpErr(400, `${role.toUpperCase()} का नाम लिखें`);
+  const id = createUser({ name: str(p.name, 120), mobile, role, office: str(p.office, 200), pin: null, verified: 0 });
+  audit(creator.id, 'user_created_by_project', { id, role, mobile });
+  return { id, created: true };
+}
+function parseItems(list) {
+  const out = [];
+  for (const it of list || []) {
+    const description = str(it.description, 1000), qty = num(it.qty), rate = num(it.rate);
+    if (!description && qty == null && rate == null) continue;
+    if (!description || qty == null || qty <= 0 || rate == null || rate < 0) throw httpErr(400, `BOQ आइटम "${description || '?'}": विवरण, मात्रा और दर सही भरें`);
+    out.push({ code: str(it.code, 30), description, unit: str(it.unit, 20), qty, rate });
+  }
+  return out;
+}
+route('POST', '/api/projects', async (req, res, { user }) => {
+  need(user, [...SELF_SIGNUP_ROLES, ...OVERSIGHT]);
+  const b = await readJson(req);
+  const list = parseItems(b.items);
+  if (!list.length) throw httpErr(400, 'कम से कम एक BOQ आइटम (काम, मात्रा, दर) डालें');
+  const woAmount = num(b.wo_amount);
+  if (woAmount != null && woAmount <= 0) throw httpErr(400, 'वर्क ऑर्डर राशि सही लिखें');
+  const people = { contractor: null, jen: null, aen: null, xen: null };
+  const created = [];
+  db.exec('BEGIN');
+  try {
+    for (const role of Object.keys(people)) {
+      if (user.role === role) { people[role] = user.id; continue; }
+      const r = findOrCreatePerson(b[role], role, user);
+      if (r) { people[role] = r.id; if (r.created) created.push({ role, mobile: b[role].mobile, name: b[role].name }); }
+    }
+    if (!people.contractor) throw httpErr(400, 'ठेकेदार का नाम और मोबाइल ज़रूरी है');
+    if (!people.jen || !people.aen) throw httpErr(400, 'JEN और AEN दोनों का नाम और मोबाइल ज़रूरी है: हर 10% पर उनका नाप और अनुमोदन अनिवार्य है');
+    const f = workFields({ ...b, contractor_id: people.contractor, jen_id: people.jen, aen_id: people.aen, xen_id: people.xen, status: 'active' });
+    const id = Number(q(`INSERT INTO works (name, wo_no, office, contractor_id, jen_id, aen_id, xen_id, lat, lng, radius_m, start_date, end_date, status, created_at, wo_amount, tia, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(f.name, f.wo_no, f.office, f.contractor_id, f.jen_id, f.aen_id, f.xen_id, f.lat, f.lng, f.radius_m, f.start_date, f.end_date, 'active', nowIso(), woAmount, str(b.tia, 200), user.id).lastInsertRowid);
+    for (const it of list) q('INSERT INTO work_items (work_id, code, description, unit, qty, rate) VALUES (?,?,?,?,?,?)').run(id, it.code, it.description, it.unit, it.qty, it.rate);
+    audit(user.id, 'project_created', { id, ...f, wo_amount: woAmount, items: list.length });
+    db.exec('COMMIT');
+    for (const role of ['contractor', 'jen', 'aen', 'xen']) {
+      const u = people[role] && people[role] !== user.id && q('SELECT mobile FROM users WHERE id = ?').get(people[role]);
+      if (u) sendSms(u.mobile, `SiteSaakshi: आपको "${f.name}" (${f.wo_no}) पर ${role.toUpperCase()} के रूप में जोड़ा गया है। ऐप खोलें और "OTP से लॉगिन" करें।`);
+    }
+    send(res, 201, { id, new_accounts: created });
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+});
+route('GET', '/api/works/:id', async (req, res, { user, params }) => {
+  const w = workOr404(user, params.id);
+  const s = getSettings();
+  const names = userNames();
+  const c = claimedQty(w.id);
+  const lastMeasured = q("SELECT id FROM verifications WHERE work_id = ? AND measured_amount IS NOT NULL ORDER BY id DESC LIMIT 1").get(w.id);
+  const measured = {};
+  if (lastMeasured) for (const l of q('SELECT item_id, measured_qty FROM verification_lines WHERE verification_id = ?').all(lastMeasured.id)) measured[l.item_id] = l.measured_qty;
+  const its = items(w.id).map((i) => ({ ...i, amount: i.qty * i.rate, claimed_qty: c[i.id] || 0, measured_qty: measured[i.id] ?? null }));
+  const claimed = its.reduce((t, i) => t + i.claimed_qty * i.rate, 0);
+  const approved = q("SELECT measured_amount FROM verifications WHERE work_id = ? AND status = 'approved' ORDER BY id DESC LIMIT 1").get(w.id);
+  send(res, 200, {
+    ...w, contractor: names[w.contractor_id] || '', jen: names[w.jen_id] || '', aen: names[w.aen_id] || '', xen: names[w.xen_id] || '',
+    items: its, boq_total: its.reduce((t, i) => t + i.amount, 0), claimed_amount: claimed,
+    approved_amount: approved ? approved.measured_amount : 0, milestone_step: milestoneStep(w, s),
+    verifications: q('SELECT * FROM verifications WHERE work_id = ? ORDER BY id DESC').all(w.id).map((v) => decorateVerification(v, s)),
+    flags: redFlags([w], s),
+  });
+});
+route('POST', '/api/works/:id/dispute', async (req, res, { user, params }) => {
+  const w = workOr404(user, params.id);
+  const b = await readJson(req);
+  if (!str(b.note)) throw httpErr(400, 'कारण लिखें');
+  q('INSERT INTO work_flags (work_id, user_id, ts, kind, note) VALUES (?,?,?,?,?)').run(w.id, user.id, nowIso(), 'assignment_disputed', str(b.note, 2000));
+  send(res, 201, { ok: true });
+});
+route('POST', '/api/work-flags/:id/resolve', async (req, res, { user, params }) => {
+  need(user, OVERSIGHT);
+  const b = await readJson(req);
+  q("UPDATE work_flags SET status = 'resolved' WHERE id = ?").run(Number(params.id));
+  audit(user.id, 'work_flag_resolved', { id: Number(params.id), note: str(b.note) });
+  send(res, 200, { ok: true });
+});
+
+// ---- contractor's daily work update: quantities + geotagged photos ----
+route('POST', '/api/progress', async (req, res, { user }) => {
+  need(user, ['contractor']);
+  const b = await readJson(req);
+  const w = workOr404(user, b.work_id);
+  if (w.contractor_id !== user.id) throw httpErr(403, 'यह आपका काम नहीं है');
+  if (w.status !== 'active') throw httpErr(400, 'यह काम बंद है');
+  const its = Object.fromEntries(items(w.id).map((i) => [i.id, i]));
+  const lines = (b.lines || []).map((l) => ({ item_id: Number(l.item_id), qty: num(l.qty) })).filter((l) => l.qty);
+  if (!lines.length) throw httpErr(400, 'आज किए काम की मात्रा भरें');
+  for (const l of lines) { if (!its[l.item_id]) throw httpErr(400, 'गलत BOQ आइटम'); if (l.qty < 0) throw httpErr(400, 'मात्रा शून्य से कम नहीं हो सकती'); }
+  const photos = (Array.isArray(b.photos) ? b.photos : []).slice(0, 6).map(savePhoto).filter(Boolean);
+  if (!photos.length) throw httpErr(400, 'काम की कम से कम एक फ़ोटो (साइट पर ली गई) ज़रूरी है');
+  const lat = num(b.lat), lng = num(b.lng);
+  if (lat == null || lng == null) throw httpErr(400, 'GPS लोकेशन नहीं मिली। फ़ोन की लोकेशन चालू करें');
+  const d = Math.round(haversine(lat, lng, w.lat, w.lng));
+  const s = getSettings();
+  const flags = [];
+  if (d > w.radius_m) flags.push('outside_fence');
+  if ((num(b.accuracy) ?? 999) > s.max_gps_accuracy_m) flags.push('low_accuracy');
+  if (b.from_gallery) flags.push('from_gallery');
+  for (const p of photos) if (q("SELECT 1 FROM progress WHERE photos LIKE ? LIMIT 1").get('%' + p + '%')) { flags.push('photo_reused'); break; }
+  const before = claimedAmount(w.id);
+  const c = claimedQty(w.id);
+  for (const l of lines) if ((c[l.item_id] || 0) + l.qty > its[l.item_id].qty * 1.0001) { flags.push('exceeds_boq'); break; }
+  const amount = lines.reduce((t, l) => t + l.qty * its[l.item_id].rate, 0);
+  db.exec('BEGIN');
+  try {
+    const pid = Number(q(`INSERT INTO progress (work_id, user_id, day, server_ts, lat, lng, accuracy, distance_m, in_fence, note, photos, amount, flags) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(w.id, user.id, istDay(), nowIso(), lat, lng, num(b.accuracy), d, d <= w.radius_m ? 1 : 0, str(b.note, 2000), JSON.stringify(photos), amount, flags.join(',')).lastInsertRowid);
+    for (const l of lines) q('INSERT INTO progress_lines (progress_id, item_id, qty) VALUES (?,?,?)').run(pid, l.item_id, l.qty);
+    const after = before + amount;
+    const vid = maybeCreateVerification(w, before, after, s);
+    db.exec('COMMIT');
+    send(res, 201, { id: pid, amount, claimed_total: after, flags, verification_id: vid, jen_due_hours: vid ? s.jen_verify_hours : undefined });
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+});
+route('GET', '/api/progress', async (req, res, { user, query }) => {
+  const names = userNames();
+  const ids = query.work_id ? [workOr404(user, query.work_id).id] : worksFor(user).map((w) => w.id);
+  if (!ids.length) return send(res, 200, []);
+  const rows = q(`SELECT p.*, w.name AS work FROM progress p JOIN works w ON w.id = p.work_id WHERE p.work_id IN (${ids.map(() => '?').join(',')}) ORDER BY p.server_ts DESC LIMIT 300`).all(...ids);
+  send(res, 200, rows.map((p) => ({ ...p, photos: JSON.parse(p.photos), by: names[p.user_id],
+    lines: q('SELECT pl.qty, i.description, i.unit, i.rate, i.code FROM progress_lines pl JOIN work_items i ON i.id = pl.item_id WHERE pl.progress_id = ?').all(p.id) })));
+});
+
+// ---- milestone verification: JEN measures at site, AEN approves, contractor agrees or objects ----
+route('GET', '/api/verifications', async (req, res, { user, query }) => {
+  const s = getSettings();
+  const names = userNames();
+  const ids = query.work_id ? [workOr404(user, query.work_id).id] : worksFor(user).map((w) => w.id);
+  if (!ids.length) return send(res, 200, []);
+  const rows = q(`SELECT v.*, w.name AS work, w.jen_id AS w_jen, w.aen_id AS w_aen FROM verifications v JOIN works w ON w.id = v.work_id WHERE v.work_id IN (${ids.map(() => '?').join(',')}) ORDER BY v.id DESC LIMIT 300`).all(...ids);
+  send(res, 200, rows.map((v) => ({ ...decorateVerification(v, s), jen_name: names[v.jen_id || v.w_jen], aen_name: names[v.aen_id || v.w_aen], percent: v.milestone_no * s.milestone_percent })));
+});
+const verOr404 = (user, id) => {
+  const v = q('SELECT * FROM verifications WHERE id = ?').get(Number(id));
+  if (!v) throw httpErr(404, 'सत्यापन नहीं मिला');
+  return { v, w: workOr404(user, v.work_id) };
+};
+route('POST', '/api/verifications/:id/measure', async (req, res, { user, params }) => {
+  need(user, ['jen']);
+  const { v, w } = verOr404(user, params.id);
+  if (w.jen_id !== user.id) throw httpErr(403, 'आप इस काम के JEN नहीं हैं');
+  if (v.status !== 'pending_jen') throw httpErr(400, 'यह नाप पहले ही दर्ज है');
+  const b = await readJson(req);
+  const s = getSettings();
+  const lat = num(b.lat), lng = num(b.lng), acc = num(b.accuracy);
+  if (lat == null || lng == null) throw httpErr(400, 'GPS लोकेशन नहीं मिली');
+  const d = Math.round(haversine(lat, lng, w.lat, w.lng));
+  // the measurement has to be taken at the site, at the time: not from the office
+  if (d > w.radius_m) throw httpErr(400, `आप साइट से ${d} मी. दूर हैं। नाप साइट पर (${w.radius_m} मी. के अंदर) ही दर्ज होगा`);
+  if (acc == null || acc > s.max_gps_accuracy_m) throw httpErr(400, `GPS कमज़ोर है (±${acc ?? '?'} मी.)। खुले में जाकर दोबारा कोशिश करें`);
+  const photo = savePhoto(b.photo);
+  if (!photo) throw httpErr(400, 'नाप के समय की लाइव फ़ोटो ज़रूरी है');
+  const its = Object.fromEntries(items(w.id).map((i) => [i.id, i]));
+  const measured = {};
+  for (const l of b.lines || []) { const qn = num(l.measured_qty); if (its[Number(l.item_id)] && qn != null && qn >= 0) measured[Number(l.item_id)] = qn; }
+  const existing = Object.fromEntries(q('SELECT item_id, id FROM verification_lines WHERE verification_id = ?').all(v.id).map((l) => [l.item_id, l.id]));
+  for (const id of Object.keys(existing)) if (measured[id] == null) throw httpErr(400, `"${its[id].description.slice(0, 40)}" का नाप भरें`);
+  const now = nowIso();
+  db.exec('BEGIN');
+  try {
+    for (const [itemId, qty] of Object.entries(measured)) {
+      if (existing[itemId]) q('UPDATE verification_lines SET measured_qty = ? WHERE id = ?').run(qty, existing[itemId]);
+      else q('INSERT INTO verification_lines (verification_id, item_id, claimed_qty, measured_qty) VALUES (?,?,0,?)').run(v.id, Number(itemId), qty);
+    }
+    const amt = Object.entries(measured).reduce((t, [id, qn]) => t + qn * its[id].rate, 0);
+    const late = Math.max(0, hoursBetween(v.jen_due_ts, now));
+    q(`UPDATE verifications SET status = 'pending_aen', jen_id = ?, jen_ts = ?, jen_lat = ?, jen_lng = ?, jen_accuracy = ?, jen_distance_m = ?, jen_photo = ?, jen_note = ?,
+      measured_amount = ?, jen_late_hours = ?, aen_due_ts = ?, contractor_status = 'pending', contractor_note = '', contractor_ts = NULL WHERE id = ?`)
+      .run(user.id, now, lat, lng, acc, d, photo, str(b.note, 2000), Math.round(amt), Math.round(late * 10) / 10, addHours(now, s.aen_approve_hours), v.id);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  const aen = w.aen_id && q('SELECT mobile FROM users WHERE id = ?').get(w.aen_id);
+  if (aen) sendSms(aen.mobile, `SiteSaakshi: "${w.name}" पर JEN ने नाप दर्ज किया। ${s.aen_approve_hours} घंटे में अनुमोदन करें।`);
+  send(res, 200, decorateVerification(q('SELECT * FROM verifications WHERE id = ?').get(v.id), s));
+});
+route('POST', '/api/verifications/:id/approve', async (req, res, { user, params }) => {
+  need(user, ['aen']);
+  const { v, w } = verOr404(user, params.id);
+  if (w.aen_id !== user.id) throw httpErr(403, 'आप इस काम के AEN नहीं हैं');
+  if (v.status !== 'pending_aen') throw httpErr(400, 'अभी अनुमोदन के लिए नहीं है');
+  const b = await readJson(req);
+  if (!['approved', 'returned'].includes(b.decision)) throw httpErr(400, 'अनुमोदन या वापसी चुनें');
+  if (b.decision === 'returned' && !str(b.note)) throw httpErr(400, 'वापस भेजने का कारण लिखें');
+  const s = getSettings();
+  const now = nowIso();
+  const late = Math.max(0, hoursBetween(v.aen_due_ts, now));
+  if (b.decision === 'approved') {
+    q(`UPDATE verifications SET status = 'approved', aen_id = ?, aen_ts = ?, aen_note = ?, aen_lat = ?, aen_lng = ?, aen_late_hours = ? WHERE id = ?`)
+      .run(user.id, now, str(b.note, 2000), num(b.lat), num(b.lng), Math.round(late * 10) / 10, v.id);
+  } else {
+    // sent back to the JEN for re-measurement: a fresh 24 hours, and the round is counted
+    q(`UPDATE verifications SET status = 'pending_jen', aen_note = ?, jen_due_ts = ?, rounds = rounds + 1, aen_due_ts = NULL WHERE id = ?`)
+      .run(str(b.note, 2000), addHours(now, s.jen_verify_hours), v.id);
+  }
+  audit(user.id, 'verification_' + b.decision, { id: v.id, note: str(b.note) });
+  send(res, 200, { ok: true });
+});
+route('POST', '/api/verifications/:id/respond', async (req, res, { user, params }) => {
+  need(user, ['contractor']);
+  const { v, w } = verOr404(user, params.id);
+  if (w.contractor_id !== user.id) throw httpErr(403, 'यह आपका काम नहीं है');
+  if (v.measured_amount == null) throw httpErr(400, 'अभी JEN का नाप नहीं हुआ');
+  if (v.contractor_status !== 'pending') throw httpErr(400, 'जवाब पहले दिया जा चुका है');
+  const b = await readJson(req);
+  if (!['agreed', 'disagreed'].includes(b.status)) throw httpErr(400, 'गलत जवाब');
+  if (b.status === 'disagreed' && !str(b.note)) throw httpErr(400, 'असहमति का कारण लिखें');
+  q('UPDATE verifications SET contractor_status = ?, contractor_note = ?, contractor_ts = ? WHERE id = ?').run(b.status, str(b.note, 2000), nowIso(), v.id);
+  send(res, 200, { ok: true });
+});
+route('GET', '/api/flags', async (req, res, { user, query }) => {
+  const flags = redFlags(worksFor(user), getSettings());
+  if (query.format === 'csv') return send(res, 200, csv(flags, ['severity', 'work', 'tia', 'type', 'against_role', 'against_name', 'since', 'hours', 'days', 'text']),
+    { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="red-flags.csv"' });
+  send(res, 200, flags);
 });
 
 route('GET', '/api/settings', async (req, res) => send(res, 200, getSettings()));
@@ -733,6 +1137,7 @@ function seedDemo() {
     ['aen', '9000000003', 'AEN Sub-division Sanganer', 'Sub-division Sanganer'],
     ['jen', '9000000004', 'JEN Sanganer', 'Sub-division Sanganer'],
     ['contractor', '9000000005', 'M/s Demo Constructions', ''],
+    ['hq', '9000000006', 'Chief Engineer HQ (TIA)', 'PWD HQ Jaipur'],
   ]) ids[role] = createUser({ name, mobile, role, office, pin: '1234' });
   const lat = 26.8241, lng = 75.8025;
   const wid = Number(q(`INSERT INTO works (name, wo_no, office, contractor_id, jen_id, aen_id, xen_id, lat, lng, radius_m, start_date, end_date, status, created_at)
@@ -750,6 +1155,23 @@ function seedDemo() {
     if (i % 2 === 0) q(`INSERT INTO dprs (work_id, user_id, day, server_ts, work_done, labour, materials, contractor_status) VALUES (?,?,?,?,?,?,?,?)`)
       .run(wid, ids.jen, day, ts, 'CC M-20 laid, chainage ' + (i * 20) + ' to ' + (i * 20 + 20) + ' m', '12 labour, 1 mason', 'Cement 40 bags', 'agreed');
   }
+  // work order of ₹10 lakh with BOQ; the contractor has uploaded daily work, crossing 10% two days ago
+  q("UPDATE works SET wo_amount = 1000000, tia = 'Chief Engineer, PWD Jaipur', created_by = ? WHERE id = ?").run(ids.contractor, wid);
+  const it = [['1.01', 'Earthwork in excavation for drain', 'cum', 400, 210], ['4.12', 'CC M-20 in road, 150 mm thick', 'cum', 300, 2500], ['5.03', 'RCC drain M-25 including steel', 'rm', 250, 600]]
+    .map(([code, d, u, qty, rate]) => Number(q('INSERT INTO work_items (work_id, code, description, unit, qty, rate) VALUES (?,?,?,?,?,?)').run(wid, code, d, u, qty, rate).lastInsertRowid));
+  let claimed = 0;
+  const s0 = getSettings();
+  for (const [daysAgo, item, qty] of [[6, 0, 120], [5, 0, 110], [4, 1, 12], [3, 1, 14], [2, 1, 16], [1, 2, 20]]) {
+    const ts = new Date(Date.now() - daysAgo * 86400e3 - 3 * 3600e3).toISOString();
+    const rate = [210, 2500, 600][item];
+    const pid = Number(q(`INSERT INTO progress (work_id, user_id, day, server_ts, lat, lng, accuracy, distance_m, in_fence, note, photos, amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(wid, ids.contractor, istDay(new Date(ts)), ts, lat + 0.0003, lng, 9, 33, 1, '', '[]', qty * rate).lastInsertRowid);
+    q('INSERT INTO progress_lines (progress_id, item_id, qty) VALUES (?,?,?)').run(pid, it[item], qty);
+    const before = claimed; claimed += qty * rate;
+    const w0 = q('SELECT * FROM works WHERE id = ?').get(wid);
+    const vid = maybeCreateVerification(w0, before, claimed, s0);
+    if (vid) q('UPDATE verifications SET created_ts = ?, jen_due_ts = ? WHERE id = ?').run(ts, addHours(ts, s0.jen_verify_hours), vid);
+  }
   q("UPDATE visits SET contractor_note = 'XEN site par nahi aaye; office se haziri lagai' WHERE contractor_status = 'disputed'").run();
   const mk = (type, title, daysAgo, sla) => {
     const created = new Date(Date.now() - daysAgo * 86400e3).toISOString();
@@ -761,7 +1183,7 @@ function seedDemo() {
   mk('bill', '2nd running bill', 25, 15);
   mk('inspection', 'Sub-grade ready, inspection needed before CC', 1, 3);
   console.log('\nDemo data created. Every demo user has PIN 1234:');
-  console.log('  admin 9000000000 · SE 9000000001 · XEN 9000000002 · AEN 9000000003 · JEN 9000000004 · contractor 9000000005\n');
+  console.log('  admin 9000000000 · HQ/TIA 9000000006 · SE 9000000001 · XEN 9000000002 · AEN 9000000003 · JEN 9000000004 · contractor 9000000005\n');
 }
 
 firstRun();

@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'saakshi-test-'));
 const PORT = 18000 + Math.floor(Math.random() * 1000);
 const base = `http://localhost:${PORT}`;
-const srv = spawn(process.execPath, [path.join(__dirname, 'server.js'), '--demo'], { env: { ...process.env, PORT, DATA_DIR: dir }, stdio: ['ignore', 'pipe', 'inherit'] });
+const srv = spawn(process.execPath, [path.join(__dirname, 'server.js'), '--demo'], { env: { ...process.env, PORT, DATA_DIR: dir, QUIET: '1' }, stdio: ['ignore', 'pipe', 'inherit'] });
 
 // a real-looking JPEG payload (random bytes are fine: the server only checks type, size and hash)
 const fakePhoto = () => 'data:image/jpeg;base64,' + require('node:crypto').randomBytes(4000).toString('base64');
@@ -39,6 +39,7 @@ async function main() {
   const con = await login('9000000005');
   const se = await login('9000000001');
   const admin = await login('9000000000');
+  const hq = await login('9000000006');
 
   const works = (await jen('GET', '/api/works')).data;
   assert.equal(works.length, 1);
@@ -135,6 +136,79 @@ async function main() {
   assert.equal((await se('GET', '/photo/' + photoHash)).status, 200);
   assert.equal((await anon('GET', '/photo/' + photoHash)).status, 401);
   assert.equal((await anon('GET', '/../server.js')).status, 404);
+
+  // ---- self sign-up by OTP, project creation with officers assigned on the spot ----
+  const newCon = client();
+  r = await newCon('POST', '/api/otp/send', { mobile: '9800000001' });
+  assert.equal(r.status, 200); assert.equal(r.data.existing, null); assert.ok(r.data.dev_otp);
+  assert.equal((await newCon('POST', '/api/otp/verify', { mobile: '9800000001', code: '000000', pin: '4321', name: 'Ram', role: 'contractor' })).status, 400);
+  r = await newCon('POST', '/api/otp/verify', { mobile: '9800000001', code: r.data.dev_otp, pin: '4321', name: 'M/s Ram Builders', role: 'contractor' });
+  assert.equal(r.status, 200); assert.equal(r.data.user.role, 'contractor');
+  assert.equal((await newCon('POST', '/api/otp/verify', { mobile: '9800000002', code: '1', pin: '4321', name: 'x', role: 'admin' })).status, 400);
+
+  const site = { lat: 26.9, lng: 75.8 };
+  // JEN mobile already belongs to the AEN: refused
+  assert.equal((await newCon('POST', '/api/projects', { name: 'P', wo_amount: 1000000, ...site, radius_m: 200, jen: { name: 'x', mobile: '9000000003' }, aen: { name: 'y', mobile: '9800000011' }, items: [{ description: 'a', unit: 'cum', qty: 10, rate: 100 }] })).status, 400);
+  r = await newCon('POST', '/api/projects', {
+    name: 'Village road Kotputli', wo_no: 'WO/77', wo_amount: 1000000, tia: 'CE PWD Jaipur', ...site, radius_m: 200,
+    jen: { name: 'New JEN', mobile: '9800000010' }, aen: { name: 'AEN Sanganer', mobile: '9000000003' },
+    items: [{ code: '1', description: 'Earthwork', unit: 'cum', qty: 1000, rate: 200 }, { code: '2', description: 'CC M-20', unit: 'cum', qty: 320, rate: 2500 }],
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const pid = r.data.id;
+  assert.deepEqual(r.data.new_accounts.map((a) => a.role), ['jen'], 'only the new JEN is created; the existing AEN is reused');
+  assert.ok((await aen('GET', '/api/works')).data.some((x) => x.id === pid), 'existing AEN is assigned at once');
+  // the new JEN cannot log in with a PIN yet, only by OTP
+  const nj = client();
+  assert.equal((await nj('POST', '/api/login', { mobile: '9800000010', pin: '1234' })).status, 401);
+  r = await nj('POST', '/api/otp/send', { mobile: '9800000010' });
+  assert.equal(r.data.existing.role, 'jen');
+  assert.equal((await nj('POST', '/api/otp/verify', { mobile: '9800000010', code: r.data.dev_otp, pin: '5555' })).status, 200);
+  assert.ok((await nj('GET', '/api/works')).data.some((x) => x.id === pid));
+  assert.ok((await admin('GET', '/api/flags')).data.every((f) => f.type !== 'officer_not_joined' || f.work_id !== pid || f.against_role !== 'jen'));
+
+  // ---- contractor's daily updates; crossing 10% makes a verification with a 24 h deadline ----
+  const its = (await newCon('GET', '/api/works/' + pid)).data.items;
+  const up = (lines, extra = {}) => newCon('POST', '/api/progress', { work_id: pid, lines, photos: [fakePhoto()], lat: site.lat, lng: site.lng, accuracy: 8, ...extra });
+  assert.equal((await newCon('POST', '/api/progress', { work_id: pid, lines: [{ item_id: its[0].id, qty: 5 }], photos: [], ...site, accuracy: 8 })).status, 400, 'photo required');
+  r = await up([{ item_id: its[0].id, qty: 200 }]); // ₹40,000
+  assert.equal(r.status, 201); assert.equal(r.data.verification_id, null);
+  r = await up([{ item_id: its[1].id, qty: 30 }]); // +₹75,000 = ₹1,15,000 → crosses 10%
+  assert.ok(r.data.verification_id); assert.equal(r.data.jen_due_hours, 24);
+  const vid = r.data.verification_id;
+  r = await up([{ item_id: its[0].id, qty: 1 }], { lat: site.lat + 0.1 });
+  assert.ok(r.data.flags.includes('outside_fence'));
+  assert.equal((await nj('POST', '/api/progress', { work_id: pid, lines: [{ item_id: its[0].id, qty: 1 }], photos: [fakePhoto()], ...site })).status, 403);
+
+  // ---- JEN must measure at the site; AEN approves ----
+  const lines = [{ item_id: its[0].id, measured_qty: 200 }, { item_id: its[1].id, measured_qty: 20 }];
+  assert.equal((await nj('POST', `/api/verifications/${vid}/measure`, { lines, photo: fakePhoto(), lat: site.lat + 0.05, lng: site.lng, accuracy: 8 })).status, 400, 'not from the office');
+  assert.equal((await nj('POST', `/api/verifications/${vid}/measure`, { lines: lines.slice(0, 1), photo: fakePhoto(), ...site, accuracy: 8 })).status, 400, 'every claimed item');
+  assert.equal((await aen('POST', `/api/verifications/${vid}/approve`, { decision: 'approved' })).status, 400, 'JEN first');
+  r = await nj('POST', `/api/verifications/${vid}/measure`, { lines, photo: fakePhoto(), ...site, accuracy: 8, note: 'MB 12 p 4' });
+  assert.equal(r.status, 200); assert.equal(r.data.status, 'pending_aen');
+  assert.equal(r.data.measured_amount, 200 * 200 + 20 * 2500);
+  assert.equal(r.data.overclaim, true, '₹90,000 measured against ₹1,15,000 claimed');
+  let flags = (await hq('GET', '/api/flags')).data;
+  assert.ok(flags.some((f) => f.work_id === pid && f.type === 'contractor_overclaim'), 'HQ sees the contractor over-claim');
+  assert.equal((await aen('POST', `/api/verifications/${vid}/approve`, { decision: 'returned' })).status, 400, 'reason needed');
+  assert.equal((await aen('POST', `/api/verifications/${vid}/approve`, { decision: 'returned', note: 'CC re-measure' })).status, 200);
+  assert.equal((await nj('POST', `/api/verifications/${vid}/measure`, { lines: [{ item_id: its[0].id, measured_qty: 200 }, { item_id: its[1].id, measured_qty: 30 }], photo: fakePhoto(), ...site, accuracy: 8 })).status, 200);
+  assert.equal((await aen('POST', `/api/verifications/${vid}/approve`, { decision: 'approved', note: 'ok' })).status, 200);
+  assert.equal((await newCon('POST', `/api/verifications/${vid}/respond`, { status: 'agreed' })).status, 200);
+  const pw = (await newCon('GET', '/api/works/' + pid)).data;
+  assert.equal(pw.approved_amount, 115000); assert.equal(pw.verifications[0].rounds, 2);
+  assert.ok(!pw.flags.some((f) => f.type === 'contractor_overclaim'), 'flag clears once the measurement matches');
+
+  // ---- the demo work has a 10% milestone the JEN never measured: red flag up to HQ ----
+  flags = (await hq('GET', '/api/flags')).data;
+  assert.ok(flags.some((f) => f.type === 'jen_not_verified' && f.severity === 'high' && f.tia));
+  assert.ok((await con('GET', '/api/flags')).data.some((f) => f.type === 'jen_not_verified'), 'contractor sees it too');
+  assert.ok(!(await newCon('GET', '/api/flags')).data.some((f) => f.work_id !== pid), 'others only see their own works');
+
+  // officer objects to being assigned
+  assert.equal((await nj('POST', `/api/works/${pid}/dispute`, { note: 'Yeh mera kshetra nahi' })).status, 201);
+  assert.ok((await hq('GET', '/api/flags')).data.some((f) => f.type === 'assignment_disputed'));
 
   console.log('All tests passed');
 }
