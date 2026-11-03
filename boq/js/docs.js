@@ -2,7 +2,7 @@
 import { esc } from "./store.js";
 import { saveFile, allFiles, putFile, delFile, mergeToPdf, makeZip, scanEnhance, thumbOf, safeName, extOf, mb } from "./files.js";
 
-export const SITE_FOLDERS = ["Work order", "Agreement", "BOQ", "Drawings", "MB & bills", "Letters", "Challans", "Others"];
+export const SITE_FOLDERS = ["Work order", "Agreement", "BOQ", "Drawings", "Test reports", "STP", "MB & bills", "Letters", "Challans", "Others"];
 export const COMPANY_FOLDERS = ["Registration", "PAN & GST", "Experience certificates", "Bank & solvency", "Tender documents", "Staff & labour", "Others"];
 
 const $ = (s, el = document) => el.querySelector(s);

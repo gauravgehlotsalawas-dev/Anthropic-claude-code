@@ -5,6 +5,7 @@ import { saveFile, allFiles, putFile, delFile, readExif, getPosition, reverseGeo
 import { docsPanel, SITE_FOLDERS } from "./docs.js";
 import { readDocument, parseWorkOrder } from "./docread.js";
 import { extractBoq } from "./bills.js";
+import { estimateMaterials, MATS, matOf } from "./materials.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -13,6 +14,8 @@ const state = { sites: [], diary: new Map(), siteId: null, tab: "today", date: t
 
 const LABOUR = ["Mason", "Beldar / Labour", "Carpenter", "Bar bender", "Helper", "Plumber", "Electrician", "Painter", "Operator", "Supervisor"];
 const UNITS = ["cum", "sqm", "rmt", "m", "kg", "MT", "nos", "bags", "trips", "ltr", "LS"];
+const MAT_NAMES = ["Cement (bags)", "Sand / bajri", "Aggregate / gitti 20 mm", "Aggregate / gitti 40 mm", "Steel TMT", "Bricks", "Water (tanker)", "Diesel"];
+const MACHINES = ["JCB", "Tractor trolley", "Dumper / tipper", "Concrete mixer", "Vibrator", "Water tanker", "Roller", "Hydra / crane", "Transit mixer", "Generator"];
 const WEATHER = ["Clear", "Sunny / hot", "Cloudy", "Rain", "Heavy rain", "Cold / fog", "Dust storm"];
 
 function today() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
@@ -45,13 +48,14 @@ export function switchSite(id) {
 }
 
 // Documents chosen while making (or editing) a site, read to fill the form and then saved in its folders.
-const OTHER_FOLDERS = ["Agreement", "Drawings", "Letters", "Challans", "MB & bills", "Others"];
-const docPicker = () => `<div class="card upload-card ns-docs"><h3>Start from documents <span class="muted small">(optional)</span></h3>
-  <p class="muted small">Add the work order and the BOQ (PDF, Excel, Word or photos). The name of work, W.O. No. and date, department, amount, dates, contractor and engineers are read from them (OCR on this device), and the BOQ items become the list of work items for the daily entry. Check the form below before saving. All files are saved in the site's document folders.</p>
+const OTHER_FOLDERS = ["Agreement", "Test reports", "STP", "Drawings", "Letters", "Challans", "MB & bills", "Others"];
+const listNames = (names) => (names?.length ? names.map((n) => `📄 ${esc(n)}`).join("<br>") : "No file");
+const docPicker = (ex = null) => `<div class="card upload-card ns-docs"><h3>${ex ? "Documents of this site" : `Start from documents <span class="muted small">(optional)</span>`}</h3>
+  ${ex ? `<p class="muted small">Already saved files are listed. Add more here (they are read again to fill empty fields), or open them in <b>Documents</b>.</p>` : `<p class="muted small">Add the work order and the BOQ (PDF, Excel, Word or photos). The name of work, W.O. No. and date, department, amount, dates, contractor and engineers are read from them (OCR on this device), and the BOQ items become the list of work items for the daily entry. Check the form below before saving. All files are saved in the site's document folders.</p>`}
   <div class="ns-grid">
-    <div><b>Work order</b><label class="ghost btn-file">⇪ Choose<input type="file" multiple data-ns="wo" hidden></label><small data-nsl="wo" class="muted">No file</small></div>
-    <div><b>BOQ</b><label class="ghost btn-file">⇪ Choose<input type="file" multiple data-ns="boq" hidden></label><small data-nsl="boq" class="muted">No file</small></div>
-    <div><b>Agreement &amp; other documents</b><span class="row gap"><select data-nsfolder>${OTHER_FOLDERS.map((f) => `<option>${f}</option>`).join("")}</select><label class="ghost btn-file">⇪ Choose<input type="file" multiple data-ns="other" hidden></label></span><small data-nsl="other" class="muted">No file</small></div>
+    <div><b>Work order</b><label class="ghost btn-file">⇪ Choose<input type="file" multiple data-ns="wo" hidden></label><small data-nsl="wo" class="muted">${listNames(ex?.wo)}</small></div>
+    <div><b>BOQ</b><label class="ghost btn-file">⇪ Choose<input type="file" multiple data-ns="boq" hidden></label><small data-nsl="boq" class="muted">${listNames(ex?.boq)}</small></div>
+    <div><b>Agreement &amp; other documents</b><span class="row gap"><select data-nsfolder>${OTHER_FOLDERS.map((f) => `<option>${f}</option>`).join("")}</select><label class="ghost btn-file">⇪ Choose<input type="file" multiple data-ns="other" hidden></label></span><small data-nsl="other" class="muted">${listNames(ex?.other)}</small></div>
   </div><p class="status" data-nsstatus></p></div>`;
 
 /** Wires the document picker inside el; returns what was read and the files to save. */
@@ -72,7 +76,7 @@ function bindDocPicker(el) {
     const kind = t.dataset.ns, files = [...t.files]; t.value = ""; if (!files.length) return;
     const folder = kind === "wo" ? "Work order" : kind === "boq" ? "BOQ" : $("[data-nsfolder]", el).value;
     files.forEach((f) => got.files.push({ file: f, folder, kind }));
-    $(`[data-nsl="${kind}"]`, el).textContent = got.files.filter((x) => x.kind === kind).map((x) => x.file.name).join(", ");
+    const lab = $(`[data-nsl="${kind}"]`, el); lab.innerHTML = (lab.dataset.had ??= lab.textContent === "No file" ? "" : lab.innerHTML + "<br>") + got.files.filter((x) => x.kind === kind).map((x) => `📎 ${esc(x.file.name)} <span class="badge">new</span>`).join("<br>");
     try {
       if (kind === "wo") {
         status("Reading the work order… (photos and scans take a little longer)");
@@ -133,7 +137,7 @@ const dKey = (siteId, day) => `${siteId}|${day}`;
 function entry(day, create = false) {
   const k = dKey(state.siteId, day);
   let d = state.diary.get(k);
-  if (!d && create) { d = { id: k, siteId: state.siteId, date: day, weather: "", hours: "", labour: [], work: [], materials: [], machinery: [], hindrance: "", remarks: "", visitors: "" }; state.diary.set(k, d); }
+  if (!d && create) { d = { id: k, siteId: state.siteId, date: day, weather: "", hours: "", labour: [], work: [], materials: [], machinery: [], consumed: [], hindrance: "", remarks: "", visitors: "" }; state.diary.set(k, d); }
   return d;
 }
 let saveT = null;
@@ -164,26 +168,49 @@ export async function renderSites() {
   if (state.tab === "photos") body.innerHTML = await photosView();
   if (state.tab === "reports") body.innerHTML = reportsView();
   if (state.tab === "details") {
-    body.innerHTML = `${docPicker()}<div class="card"><h2>Site details</h2>${siteForm(s)}<div class="row gap mt"><button class="primary" data-act="saveSite">Save</button><button class="ghost danger-text" data-act="delSite">Delete this site</button></div></div>
+    const docs = (await allFiles()).filter((f) => f.owner === s.id && f.kind === "doc");
+    const names = (pred) => docs.filter(pred).map((f) => `${f.name}${["Work order", "BOQ"].includes(f.folder) ? "" : ` (${f.folder})`}`);
+    body.innerHTML = `${docPicker({ wo: names((f) => f.folder === "Work order"), boq: names((f) => f.folder === "BOQ"), other: names((f) => !["Work order", "BOQ"].includes(f.folder)) })}<div class="card"><h2>Site details</h2>${siteForm(s)}<div class="row gap mt"><button class="primary" data-act="saveSite">Save</button><button class="ghost danger-text" data-act="delSite">Delete this site</button></div></div>
       ${s.boqItems?.length ? `<div class="card"><h2>BOQ items (${s.boqItems.length})</h2><p class="muted small">Offered as work items in the daily entry.</p><div class="table-wrap tall"><table class="data small"><thead><tr><th>Sch.</th><th>No.</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Rate</th></tr></thead>
         <tbody>${s.boqItems.map((i) => `<tr><td>${esc(i.schedule || "")}</td><td>${esc(i.sno || "")}</td><td>${esc(i.description)}</td><td>${esc(i.unit || "")}</td><td class="num">${q3(i.qty)}</td><td class="num">${i.rate ? round(i.rate, 2) : ""}</td></tr>`).join("")}</tbody></table></div></div>` : ""}`;
+    const ms = materialStatus(s, today());
+    if (ms.rows.length || s.boqItems?.length) body.insertAdjacentHTML("beforeend", `<div class="card"><h2>Materials for this work</h2>
+      <p class="muted small">Required quantities are worked out from the BOQ items (mix, grade, thickness and unit in each item) with common site thumb rules: an approximate guide, not the department's analysis of rates. Received and consumed come from the daily entries.</p>
+      ${ms.rows.length ? `<div class="table-wrap"><table class="data"><thead><tr><th>Material</th><th>Unit</th><th class="num">Required (BOQ, approx.)</th><th class="num">Received</th><th class="num">Consumed</th><th class="num">Balance at site</th><th class="num">Still to come</th></tr></thead>
+        <tbody>${matTable(ms).map((r) => `<tr>${r.map((c, i) => `<td class="${i > 1 ? "num" : ""}">${typeof c === "number" ? c.toLocaleString("en-IN") : esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<p class="muted">No cement, sand, aggregate, steel or brick items could be recognised in the BOQ.</p>`}
+      ${ms.est.rows.length ? `<details class="mt"><summary>How it was worked out (${ms.est.rows.length} items${ms.est.skipped ? `; ${ms.est.skipped} items such as earthwork need no such material` : ""})</summary><div class="table-wrap"><table class="data small"><thead><tr><th>No.</th><th>Item</th><th class="num">Qty</th><th>Basis</th><th class="num">Cement bags</th><th class="num">Sand cum</th><th class="num">Agg. cum</th><th class="num">Steel kg</th><th class="num">Bricks</th></tr></thead>
+        <tbody>${ms.est.rows.map((r) => `<tr><td>${esc(r.sno || "")}</td><td>${esc(r.description.slice(0, 110))}</td><td class="num">${q3(r.qty)} ${esc(r.unit || "")}</td><td class="small">${esc(r.basis)}</td>${["cement", "sand", "agg", "steel", "bricks"].map((k) => `<td class="num">${r[k] ? round(r[k], k === "sand" || k === "agg" ? 2 : 0) : ""}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>` : ""}</div>`);
     state.detailsGot = bindDocPicker(body);
   }
   if (state.tab === "docs") await rerenderDocs(body);
 }
 async function rerenderDocs(body) {
   // docsPanel binds to the element it was made with; make a fresh one per render of this tab.
-  state.docs = docsPanel(body, { owner: site().id, title: `Documents · ${site().name.slice(0, 60)}`, folders: () => site()?.folders || SITE_FOLDERS,
+  state.docs = docsPanel(body, { owner: site().id, title: `Documents · ${site().name.slice(0, 60)}`, folders: () => [...new Set([...(site()?.folders || []), ...SITE_FOLDERS])],
     saveFolders: (list) => { const x = site(); x.folders = list; saveSite(x); }, targets: () => [{ id: "company", name: "Company profile" }, ...state.sites.map((x) => ({ id: x.id, name: x.name.slice(0, 60) }))], ctx });
   await state.docs();
 }
 
+// Amounts worked out in the diary tables.
+const timeDiff = (a, b) => { if (!a || !b) return null; const [h1, m1] = a.split(":").map(Number), [h2, m2] = b.split(":").map(Number); let m = h2 * 60 + m2 - (h1 * 60 + m1); if (m < 0) m += 1440; return round(m / 60, 2); };
+const CALC = {
+  labour: (r) => round(num(r.count) * num(r.rate), 2),
+  machinery: (r) => { const n = num(r.count) || 1; return round(r.basis === "hour" ? num(r.hours) * num(r.rate) * n : num(r.rate) * n, 2); },
+};
+const inr = (v) => (num(v) ? "₹" + num(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "");
+const listTotal = (key, rows) => round((rows || []).reduce((a, r) => a + CALC[key](r), 0), 2);
+
+/** cols: [key, label, type, datalist] with type "" | "number" | "time" | "sel:value=Label|…" | "calc" */
 const rowTable = (key, cols, rows, addLabel, quick = "") => `<div class="table-wrap"><table class="data diary-tab" data-list="${key}"><thead><tr>${cols.map((c) => `<th>${c[1]}</th>`).join("")}<th></th></tr></thead>
-  <tbody>${rows.map((r, i) => `<tr data-i="${i}">${cols.map(([k, , t, list]) => `<td><input data-k="${k}" ${t === "number" ? 'type="number" step="any" class="num w90"' : ""} ${list ? `list="${list}"` : ""} value="${esc(r[k] ?? "")}"></td>`).join("")}<td><button class="icon danger-text" data-delrow>×</button></td></tr>`).join("")}</tbody></table></div>
+  <tbody>${rows.map((r, i) => `<tr data-i="${i}">${cols.map(([k, , t = "", list]) => {
+    if (t === "calc") return `<td class="num calc" data-calc>${inr(CALC[key](r))}</td>`;
+    if (t.startsWith("sel:")) return `<td><select data-k="${k}">${t.slice(4).split("|").map((o) => { const [v, l] = o.split("="); return `<option value="${v}" ${(r[k] || t.slice(4).split("|")[0].split("=")[0]) === v ? "selected" : ""}>${l || v}</option>`; }).join("")}</select></td>`;
+    return `<td><input data-k="${k}" ${t === "number" ? 'type="number" step="any" class="num w90"' : t === "time" ? 'type="time" class="w100"' : ""} ${list ? `list="${list}"` : ""} value="${esc(r[k] ?? "")}"></td>`;
+  }).join("")}<td><button class="icon danger-text" data-delrow>×</button></td></tr>`).join("")}</tbody></table></div>
   <div class="row gap wrap"><button class="ghost small" data-addrow="${key}">＋ ${addLabel}</button>${quick}</div>`;
 
 async function todayView() {
-  const day = state.date, d = entry(day) || { labour: [], work: [], materials: [], machinery: [] };
+  const day = state.date, d = entry(day) || { labour: [], work: [], materials: [], machinery: [], consumed: [] };
   const photos = await photosOf(state.siteId, day, day);
   const boqWork = (site().boqItems || []).map((i) => i.description.replace(/\s+/g, " ").slice(0, 120));
   const prevWork = [...new Set([...[...state.diary.values()].filter((x) => x.siteId === state.siteId).flatMap((x) => x.work.map((w) => w.desc)).filter(Boolean), ...boqWork])];
@@ -195,12 +222,16 @@ async function todayView() {
       <label class="field">Working hours<input data-f="hours" value="${esc(d.hours || "")}" placeholder="9:00 am – 6:00 pm"></label></div></div>
     <datalist id="dlLabour">${LABOUR.map((x) => `<option>${x}</option>`).join("")}</datalist><datalist id="dlUnit">${UNITS.map((x) => `<option>${x}</option>`).join("")}</datalist><datalist id="dlWork">${prevWork.map((x) => `<option>${esc(x)}</option>`).join("")}</datalist>
     <div class="grid-2">
-      <div class="card"><h3>Labour on site <span class="muted">(${labourTotal})</span></h3>${rowTable("labour", [["type", "Category", "", "dlLabour"], ["count", "Nos", "number"], ["agency", "Contractor / agency"]], d.labour, "Labour",
+      <div class="card"><h3>Labour on site <span class="muted" data-tot="labour">(${labourTotal} · ${inr(listTotal("labour", d.labour)) || "₹0"})</span></h3>
+        <p class="muted small">One line per group, e.g. 4 labour at ₹700 and 6 at ₹900 from the chowk.</p>${rowTable("labour", [["type", "Category", "", "dlLabour"], ["count", "Nos", "number"], ["rate", "Rate / day ₹", "number"], ["agency", "From (chowk / contractor)"], ["amt", "Amount", "calc"]], d.labour, "Labour",
         LABOUR.slice(0, 5).map((x) => `<button class="chip" data-quick="${x}">${x}</button>`).join(""))}</div>
-      <div class="card"><h3>Machinery / equipment</h3>${rowTable("machinery", [["name", "Machine"], ["count", "Nos", "number"], ["hours", "Hours", "number"]], d.machinery, "Machine")}</div>
+      <div class="card"><h3>Machinery / equipment <span class="muted" data-tot="machinery">(${inr(listTotal("machinery", d.machinery)) || "₹0"})</span></h3>
+        <p class="muted small">Rent per hour (start and end time give the hours), per day or per trip.</p>${rowTable("machinery", [["name", "Machine", "", "dlMach"], ["count", "Nos / trips", "number"], ["basis", "Rent per", "sel:hour=Hour|day=Day|trip=Trip"], ["rate", "Rate ₹", "number"], ["start", "Start", "time"], ["end", "End", "time"], ["hours", "Hours", "number"], ["amt", "Amount", "calc"]], d.machinery, "Machine")}</div>
     </div>
     <div class="card"><h3>Work done today</h3>${rowTable("work", [["desc", "Item of work", "", "dlWork"], ["loc", "Location / chainage"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"]], d.work, "Work item")}</div>
-    <div class="card"><h3>Materials received</h3>${rowTable("materials", [["name", "Material"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["supplier", "Supplier"], ["challan", "Challan No."]], d.materials, "Material")}</div>
+    <datalist id="dlMat">${MAT_NAMES.map((x) => `<option>${x}</option>`).join("")}</datalist><datalist id="dlMach">${MACHINES.map((x) => `<option>${x}</option>`).join("")}</datalist>
+    <div class="card"><h3>Materials received</h3>${rowTable("materials", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["supplier", "Supplier"], ["challan", "Challan No."]], d.materials, "Material")}</div>
+    <div class="card"><h3>Materials consumed today</h3>${rowTable("consumed", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["usedFor", "Used for (item / location)", "", "dlWork"]], d.consumed || [], "Material used")}</div>
     <div class="grid-3">
       <label class="field card">Hindrances / problems<textarea data-f="hindrance" rows="3">${esc(d.hindrance || "")}</textarea></label>
       <label class="field card">Instructions / visitors<textarea data-f="visitors" rows="3">${esc(d.visitors || "")}</textarea></label>
@@ -237,7 +268,7 @@ function stampSettings() { try { return { loc: true, addr: true, time: true, sit
 const cameraControls = (st) => `<div class="cam">
   <label class="field">Save to site<select id="camSite">${state.sites.map((s) => `<option value="${s.id}" ${s.id === state.siteId ? "selected" : ""}>${esc(s.name.slice(0, 70))}</option>`).join("")}</select></label>
   <label class="field">What is this photo about? (printed on the photo and in reports)<input id="camCap" placeholder="e.g. PCC in drain Ch. 120–150 m"></label>
-  <fieldset class="stamp-opts"><legend>Stamp on the photo</legend>
+  <fieldset class="stamp-opts"><legend>Stamp on the photo (default; can be changed when printing or downloading)</legend>
     <label><input type="checkbox" data-st="loc" ${st.loc ? "checked" : ""}> GPS location (lat / long)</label>
     <label><input type="checkbox" data-st="addr" ${st.addr ? "checked" : ""}> Address (needs internet)</label>
     <label><input type="checkbox" data-st="time" ${st.time ? "checked" : ""}> Date &amp; time</label>
@@ -257,17 +288,17 @@ async function takePhotos(files, fromCamera, scope) {
   const caption = $("#camCap", scope)?.value.trim() || "";
   const status = (t) => { const el = $("#camStatus", scope); if (el) el.textContent = t; };
   let here = null;
-  if (st.loc && fromCamera) { status("Getting GPS location…"); here = await getPosition(); if (!here) ctx.toast("Location not available: allow location for this site in the browser settings. The photo is saved without it.", 6000); }
+  if (fromCamera) { status("Getting GPS location…"); here = await getPosition(); if (!here && st.loc) ctx.toast("Location not available: allow location for this site in the browser settings. The photo is saved without it.", 6000); }
   let n = 0;
   for (const file of files) {
     status(`Saving photo ${++n} of ${files.length}…`);
     const ex = await readExif(file);
     const date = fromCamera ? new Date().toISOString() : ex.date || new Date(file.lastModified || Date.now()).toISOString();
-    const gps = st.loc ? (fromCamera ? here : ex.gps || null) : null;
-    const addr = st.addr && gps ? await reverseGeocode(gps.lat, gps.lon) : "";
-    const lines = [st.site && s ? `${s.name.slice(0, 90)}${s.workOrderNo ? ` · W.O. ${s.workOrderNo}` : ""}` : "", caption, addr, gps ? fmtLatLon(gps) : "", st.time ? fmtDateTime(date) : ""];
-    const blob = await stampPhoto(file, lines);
-    await saveFile(new File([blob], `photo_${isoDay(date)}_${n}.jpg`, { type: "image/jpeg" }), { owner: siteId, kind: "photo", date, caption, gps: gps ? { ...gps, address: addr } : null, thumb: await thumbOf(blob) });
+    const gps = fromCamera ? here : ex.gps || null;
+    const addr = gps ? await reverseGeocode(gps.lat, gps.lon) : "";
+    // The photo is kept clean with its details; the stamp is drawn when it is printed or downloaded, as chosen then.
+    const blob = await stampPhoto(file, [], 2400);
+    await saveFile(new File([blob], `photo_${isoDay(date)}_${n}.jpg`, { type: "image/jpeg" }), { owner: siteId, kind: "photo", date, caption, gps: gps ? { ...gps, address: addr } : null, thumb: await thumbOf(blob), extra: { stamped: false } });
   }
   status("");
   ctx.toast(`${files.length} photo(s) saved to ${s?.name.slice(0, 40) || "the site"}${isoDay(new Date().toISOString()) === today() ? " (in today's DPR)" : ""}.`);
@@ -301,7 +332,7 @@ async function onClick(e) {
     await idb.del("sites", s.id); state.sites = state.sites.filter((x) => x !== s);
     switchSite(state.sites[0]?.id || null); ctx.refreshHeader(); return;
   }
-  if (t.closest("[data-addrow]")) { const d = entry(state.date, true); d[t.closest("[data-addrow]").dataset.addrow].push({}); saveEntry(d); return renderSites(); }
+  if (t.closest("[data-addrow]")) { const d = entry(state.date, true); const k = t.closest("[data-addrow]").dataset.addrow; (d[k] ||= []).push(k === "machinery" ? { basis: "hour" } : {}); saveEntry(d); return renderSites(); }
   if (t.closest("[data-quick]")) { const d = entry(state.date, true); d.labour.push({ type: t.closest("[data-quick]").dataset.quick, count: "" }); saveEntry(d); return renderSites(); }
   if (t.matches("[data-delrow]")) { const d = entry(state.date, true); d[t.closest("[data-list]").dataset.list].splice(+t.closest("tr").dataset.i, 1); saveEntry(d); return renderSites(); }
   if (act === "copyPrev") {
@@ -312,8 +343,7 @@ async function onClick(e) {
   if (act === "printDpr") return printReport("DPR", state.date, state.date);
   if (t.matches("[data-view]")) { const f = (await allFiles()).find((x) => x.id === t.closest("[data-pid]").dataset.pid); if (f) viewPhoto(f); return; }
   if (act === "selAll") { if (state.photoSel.size) state.photoSel.clear(); else (await shownPhotos()).forEach((p) => state.photoSel.add(p.id)); return renderSites(); }
-  if (act === "printPhotos") { const ps = await chosenPhotos(); if (!ps.length) { ctx.toast("No photos to print."); return; } return printNow(photoSheets(ps, site())); }
-  if (act === "zipPhotos") { const ps = await chosenPhotos(); ctx.download(await makeZip(ps.map((p, i) => ({ name: `${isoDay(p.date)}_${String(i + 1).padStart(3, "0")}${p.caption ? "_" + safeName(p.caption).slice(0, 40) : ""}.jpg`, data: p.blob }))), `${safeName(site().name).slice(0, 40)}_photos.zip`); return; }
+  if (act === "printPhotos" || act === "zipPhotos") { const ps = await chosenPhotos(); if (!ps.length) { ctx.toast("No photos."); return; } return photoExportDialog(ps, act === "printPhotos" ? "print" : "zip"); }
   if (act === "delPhotos") { if (!confirm(`Delete ${state.photoSel.size} photo(s)?`)) return; for (const id of state.photoSel) await delFile(id); state.photoSel.clear(); return renderSites(); }
   if (act === "movePhotos") {
     ctx.modal(`<h2>Move ${state.photoSel.size} photo(s) to</h2><select id="mvSite">${state.sites.map((s) => `<option value="${s.id}">${esc(s.name.slice(0, 80))}</option>`).join("")}</select><button class="primary mt" id="mvGo">Move</button>`, (m) => {
@@ -339,12 +369,22 @@ function onChange(e) {
   if (t.matches("[data-pf]")) { state.filter[t.dataset.pf] = t.value; return renderSites(); }
   if (t.id === "rpKind") { const [a, b] = defaultPeriod(t.value); $("#rpFrom").value = a; $("#rpTo").value = b; }
   if (t.matches("[data-f]")) { const d = entry(state.date, true); d[t.dataset.f] = t.value; saveEntry(d); }
+  if (t.matches("[data-list] select[data-k]")) { const d = entry(state.date, true); const r = d[t.closest("[data-list]").dataset.list][+t.closest("tr").dataset.i]; r[t.dataset.k] = t.value; updateRow(t, r); saveEntry(d); }
+}
+/** Hours from start/end, the row amount and the card total, updated while typing. */
+function updateRow(t, r) {
+  const key = t.closest("[data-list]").dataset.list, tr = t.closest("tr");
+  if (key === "machinery" && (t.dataset.k === "start" || t.dataset.k === "end")) { const h = timeDiff(r.start, r.end); if (h != null) { r.hours = h; const hi = $('[data-k="hours"]', tr); if (hi) hi.value = h; } }
+  if (!CALC[key]) return;
+  const c = $("[data-calc]", tr); if (c) c.textContent = inr(CALC[key](r));
+  const d = entry(state.date, true), tot = $(`[data-tot="${key}"]`);
+  if (tot) tot.textContent = key === "labour" ? `(${d.labour.reduce((a, l) => a + num(l.count), 0)} · ${inr(listTotal("labour", d.labour)) || "₹0"})` : `(${inr(listTotal(key, d[key])) || "₹0"})`;
 }
 function onInput(e) {
   const t = e.target;
   if (t.matches("[data-list] input[data-k]")) {
     const d = entry(state.date, true); const list = d[t.closest("[data-list]").dataset.list]; const i = +t.closest("tr").dataset.i;
-    list[i][t.dataset.k] = t.type === "number" ? t.value : t.value; saveEntry(d);
+    list[i][t.dataset.k] = t.value; updateRow(t, list[i]); saveEntry(d);
   }
   if (t.matches("textarea[data-f], input[data-f]")) { const d = entry(state.date, true); d[t.dataset.f] = t.value; saveEntry(d); }
 }
@@ -360,8 +400,8 @@ document.addEventListener("change", (e) => {
   if (t.matches("[data-st]")) { const st = stampSettings(); st[t.dataset.st] = t.checked; localStorage.setItem("site.stamp", JSON.stringify(st)); }
 });
 
-function viewPhoto(f) {
-  const url = URL.createObjectURL(f.blob);
+async function viewPhoto(f) {
+  const url = URL.createObjectURL(await stamped(f, site(), exportSettings()));
   ctx.modal(`<h2>${esc(f.caption || "Photo")}</h2><img src="${url}" style="max-width:100%;border-radius:8px">
     <p class="small muted">${fmtDateTime(f.date)}${f.gps ? ` · ${fmtLatLon(f.gps)}${f.gps.address ? ` · ${esc(f.gps.address)}` : ""} · <a href="https://www.google.com/maps?q=${f.gps.lat},${f.gps.lon}" target="_blank" rel="noopener">Open in map</a>` : ""}</p>
     <a class="ghost btn" href="${url}" download="${esc(f.name)}">Download</a>`);
@@ -394,12 +434,35 @@ function aggregate(siteId, from, to) {
   const E = entriesOf(siteId, from, to);
   const sum = (list, keyf, valf) => { const m = new Map(); for (const x of list) { const k = keyf(x); if (!k) continue; m.set(k, round((m.get(k) || 0) + num(valf(x)), 3)); } return m; };
   const labour = sum(E.flatMap((d) => d.labour), (l) => (l.type || "").trim(), (l) => l.count);
+  const labourAmt = sum(E.flatMap((d) => d.labour), (l) => (l.type || "").trim(), (l) => CALC.labour(l));
   const work = sum(E.flatMap((d) => d.work), (w) => `${(w.desc || "").trim()}|${(w.unit || "").trim()}`, (w) => w.qty);
   const upto = sum(entriesOf(siteId, "", to).flatMap((d) => d.work), (w) => `${(w.desc || "").trim()}|${(w.unit || "").trim()}`, (w) => w.qty);
   const materials = sum(E.flatMap((d) => d.materials), (m) => `${(m.name || "").trim()}|${(m.unit || "").trim()}`, (m) => m.qty);
-  const machinery = sum(E.flatMap((d) => d.machinery || []), (m) => (m.name || "").trim(), (m) => m.hours);
-  return { E, labour, work, upto, materials, machinery };
+  const consumed = sum(E.flatMap((d) => d.consumed || []), (m) => `${(m.name || "").trim()}|${(m.unit || "").trim()}`, (m) => m.qty);
+  const machHours = sum(E.flatMap((d) => d.machinery || []), (m) => (m.name || "").trim(), (m) => (m.basis === "hour" || !m.basis ? m.hours : 0));
+  const machAmt = sum(E.flatMap((d) => d.machinery || []), (m) => (m.name || "").trim(), (m) => CALC.machinery(m));
+  return { E, labour, labourAmt, work, upto, materials, consumed, machHours, machAmt };
 }
+
+/** Quantity in the unit used for the estimate (bags of cement, cum of sand and aggregate, kg of steel, nos of bricks). */
+function inMatUnit(key, qty, unit) {
+  const u = String(unit || "").toLowerCase().replace(/[\s.]/g, ""), q = num(qty);
+  if (key === "cement") return /mt|ton/.test(u) ? q * 20 : /kg/.test(u) ? q / 50 : q;
+  if (key === "steel") return /mt|ton/.test(u) ? q * 1000 : /qtl|quintal/.test(u) ? q * 100 : q;
+  if (key === "sand" || key === "agg") return /cft|cuft/.test(u) ? q / 35.315 : /mt|ton/.test(u) ? q / 1.6 : q;
+  if (key === "bricks") return /thousand|1000/.test(u) ? q * 1000 : q;
+  return q;
+}
+/** Estimated (from the BOQ), received, consumed and balance for each main material, up to a date. */
+function materialStatus(s, upto = "") {
+  const est = s.boqItems?.length ? estimateMaterials(s.boqItems) : { totals: {}, rows: [], skipped: 0 };
+  const E = entriesOf(s.id, "", upto);
+  const tally = (list) => { const t = {}; for (const m of list) { const k = matOf(m.name); if (k) t[k] = round((t[k] || 0) + inMatUnit(k, m.qty, m.unit), 3); } return t; };
+  const rec = tally(E.flatMap((d) => d.materials || [])), con = tally(E.flatMap((d) => d.consumed || []));
+  const rows = MATS.map((m) => ({ ...m, est: num(est.totals[m.key]), rec: num(rec[m.key]), con: num(con[m.key]) })).filter((r) => r.est || r.rec || r.con);
+  return { rows, est };
+}
+const matTable = (st, html = true) => st.rows.map((r) => [r.label, r.unit, r.est ? round(r.est, r.unit === "cum" ? 2 : 0) : "-", round(r.rec, 2), round(r.con, 2), round(r.rec - r.con, 2), r.est ? round(Math.max(0, r.est - r.rec), r.unit === "cum" ? 2 : 0) : "-"]);
 
 async function printReport(kind, from, to, photoOpt = "8") {
   const s = site(); const co = ctx.company() || {};
@@ -407,11 +470,18 @@ async function printReport(kind, from, to, photoOpt = "8") {
   const one = from === to, d = one ? A.E[0] : null;
   let photos = photoOpt === "0" ? [] : await photosOf(s.id, from, to);
   if (photoOpt !== "all" && photoOpt !== "0") photos = pickSpread(photos, +photoOpt || 8);
-  const tbl = (head, rows, empty = "Nil") => rows.length ? `<table class="r-tab"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td class="${i && typeof c === "number" ? "r" : ""}">${typeof c === "number" ? q3(c) : c}</td>`).join("")}</tr>`).join("")}</tbody></table>` : `<p>${empty}</p>`;
-  const labourRows = one ? (d?.labour || []).filter((l) => l.type || num(l.count)).map((l) => [esc(l.type || ""), num(l.count), esc(l.agency || "")]) : [...A.labour].map(([k, v]) => [esc(k), v, round(v / Math.max(1, A.E.length), 1)]);
+  const cell = (c) => (typeof c === "number" ? q3(c) : c);
+  const tbl = (head, rows, empty = "Nil") => rows.length ? `<table class="r-tab"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td class="${i && (typeof c === "number" || /^₹/.test(c)) ? "r" : ""}">${cell(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>` : `<p>${empty}</p>`;
+  const labourRows = one ? (d?.labour || []).filter((l) => l.type || num(l.count)).map((l) => [esc(l.type || ""), num(l.count), num(l.rate) ? inr(l.rate) : "", esc(l.agency || ""), inr(CALC.labour(l))])
+    : [...A.labour].map(([k, v]) => [esc(k), v, round(v / Math.max(1, A.E.length), 1), inr(A.labourAmt.get(k))]);
+  const labourCost = one ? listTotal("labour", d?.labour) : round([...A.labourAmt.values()].reduce((a, v) => a + v, 0), 2);
   const workRows = [...A.work].map(([k, v]) => { const [desc, unit] = k.split("|"); const locs = one ? (d.work.filter((w) => (w.desc || "").trim() === desc).map((w) => w.loc).filter(Boolean).join(", ")) : ""; return [esc(desc) + (locs ? `<br><small>${esc(locs)}</small>` : ""), esc(unit), v, A.upto.get(k) || v]; });
   const matRows = one ? (d?.materials || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.supplier || ""), esc(m.challan || "")]) : [...A.materials].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
-  const machRows = one ? (d?.machinery || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.count), num(m.hours)]) : [...A.machinery].map(([k, v]) => [esc(k), v]);
+  const conRows = one ? (d?.consumed || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.usedFor || "")]) : [...A.consumed].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
+  const machRows = one ? (d?.machinery || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.count) || 1, `${inr(m.rate)} / ${m.basis || "hour"}`, m.start && m.end ? `${m.start}–${m.end}` : "", num(m.hours) || "", inr(CALC.machinery(m))])
+    : [...A.machAmt].map(([k, v]) => [esc(k), A.machHours.get(k) || "", inr(v)]);
+  const machCost = one ? listTotal("machinery", d?.machinery) : round([...A.machAmt.values()].reduce((a, v) => a + v, 0), 2);
+  const ms = materialStatus(s, to);
   const notes = A.E.filter((x) => x.hindrance || x.remarks || x.visitors);
   const head = `<div class="r-co">${esc((co.name || "").toUpperCase())}${co.address ? `<small>${esc(co.address)}</small>` : ""}</div>
     <div class="r-title">${TITLES[kind] || TITLES.PR}</div>
@@ -420,18 +490,21 @@ async function printReport(kind, from, to, photoOpt = "8") {
       ${s.client ? `<tr><td>Department / client</td><td>: ${esc(s.client)}</td></tr>` : ""}${s.location ? `<tr><td>Location</td><td>: ${esc(s.location)}</td></tr>` : ""}
       <tr><td>${one ? "Date" : "Period"}</td><td>: ${one ? `${fd(from)} (${new Date(from + "T12:00").toLocaleDateString("en-IN", { weekday: "long" })})` : `${fd(from)} to ${fd(to)} (${A.E.length} working day${A.E.length === 1 ? "" : "s"} entered)`}</td></tr>
       ${one && d ? `<tr><td>Weather / hours</td><td>: ${esc(d.weather || "-")}${d.hours ? ` · ${esc(d.hours)}` : ""}</td></tr>` : ""}</table>`;
-  const daily = !one && A.E.length ? `<h4>Day-wise summary</h4>${tbl(["Date", "Labour", "Main work done"], A.E.map((x) => [fd(x.date), x.labour.reduce((a, l) => a + num(l.count), 0), esc(x.work.filter((w) => w.desc).map((w) => `${w.desc}${num(w.qty) ? ` ${q3(w.qty)} ${w.unit || ""}` : ""}`).join("; ") || "-")]))}` : "";
+  const daily = !one && A.E.length ? `<h4>Day-wise summary</h4>${tbl(["Date", "Labour", "Labour ₹", "Machinery ₹", "Main work done"], A.E.map((x) => [fd(x.date), x.labour.reduce((a, l) => a + num(l.count), 0), inr(listTotal("labour", x.labour)), inr(listTotal("machinery", x.machinery)), esc(x.work.filter((w) => w.desc).map((w) => `${w.desc}${num(w.qty) ? ` ${q3(w.qty)} ${w.unit || ""}` : ""}`).join("; ") || "-")]))}` : "";
   const html = `<section class="p-page r-page">${head}
-    <h4>1. Labour ${one ? "on site" : "(man-days)"}</h4>${tbl(one ? ["Category", "Nos", "Contractor / agency"] : ["Category", "Man-days", "Average per day"], labourRows)}
-    ${labourRows.length ? `<p class="r-tot">Total: ${q3(labourRows.reduce((a, r) => a + num(r[1]), 0))}</p>` : ""}
+    <h4>1. Labour ${one ? "on site" : "(man-days)"}</h4>${tbl(one ? ["Category", "Nos", "Rate / day", "From", "Amount"] : ["Category", "Man-days", "Average per day", "Amount"], labourRows)}
+    ${labourRows.length ? `<p class="r-tot">Total: ${q3(labourRows.reduce((a, r) => a + num(r[1]), 0))} ${one ? "nos" : "man-days"}${labourCost ? ` · ${inr(labourCost)}` : ""}</p>` : ""}
     <h4>2. Work done</h4>${tbl(["Item of work", "Unit", one ? "Today" : "This period", "Up to date"], workRows)}
     <h4>3. Materials received</h4>${tbl(one ? ["Material", "Qty", "Unit", "Supplier", "Challan"] : ["Material", "Qty", "Unit"], matRows)}
-    <h4>4. Machinery / equipment</h4>${tbl(one ? ["Machine", "Nos", "Hours"] : ["Machine", "Hours"], machRows)}
-    <h4>5. Hindrances, instructions and remarks</h4>${notes.length ? notes.map((x) => `<p>${one ? "" : `<b>${fd(x.date)}:</b> `}${[x.hindrance && `Hindrance: ${esc(x.hindrance)}`, x.visitors && `Instructions / visitors: ${esc(x.visitors)}`, x.remarks && `Remarks: ${esc(x.remarks)}`].filter(Boolean).join(" · ")}</p>`).join("") : "<p>Nil</p>"}
+    <h4>4. Materials consumed</h4>${tbl(one ? ["Material", "Qty", "Unit", "Used for"] : ["Material", "Qty", "Unit"], conRows)}
+    <h4>5. Machinery / equipment</h4>${tbl(one ? ["Machine", "Nos", "Rent", "Time", "Hours", "Amount"] : ["Machine", "Hours", "Amount"], machRows)}
+    ${machCost ? `<p class="r-tot">Machinery: ${inr(machCost)}</p>` : ""}
+    ${ms.rows.length ? `<h4>6. Material account up to ${fd(to)}</h4>${tbl(["Material", "Unit", "Required as per BOQ (approx.)", "Received", "Consumed", "Balance at site", "Still to come"], matTable(ms))}` : ""}
+    <h4>${ms.rows.length ? 7 : 6}. Hindrances, instructions and remarks</h4>${notes.length ? notes.map((x) => `<p>${one ? "" : `<b>${fd(x.date)}:</b> `}${[x.hindrance && `Hindrance: ${esc(x.hindrance)}`, x.visitors && `Instructions / visitors: ${esc(x.visitors)}`, x.remarks && `Remarks: ${esc(x.remarks)}`].filter(Boolean).join(" · ")}</p>`).join("") : "<p>Nil</p>"}
     ${daily}
     ${photos.length ? `<p class="r-note">Site photographs: ${photos.length} (attached sheets).</p>` : ""}
     <div class="r-signs"><div>Site Engineer / Supervisor<br>${esc(s.engineer || "")}</div><div>Contractor<br>${esc(co.name || "")}</div><div>Checked by (JEN / AEN)</div></div></section>`;
-  printNow(html + (photos.length ? photoSheets(photos, s) : ""));
+  printNow(html + (photos.length ? await photoSheets(photos, s, exportSettings()) : ""));
 }
 function pickSpread(list, n) { if (list.length <= n) return list; const out = []; for (let i = 0; i < n; i++) out.push(list[Math.floor((i * list.length) / n)]); return out; }
 
@@ -440,11 +513,48 @@ function reportExcel(kind, from, to) {
   const wb = X.utils.book_new();
   const head = [[TITLES[kind] || TITLES.PR], [`Name of work: ${s.name}`], [`Work order: ${s.workOrderNo || ""} ${s.woDate ? fd(s.woDate) : ""}`], [`Period: ${fd(from)} to ${fd(to)}`], []];
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([...head, ["Item of work", "Unit", "This period", "Up to date"], ...[...A.work].map(([k, v]) => { const [d, u] = k.split("|"); return [d, u, v, A.upto.get(k) || v]; })]), "Work done");
-  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([...head, ["Category", "Man-days"], ...[...A.labour]]), "Labour");
-  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([...head, ["Material", "Unit", "Qty"], ...[...A.materials].map(([k, v]) => { const [n, u] = k.split("|"); return [n, u, v]; })]), "Materials");
-  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([...head, ["Date", "Weather", "Labour", "Work done", "Materials", "Hindrance", "Remarks"],
-    ...A.E.map((d) => [fd(d.date), d.weather, d.labour.reduce((a, l) => a + num(l.count), 0), d.work.map((w) => `${w.desc} ${w.qty || ""} ${w.unit || ""}`).join("; "), d.materials.map((m) => `${m.name} ${m.qty || ""} ${m.unit || ""}`).join("; "), d.hindrance, d.remarks])]), "Daily");
+  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([...head, ["Category", "Man-days", "Amount"], ...[...A.labour].map(([k, v]) => [k, v, A.labourAmt.get(k) || 0])]), "Labour");
+  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([...head, ["Machine", "Hours", "Amount"], ...[...A.machAmt].map(([k, v]) => [k, A.machHours.get(k) || 0, v])]), "Machinery");
+  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([...head, ["Material", "Unit", "Received", ""], ...[...A.materials].map(([k, v]) => { const [n, u] = k.split("|"); return [n, u, v]; }), [], ["Material", "Unit", "Consumed"], ...[...A.consumed].map(([k, v]) => { const [n, u] = k.split("|"); return [n, u, v]; })]), "Materials");
+  const ms = materialStatus(s, to);
+  if (ms.rows.length) X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([...head, ["Material", "Unit", "Required as per BOQ (approx.)", "Received", "Consumed", "Balance at site", "Still to come"], ...matTable(ms)]), "Material account");
+  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([...head, ["Date", "Weather", "Labour", "Labour ₹", "Machinery ₹", "Work done", "Received", "Consumed", "Hindrance", "Remarks"],
+    ...A.E.map((d) => [fd(d.date), d.weather, d.labour.reduce((a, l) => a + num(l.count), 0), listTotal("labour", d.labour), listTotal("machinery", d.machinery), d.work.map((w) => `${w.desc} ${w.qty || ""} ${w.unit || ""}`).join("; "), d.materials.map((m) => `${m.name} ${m.qty || ""} ${m.unit || ""}`).join("; "), (d.consumed || []).map((m) => `${m.name} ${m.qty || ""} ${m.unit || ""}`).join("; "), d.hindrance, d.remarks])]), "Daily");
   X.writeFile(wb, `${kind}_${safeName(s.name).slice(0, 40)}_${from}_${to}.xlsx`);
+}
+
+// ---------------------------------------------------------------------------
+// Photo stamps, chosen when printing or exporting
+// ---------------------------------------------------------------------------
+
+const EXPORT_OPTS = [["site", "Work name & W.O. No."], ["caption", "What the photo is about"], ["loc", "GPS location (lat / long)"], ["addr", "Address"], ["time", "Date & time"]];
+function exportSettings() { const st = stampSettings(); try { return { site: st.site, caption: true, loc: st.loc, addr: st.addr, time: st.time, under: true, ...JSON.parse(localStorage.getItem("site.export") || "{}") }; } catch { return { ...st, caption: true, under: true }; } }
+/** The photo with the chosen stamp burned in (photos taken before this option already carry their stamp). */
+async function stamped(p, s, o, max = 1800) {
+  if (p.stamped !== false) return p.blob;
+  const lines = [o.site && s ? `${s.name.slice(0, 90)}${s.workOrderNo ? ` · W.O. ${s.workOrderNo}` : ""}` : "", o.caption ? p.caption : "", o.addr ? p.gps?.address : "", o.loc && p.gps ? fmtLatLon(p.gps) : "", o.time ? fmtDateTime(p.date) : ""];
+  return stampPhoto(p.blob, lines, max);
+}
+function photoExportDialog(photos, mode) {
+  const o = exportSettings();
+  ctx.modal(`<h2>${mode === "print" ? "Print photo sheets" : "Download photos"} (${photos.length})</h2>
+    <fieldset class="stamp-opts"><legend>GPS stamp on the photo</legend>${EXPORT_OPTS.map(([k, l]) => `<label><input type="checkbox" data-eo="${k}" ${o[k] ? "checked" : ""}> ${l}</label>`).join("")}
+      <small class="muted">Untick everything for plain photos.</small></fieldset>
+    ${mode === "print" ? `<label class="check mt"><input type="checkbox" data-eo="under" ${o.under ? "checked" : ""}> Caption and date under each photo</label>` : ""}
+    <p class="muted small">Photos taken before this option was added keep the stamp they were taken with.</p>
+    <button class="primary mt" id="eoGo">${mode === "print" ? "Print" : "Download ZIP"}</button>`, (m) => {
+    $("#eoGo", m).onclick = async () => {
+      const opt = Object.fromEntries($$("[data-eo]", m).map((i) => [i.dataset.eo, i.checked]));
+      localStorage.setItem("site.export", JSON.stringify({ ...o, ...opt }));
+      const s = site(); $("#eoGo", m).disabled = true; $("#eoGo", m).textContent = "Preparing…";
+      if (mode === "print") { const html = await photoSheets(photos, s, { ...o, ...opt }); ctx.closeModal(); printNow(html); }
+      else {
+        const files = [];
+        for (const [i, p] of photos.entries()) files.push({ name: `${isoDay(p.date)}_${String(i + 1).padStart(3, "0")}${p.caption ? "_" + safeName(p.caption).slice(0, 40) : ""}.jpg`, data: await stamped(p, s, { ...o, ...opt }, 2400) });
+        ctx.download(await makeZip(files), `${safeName(s.name).slice(0, 40)}_photos.zip`); ctx.closeModal();
+      }
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -452,13 +562,14 @@ function reportExcel(kind, from, to) {
 // ---------------------------------------------------------------------------
 
 /** Four photos to a sheet, laid out landscape (turned on the portrait A4 page so every browser prints it the same). */
-export function photoSheets(photos, s) {
+export async function photoSheets(photos, s, o = exportSettings()) {
   const pages = []; for (let i = 0; i < photos.length; i += 4) pages.push(photos.slice(i, i + 4));
-  const urls = photos.map((p) => URL.createObjectURL(p.blob)); setTimeout(() => urls.forEach(URL.revokeObjectURL), 300000);
+  const urls = []; for (const p of photos) urls.push(URL.createObjectURL(await stamped(p, s, o, 1600)));
+  setTimeout(() => urls.forEach(URL.revokeObjectURL), 300000);
   let k = 0;
   return pages.map((ph, pi) => `<section class="p-page p-photos p-rot"><div class="p-rot-in"><header class="p-head">${s.client ? `<div class="p-org">${esc(s.client)}</div>` : ""}
       <div><b>Name of work:</b> ${esc(s.name)}</div><div><b>Work order No.:</b> ${esc(s.workOrderNo || "")} ${s.woDate ? `dated ${fd(s.woDate)}` : ""}</div></header>
-    <div class="p-photo-grid">${ph.map((x) => `<figure><img src="${urls[k++]}" alt=""><figcaption>${esc(x.caption || "")}${x.caption ? " · " : ""}${fmtDateTime(x.date).slice(0, 19)}</figcaption></figure>`).join("")}</div>
+    <div class="p-photo-grid">${ph.map((x) => `<figure><img src="${urls[k++]}" alt="">${o.under ? `<figcaption>${esc(x.caption || "")}${x.caption ? " · " : ""}${fmtDateTime(x.date).slice(0, 19)}</figcaption>` : ""}</figure>`).join("")}</div>
     <div class="p-sign"><div>JEN</div><div>AEN</div><div>XEN</div></div><div class="p-pageno">Page ${pi + 1} of ${pages.length}</div></div></section>`).join("");
 }
 function printNow(html) {
