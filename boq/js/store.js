@@ -1,36 +1,55 @@
 // Persistence (IndexedDB) and the core data model.
 
-const DB_NAME = "ratebook-boq";
-const DB_VERSION = 2;
-let dbPromise = null;
+// Two databases, so that adding the site diary never needs a version upgrade of the first one:
+// an upgrade waits for every other open copy of the app (Safari keeps old tabs alive) and can hang.
+const MAIN = { name: "ratebook-boq", stores: ["bsrs", "projects", "kv"] };
+const SITE = { name: "ratebook-site", stores: ["sites", "diary", "files", "expenses"] };
+const handles = new Map();
 
-function db() {
-  if (!dbPromise) {
-    dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
-        const d = req.result;
-        // v2: site diary, files (photos, documents, purchase bills) and accounts
-        for (const s of ["bsrs", "projects", "kv", "sites", "diary", "files", "expenses"]) {
-          if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: "id" });
-        }
-      };
+function openDb(def) {
+  if (!handles.has(def.name)) {
+    handles.set(def.name, new Promise((resolve, reject) => {
+      // No version number: open whatever version exists (version 1 is created when new).
+      const req = indexedDB.open(def.name);
+      req.onupgradeneeded = () => { for (const s of def.stores) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s, { keyPath: "id" }); };
       req.onsuccess = () => {
         const d = req.result;
-        // A newer version of the app opened in another tab: let it upgrade, then reload this one.
         d.onversionchange = () => { d.close(); location.reload(); };
-        resolve(d);
+        const missing = def.stores.filter((s) => !d.objectStoreNames.contains(s));
+        if (!missing.length) return resolve(d);
+        // Rare: the database exists without some stores. Add them with one upgrade.
+        const v = d.version + 1; d.close();
+        const up = indexedDB.open(def.name, v);
+        up.onupgradeneeded = () => { for (const s of missing) up.result.createObjectStore(s, { keyPath: "id" }); };
+        up.onsuccess = () => { up.result.onversionchange = () => { up.result.close(); location.reload(); }; resolve(up.result); };
+        up.onerror = () => reject(up.error);
+        up.onblocked = () => window.dispatchEvent(new CustomEvent("db-blocked"));
       };
       req.onerror = () => reject(req.error);
-      // An older copy of the app is still open in another tab and holds the database.
       req.onblocked = () => window.dispatchEvent(new CustomEvent("db-blocked"));
-    });
+    }).then(async (d) => { if (def === SITE) await moveFromMain(d); return d; }));
   }
-  return dbPromise;
+  return handles.get(def.name);
+}
+const db = (store) => openDb(SITE.stores.includes(store) ? SITE : MAIN);
+
+/** A test build kept the site stores inside the main database: copy them over once. */
+async function moveFromMain(siteDb) {
+  try {
+    const main = await openDb(MAIN);
+    const old = SITE.stores.filter((s) => main.objectStoreNames.contains(s));
+    if (!old.length || localStorage.getItem("site.moved")) return;
+    for (const s of old) {
+      const rows = await new Promise((r, j) => { const q = main.transaction(s).objectStore(s).getAll(); q.onsuccess = () => r(q.result); q.onerror = () => j(q.error); });
+      if (!rows.length) continue;
+      await new Promise((r, j) => { const t = siteDb.transaction(s, "readwrite"); rows.forEach((x) => t.objectStore(s).put(x)); t.oncomplete = r; t.onerror = () => j(t.error); });
+    }
+    localStorage.setItem("site.moved", "1");
+  } catch (e) { console.warn("move", e); }
 }
 
 async function tx(store, mode, fn) {
-  const d = await db();
+  const d = await db(store);
   return new Promise((resolve, reject) => {
     const t = d.transaction(store, mode);
     const s = t.objectStore(store);

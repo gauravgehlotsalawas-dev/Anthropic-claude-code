@@ -16,5 +16,7 @@ else:
 html = re.sub(r'<script type="module" src="js/app\.js(\?v=\d+)?"></script>', f'<script type="module" src="js/app.js?v={v}"></script>', html)
 html = re.sub(r'src="vendor/xlsx\.full\.min\.js(\?v=\d+)?"', f'src="vendor/xlsx.full.min.js?v={v}"', html)
 html = re.sub(r'href="styles\.css(\?v=\d+)?"', f'href="styles.css?v={v}"', html)
+html = re.sub(r'<script>window\.APP_VERSION=.*?</script>\n?', "", html)
+html = html.replace('<script id="guard">', f'<script>window.APP_VERSION="{v}";</script>\n<script id="guard">', 1)
 open(os.path.join(root, "index.html"), "w", encoding="utf-8").write(html)
 print("version", v, "modules", len(mods))
