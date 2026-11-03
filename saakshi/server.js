@@ -45,7 +45,9 @@ const DEFAULT_SETTINGS = {
   bill_pass_days: 7,            // XEN passes a running bill (quantities are already verified)
   payment_days: 15,             // payment after the bill is passed / approved
   final_approval_days: 15,      // top authority verifies the completed work and approves the final payment
-  public_board: true,           // the public works board on the home page (no names or mobile numbers)
+  public_board: true,           // public portal: every work, its updates, contractors and officers
+  public_names: true,           // names of officers and contractor firms on the public portal (never mobile numbers)
+  public_photos: true,          // site photos from contractors' work updates (never attendance selfies)
 };
 
 // ---------- database ----------
@@ -239,7 +241,8 @@ function compliance(works, week, s) {
   const end = addDays(week, 6);
   const names = userNames();
   const rows = [];
-  for (const w of works.filter((x) => x.status === 'active')) {
+  // visits are owed only while the work is running: after the work order and before completion
+  for (const w of works.filter((x) => x.status === 'active' && !(x.award_date && !x.wo_date) && !(x.completed_ts && istDay(new Date(x.completed_ts)) < week))) {
     const visits = q('SELECT * FROM visits WHERE work_id = ? AND day BETWEEN ? AND ?').all(w.id, week, end);
     for (const role of OFFICER_ROLES) {
       const uid = w[role + '_id'];
@@ -1459,6 +1462,7 @@ route('GET', '/api/public/overview', async (req, res) => {
   if (!s.public_board) return send(res, 200, { enabled: false, settings: publicSettings(s) });
   if (Date.now() - publicCache.at > 60e3) {
     const all = q('SELECT * FROM works ORDER BY id DESC').all();
+    const names = userNames();
     const flags = redFlags(all, s);
     const flagCount = {};
     for (const f of flags) if (f.severity !== 'low') flagCount[f.work_id] = (flagCount[f.work_id] || 0) + 1;
@@ -1470,6 +1474,8 @@ route('GET', '/api/public/overview', async (req, res) => {
       return {
         id: w.id, name: w.name, department: w.department || '', office: w.office || '', tia: w.tia || '', wo_no: w.wo_no || '', wo_amount: base ? Math.round(base) : null,
         lat: w.lat, lng: w.lng,
+        contractor: s.public_names ? names[w.contractor_id] || '' : '', jen: s.public_names ? names[w.jen_id] || '' : '', aen: s.public_names ? names[w.aen_id] || '' : '', xen: s.public_names ? names[w.xen_id] || '' : '',
+        last_update: q('SELECT MAX(server_ts) AS t FROM progress WHERE work_id = ?').get(w.id).t,
         stage: w.status === 'closed' ? 'closed' : w.completed_ts ? 'completed' : !w.wo_date && w.award_date ? 'awarded' : 'in_progress',
         claimed_pct: base ? Math.min(100, Math.round(claimedAmount(w.id) / base * 1000) / 10) : 0,
         verified_pct: base && la ? Math.min(100, Math.round(la.measured_amount / base * 1000) / 10) : 0,
@@ -1506,6 +1512,149 @@ function publicSettings(s) {
   const keys = ['visits_per_week', 'milestone_percent', 'milestone_max_amount', 'jen_verify_hours', 'aen_approve_hours', 'wo_issue_days', 'start_within_days', 'hindrance_response_days', 'hindrance_decision_days', 'bill_pass_days', 'payment_days', 'final_approval_days', 'sla_days'];
   return Object.fromEntries(keys.map((k) => [k, s[k]]));
 }
+
+// ---- public transparency: every work, contractor and officer, with updates ----
+// Public: names, posts, offices, firm registration, progress, site photos, measurements, bills, hindrances, delays.
+// Never public: mobile numbers, PINs/OTPs, attendance selfies and their GPS, complaints.
+const pubCache = new Map();
+function cached(key, fn) {
+  const c = pubCache.get(key);
+  if (c && Date.now() - c.at < 60e3) return c.data;
+  const data = fn();
+  pubCache.set(key, { at: Date.now(), data });
+  return data;
+}
+function publicPerson(id, s) {
+  if (!id) return null;
+  const u = q('SELECT id, name, role, office, department, reg_no, gstin, verified, pin_hash FROM users WHERE id = ?').get(id);
+  if (!u) return null;
+  return { id: u.id, name: s.public_names ? u.name : ROLE_LABEL_PUBLIC[u.role], role: u.role, office: u.office || '', department: u.department || '',
+    reg_no: u.role === 'contractor' && s.public_names ? u.reg_no || '' : '', gstin: u.role === 'contractor' && s.public_names ? u.gstin || '' : '', verified: !!u.verified, joined: !!u.pin_hash };
+}
+const ROLE_LABEL_PUBLIC = { contractor: 'ठेकेदार', jen: 'JEN', aen: 'AEN', xen: 'XEN', se: 'S.E.', hq: 'मुख्यालय', admin: 'Admin' };
+function workEvents(w, s, limit = 200) {
+  const names = userNames();
+  const nm = (id) => (s.public_names ? names[id] || '' : '');
+  const ev = [];
+  const add = (ts, kind, text, extra = {}) => ts && ev.push({ ts, kind, text, work_id: w.id, work: w.name, ...extra });
+  if (w.award_date) add(w.award_date + 'T00:00:00+05:30', 'award', 'काम अवार्ड हुआ (LoA)');
+  if (w.wo_date) add(w.wo_date + 'T00:00:01+05:30', 'wo', `वर्क ऑर्डर ${w.wo_no || ''} जारी`);
+  for (const p of q('SELECT * FROM progress WHERE work_id = ? ORDER BY id DESC LIMIT 100').all(w.id)) {
+    const lines = q('SELECT pl.qty, i.description, i.unit FROM progress_lines pl JOIN work_items i ON i.id = pl.item_id WHERE pl.progress_id = ?').all(p.id);
+    add(p.server_ts, 'progress', `ठेकेदार का अपडेट: ${lines.map((l) => `${l.description} ${l.qty} ${l.unit}`).join(', ')} (₹${Math.round(p.amount).toLocaleString('en-IN')})${p.in_fence ? '' : ' · साइट के बाहर से'}`,
+      { photos: s.public_photos ? JSON.parse(p.photos) : [], by: nm(p.user_id), role: 'contractor' });
+  }
+  for (const v of q('SELECT * FROM verifications WHERE work_id = ? ORDER BY id DESC LIMIT 50').all(w.id)) {
+    const label = { weekly: 'साप्ताहिक नाप', on_demand: 'ठेकेदार द्वारा माँगा नाप', final: 'अंतिम नाप (काम पूरा)' }[v.kind] || `${v.milestone_no * s.milestone_percent}% माइलस्टोन का नाप`;
+    add(v.created_ts, 'verification_due', `${label} देय: JEN को ${s.jen_verify_hours} घंटे में साइट पर नाप लेना है (दावा ₹${Math.round(v.claimed_amount).toLocaleString('en-IN')})`);
+    if (v.jen_ts) add(v.jen_ts, 'measured', `JEN ने साइट पर नाप लिया: ₹${Math.round(v.measured_amount).toLocaleString('en-IN')}${v.jen_late_hours ? ` (${v.jen_late_hours} घंटे देर से)` : ' (समय पर)'}`, { by: nm(v.jen_id), role: 'jen' });
+    if (v.aen_ts) add(v.aen_ts, 'approved', `AEN ने नाप अनुमोदित किया${v.aen_late_hours ? ` (${v.aen_late_hours} घंटे देर से)` : ' (समय पर)'}`, { by: nm(v.aen_id), role: 'aen' });
+  }
+  for (const b of q('SELECT * FROM bills WHERE work_id = ?').all(w.id)) {
+    const t = b.is_final ? 'अंतिम बिल' : `${b.bill_no}वाँ रनिंग बिल`;
+    add(b.created_ts, 'bill', `${t} ₹${Math.round(b.net_amount).toLocaleString('en-IN')} जमा`, { by: nm(b.created_by), role: 'contractor' });
+    if (b.passed_ts) add(b.passed_ts, 'bill_passed', `${t} XEN ने पास किया`, { by: nm(b.passed_by), role: 'xen' });
+    if (b.hq_ts) add(b.hq_ts, 'bill_hq', `${t}: मुख्यालय ने काम सत्यापित कर भुगतान अनुमोदित किया`, { by: nm(b.hq_by), role: 'hq' });
+    if (b.paid_ts) add(b.paid_ts, 'paid', `${t} का भुगतान हुआ ₹${Math.round(b.net_amount).toLocaleString('en-IN')}`);
+  }
+  for (const h of q('SELECT * FROM hindrances WHERE work_id = ?').all(w.id)) {
+    add(h.created_ts, 'hindrance', `बाधा दर्ज: ${HINDRANCE_CATEGORIES[h.category]?.label || h.category} (ज़िम्मेदार ${h.responsible_role.toUpperCase()}), ${h.from_day} से`, { role: 'contractor' });
+    if (h.responded_ts) add(h.responded_ts, 'hindrance_reply', `बाधा पर ${h.responsible_role.toUpperCase()} ने ${h.status === 'accepted' ? 'स्वीकार किया' : 'आपत्ति की'}`, { by: nm(h.responded_by) });
+    if (h.decided_ts) add(h.decided_ts, 'hindrance_decided', `बाधा पर निर्णय: ${h.status === 'accepted' ? 'स्वीकार (समय-वृद्धि)' : 'अस्वीकार'}`, { by: nm(h.decided_by) });
+  }
+  for (const v of q("SELECT * FROM visits WHERE work_id = ? AND in_fence = 1 AND contractor_status != 'disputed' ORDER BY id DESC LIMIT 60").all(w.id))
+    add(v.server_ts, 'visit', `${v.role.toUpperCase()} ने साइट विज़िट की${v.contractor_status === 'confirmed' ? ' (ठेकेदार ने पुष्टि की)' : ''}`, { by: nm(v.user_id), role: v.role });
+  for (const d of q('SELECT * FROM dprs WHERE work_id = ? ORDER BY id DESC LIMIT 60').all(w.id))
+    add(d.server_ts, 'dpr', `JEN की DPR: ${d.work_done}${d.hindrance ? ` · रुकावट: ${d.hindrance}` : ''}`, { by: nm(d.user_id), role: 'jen' });
+  if (w.completed_ts) add(w.completed_ts, 'completed', 'ठेकेदार ने काम पूरा घोषित किया');
+  return ev.sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, limit);
+}
+function personPerformance(u, s) {
+  const today = istDay();
+  const col = u.role + '_id';
+  const works = ['jen', 'aen', 'xen'].includes(u.role) ? q(`SELECT * FROM works WHERE ${col} = ?`).all(u.id) : u.role === 'contractor' ? q('SELECT * FROM works WHERE contractor_id = ?').all(u.id) : [];
+  const active = works.filter((w) => w.status === 'active' && !w.completed_ts);
+  const out = { works_total: works.length, works_active: active.length, works_value: Math.round(works.reduce((t, w) => t + (w.wo_amount || boqTotal(w.id)), 0)), works: works.map((w) => ({ id: w.id, name: w.name })) };
+  const flags = redFlags(works, s).filter((f) => f.against_id === u.id && f.severity !== 'low');
+  out.red_flags = flags.length;
+  out.red_flag_texts = flags.slice(0, 5).map((f) => ({ work: f.work, text: f.text }));
+  if (['jen', 'aen', 'xen'].includes(u.role)) {
+    // last 4 complete weeks: counted visit-days against the rule
+    let req = 0, done = 0;
+    const thisWeek = weekStart(today);
+    for (let k = 1; k <= 4; k++) {
+      const wk = addDays(thisWeek, -7 * k);
+      for (const r of compliance(active.length ? active : [], wk, s).filter((c) => c.user_id === u.id)) { req += r.required; done += Math.min(r.done, r.required); }
+    }
+    out.visits_4w = { required: req, done, pct: req ? Math.round(done / req * 100) : null };
+  }
+  if (u.role === 'jen') {
+    const m = q('SELECT created_ts, jen_ts, jen_late_hours FROM verifications WHERE jen_id = ? AND jen_ts IS NOT NULL').all(u.id);
+    out.measurements = { count: m.length, late: m.filter((x) => x.jen_late_hours > 0).length, avg_hours: m.length ? Math.round(m.reduce((t, x) => t + hoursBetween(x.created_ts, x.jen_ts), 0) / m.length) : null };
+    out.dpr_count = q('SELECT COUNT(*) AS n FROM dprs WHERE user_id = ?').get(u.id).n;
+  }
+  if (u.role === 'aen') {
+    const a = q('SELECT aen_late_hours FROM verifications WHERE aen_id = ? AND aen_ts IS NOT NULL').all(u.id);
+    out.approvals = { count: a.length, late: a.filter((x) => x.aen_late_hours > 0).length };
+  }
+  if (u.role === 'xen') out.bills_passed = q('SELECT COUNT(*) AS n FROM bills WHERE passed_by = ?').get(u.id).n;
+  if (u.role === 'contractor') {
+    const v = q(`SELECT claimed_amount, measured_amount FROM verifications WHERE work_id IN (${works.map((w) => w.id).join(',') || 0}) AND measured_amount IS NOT NULL`).all();
+    out.overclaims = v.filter((x) => x.measured_amount < x.claimed_amount * (1 - s.overclaim_tolerance_percent / 100)).length;
+    out.measurements = v.length;
+    out.completed = works.filter((w) => w.completed_ts).length;
+    out.contractor_delay_days = works.reduce((t, w) => t + (timeline(w, s).contractor_delay_days || 0), 0);
+    out.department_delay_days = works.reduce((t, w) => t + (timeline(w, s).extension_days || 0), 0);
+  }
+  return out;
+}
+const publicGuard = (s) => { if (!s.public_board) throw httpErr(404, 'जनता बोर्ड बंद है'); };
+route('GET', '/api/public/works/:id', async (req, res, { params }) => {
+  const s = getSettings(); publicGuard(s);
+  const w = q('SELECT * FROM works WHERE id = ?').get(Number(params.id));
+  if (!w) throw httpErr(404, 'काम नहीं मिला');
+  send(res, 200, cached('w' + w.id, () => {
+    const c = claimedQty(w.id);
+    const la = latestApproved(w.id);
+    const t = timeline(w, s);
+    const base = w.wo_amount || boqTotal(w.id);
+    const thisWeek = weekStart(istDay());
+    return {
+      id: w.id, name: w.name, department: w.department || '', office: w.office || '', tia: w.tia || '', wo_no: w.wo_no || '', wo_amount: base ? Math.round(base) : null, tp_percent: w.tp_percent || 0,
+      lat: w.lat, lng: w.lng, status: w.status, completed: !!w.completed_ts,
+      people: { contractor: publicPerson(w.contractor_id, s), jen: publicPerson(w.jen_id, s), aen: publicPerson(w.aen_id, s), xen: publicPerson(w.xen_id, s) },
+      items: items(w.id).map((i) => ({ code: i.code, description: i.description, unit: i.unit, qty: i.qty, rate: i.rate, claimed_qty: c[i.id] || 0, verified_qty: la ? la.qty[i.id] || 0 : 0 })),
+      claimed_amount: Math.round(claimedAmount(w.id)), verified_amount: la ? Math.round(la.v.measured_amount) : 0,
+      paid_amount: Math.round(q("SELECT COALESCE(SUM(net_amount),0) AS a FROM bills WHERE work_id = ? AND status = 'paid'").get(w.id).a),
+      timeline: { ...t, hindrances: t.hindrances.map((h) => ({ category: h.category_label, responsible_role: h.responsible_role, from_day: h.from_day, to_day: h.to_day || null, days: h.days, state: h.state })) },
+      visits_this_week: compliance([w], thisWeek, s).map((r) => ({ role: r.role, officer: s.public_names ? r.officer : r.role.toUpperCase(), required: r.required, done: r.done, last_visit: r.last_visit })),
+      red_flags: redFlags([w], s).filter((f) => f.severity !== 'low').map((f) => ({ type: f.type, severity: f.severity, against_role: f.against_role, against_name: s.public_names ? f.against_name : '', text: f.text, since: f.since })),
+      updates: workEvents(w, s, 150),
+    };
+  }));
+}, { public: true });
+route('GET', '/api/public/updates', async (req, res) => {
+  const s = getSettings(); publicGuard(s);
+  send(res, 200, cached('updates', () => q('SELECT * FROM works').all().flatMap((w) => workEvents(w, s, 30)).sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 60)));
+}, { public: true });
+route('GET', '/api/public/people', async (req, res, { query }) => {
+  const s = getSettings(); publicGuard(s);
+  const kind = query.kind === 'contractors' ? 'contractors' : 'officers';
+  send(res, 200, cached('people-' + kind, () => {
+    const roles = kind === 'contractors' ? ['contractor'] : ['xen', 'aen', 'jen', 'se'];
+    return q(`SELECT * FROM users WHERE active = 1 AND role IN (${roles.map(() => '?').join(',')}) ORDER BY role, name`).all(...roles)
+      .map((u) => ({ ...publicPerson(u.id, s), ...personPerformance(u, s) }))
+      .filter((p) => kind === 'contractors' || p.works_total > 0 || p.role === 'se');
+  }));
+}, { public: true });
+// only site photos from contractors' work updates are public; attendance selfies never are
+route('GET', '/api/public/photo/:hash', async (req, res, { params }) => {
+  const s = getSettings(); publicGuard(s);
+  if (!s.public_photos || !/^[a-f0-9]{64}$/.test(params.hash) || !q('SELECT 1 FROM progress WHERE photos LIKE ? LIMIT 1').get('%' + params.hash + '%')) throw httpErr(404, 'फ़ोटो नहीं मिली');
+  const f = photoPath(params.hash);
+  if (!f) throw httpErr(404, 'फ़ोटो नहीं मिली');
+  send(res, 200, fs.readFileSync(f), { 'Content-Type': { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }[f.split('.').pop()], 'Cache-Control': 'public, max-age=86400' });
+}, { public: true });
 
 route('GET', '/api/settings', async (req, res) => send(res, 200, getSettings()));
 route('PUT', '/api/settings', async (req, res, { user }) => {

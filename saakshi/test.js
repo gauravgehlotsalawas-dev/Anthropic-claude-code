@@ -285,12 +285,27 @@ async function main() {
   r = await anon('GET', '/api/public/overview');
   assert.equal(r.status, 200); assert.equal(r.data.enabled, true);
   assert.ok(r.data.works.length >= 3); assert.ok(r.data.stats.bills_paid >= 1);
-  const pub = JSON.stringify(r.data);
-  for (const leak of ['9000000004', '9800000001', 'JEN Sanganer', 'M/s Demo Constructions', 'M/s Ram Builders', 'mobile']) assert.ok(!pub.includes(leak), 'public data leaks ' + leak);
+  assert.ok(r.data.works.some((x) => x.contractor === 'M/s Demo Constructions' && x.jen === 'JEN Sanganer'), 'names are public');
+  // the whole public surface: names yes; mobile numbers, selfies, complaints never
+  const pubWork = (await anon('GET', '/api/public/works/' + pid)).data;
+  assert.equal(pubWork.people.contractor.name, 'M/s Ram Builders');
+  assert.ok(pubWork.updates.some((e) => e.kind === 'measured') && pubWork.updates.some((e) => e.kind === 'paid') && pubWork.updates.some((e) => e.kind === 'progress' && e.photos.length));
+  const people = [(await anon('GET', '/api/public/people?kind=officers')).data, (await anon('GET', '/api/public/people?kind=contractors')).data];
+  assert.ok(people[0].some((p) => p.name === 'JEN Sanganer' && p.red_flags > 0));
+  assert.ok(people[1].some((p) => p.name === 'M/s Ram Builders' && p.measurements >= 3 && p.completed === 1));
+  const updates = (await anon('GET', '/api/public/updates')).data;
+  assert.ok(updates.length > 5);
+  const pub = JSON.stringify([r.data, pubWork, people, updates, (await anon('GET', '/api/public/works/' + w.id)).data]);
+  for (const leak of ['9000000004', '9800000001', '9800000010', '9000000005', '"mobile"', 'pin_hash', 'Bill ke liye paise maange', photoHash]) assert.ok(!pub.includes(leak), 'public data leaks ' + leak);
+  // site photos from work updates are public; attendance selfies are not
+  const sitePhoto = pubWork.updates.find((e) => e.photos?.length).photos[0];
+  assert.equal((await anon('GET', '/api/public/photo/' + sitePhoto)).status, 200);
+  assert.equal((await anon('GET', '/api/public/photo/' + photoHash)).status, 404);
   assert.ok(r.data.works.find((x) => x.name === 'Awarded only').wo_date);
   await admin('PUT', '/api/settings', { public_board: false });
   await new Promise((ok) => setTimeout(ok, 10));
   assert.equal((await anon('GET', '/api/public/overview')).data.enabled, false);
+  assert.equal((await anon('GET', '/api/public/works/' + pid)).status, 404);
   const home = await anon('GET', '/');
   assert.equal(home.status, 200);
 

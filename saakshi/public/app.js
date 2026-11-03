@@ -194,7 +194,7 @@ async function show() {
 async function boot() {
   try {
     const r = await api('/api/me'); me = r.user; settings = r.settings; today = r.today;
-    tab = location.hash.slice(1) || ''; if (['home', 'login', 'register', 'board'].includes(tab)) tab = ''; renderShell();
+    tab = location.hash.slice(1) || ''; if (!VIEWS[tab]) tab = ''; renderShell();
   } catch { route(); }
 }
 
@@ -476,6 +476,9 @@ VIEWS.admin = async (main) => {
       <div><label>रनिंग बिल पास (दिन)</label><input id="sbp" type="number" min="1" value="${settings.bill_pass_days}"></div>
       <div><label>भुगतान (दिन)</label><input id="spd" type="number" min="1" value="${settings.payment_days}"></div>
       <div><label>काम पूरा: मुख्यालय का सत्यापन व भुगतान-अनुमोदन (दिन)</label><input id="sfa" type="number" min="1" value="${settings.final_approval_days}"></div>
+      <div><label><input type="checkbox" id="spb" ${settings.public_board ? 'checked' : ''} style="width:auto"> जनता पोर्टल चालू (काम, अपडेट, ठेकेदार, अधिकारी)</label></div>
+      <div><label><input type="checkbox" id="spn" ${settings.public_names ? 'checked' : ''} style="width:auto"> जनता पोर्टल पर नाम दिखाएँ (मोबाइल कभी नहीं)</label></div>
+      <div><label><input type="checkbox" id="spp" ${settings.public_photos ? 'checked' : ''} style="width:auto"> जनता पोर्टल पर साइट फ़ोटो (सेल्फ़ी कभी नहीं)</label></div>
       <div><label><input type="checkbox" id="swv" ${settings.weekly_verification ? 'checked' : ''} style="width:auto"> हर हफ़्ते नाप अनिवार्य (बिना नाप का काम हो तो)</label></div>
       </div><p><button class="primary" id="ss">नियम सहेजें</button></p></div>` : ''}
     <div class="card"><h3>विभाग की सूची से इंजीनियर / पंजीकृत ठेकेदार जोड़ें</h3>
@@ -494,7 +497,7 @@ VIEWS.admin = async (main) => {
       sla_days: Object.fromEntries(Object.keys(REQ_TYPE).map((k) => [k, n('#sl_' + k)])),
       max_gps_accuracy_m: n('#sg'), min_visit_minutes: n('#sm'), escalate_after_days: n('#se'),
       milestone_percent: n('#smp'), milestone_max_amount: n('#sma'), jen_verify_hours: n('#sjh'), aen_approve_hours: n('#sah'), overclaim_tolerance_percent: n('#sot'), progress_gap_days: n('#spg'),
-      wo_issue_days: n('#swo'), start_within_days: n('#sst'), hindrance_response_days: n('#shr'), hindrance_decision_days: n('#shd'), bill_pass_days: n('#sbp'), payment_days: n('#spd'), final_approval_days: n('#sfa'), weekly_verification: $('#swv').checked,
+      wo_issue_days: n('#swo'), start_within_days: n('#sst'), hindrance_response_days: n('#shr'), hindrance_decision_days: n('#shd'), bill_pass_days: n('#sbp'), payment_days: n('#spd'), final_approval_days: n('#sfa'), weekly_verification: $('#swv').checked, public_board: $('#spb').checked, public_names: $('#spn').checked, public_photos: $('#spp').checked,
     }, 'PUT');
     toast('नियम सहेजे गए ✓');
   });
@@ -896,7 +899,7 @@ const crore = (n) => n >= 1e7 ? `₹ ${(n / 1e7).toLocaleString('en-IN', { maxim
 function publicHeader() {
   document.body.classList.remove('app');
   $('#tabs').hidden = true;
-  $('#who').innerHTML = `<nav class="pubnav"><a href="#home">होम</a><a href="#board">जनता बोर्ड</a><a href="#login" class="btn">लॉगिन</a><a href="#register" class="btn primary">पंजीकरण</a></nav>`;
+  $('#who').innerHTML = `<nav class="pubnav"><a href="#home">होम</a><a href="#board">जनता बोर्ड</a><a href="#updates">ताज़ा अपडेट</a><a href="#contractors">ठेकेदार</a><a href="#officers">अधिकारी</a><a href="#login" class="btn">लॉगिन</a><a href="#register" class="btn primary">पंजीकरण</a></nav>`;
 }
 async function renderHome(scrollTo) {
   publicHeader();
@@ -943,34 +946,38 @@ async function renderHome(scrollTo) {
     <tr><td>बिल पास होने के बाद भुगतान</td><td>XEN / लेखा</td><td>${s.payment_days} दिन</td></tr>
   </tbody></table></div><p class="small muted">विभाग के कारण हुई देरी (बाधा) के दिन अपने-आप समय-वृद्धि बनते हैं। उन दिनों की देरी पर ठेकेदार पर कोई पेनल्टी नहीं लगती।</p></section>
   <section id="board"><div class="spread"><h2>जनता बोर्ड: सरकारी काम की स्थिति</h2></div>
-    ${d.enabled ? `<div class="card row"><input id="bq" placeholder="काम, कार्यालय, वर्क ऑर्डर नं. खोजें…" style="flex:2;min-width:180px">
+    ${d.enabled ? `<div class="card row"><input id="bq" placeholder="काम, ठेकेदार, अधिकारी, कार्यालय, वर्क ऑर्डर नं. खोजें…" style="flex:2;min-width:180px">
       <select id="bd" style="flex:1;min-width:140px"><option value="">सभी विभाग</option>${st.departments.map((x) => `<option>${esc(x)}</option>`).join('')}</select>
       <select id="bs" style="flex:1;min-width:140px"><option value="">सभी स्थिति</option>${Object.entries(STAGE).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}<option value="flag">🚩 लाल झंडे वाले</option></select></div>
       <div id="blist" class="grid"></div>` : '<p class="muted">विभाग ने जनता बोर्ड अभी चालू नहीं किया है।</p>'}
   </section>
+  ${d.enabled ? '<section><div class="spread"><h2>ताज़ा अपडेट</h2><a href="#updates">सभी देखें →</a></div><div class="card" id="hupd">…</div></section>' : ''}
   <section><h2>किसके लिए</h2><div class="grid">
     <div class="card"><h3>👷 ठेकेदार</h3><p class="small">नाप, बिल और भुगतान की हर देरी का पक्का रिकॉर्ड। विभाग की वजह से हुई देरी पर पेनल्टी नहीं। जब चाहें बिल बनाएँ। शिकायत सीधे S.E. और मुख्यालय तक।</p></div>
     <div class="card"><h3>🧑‍💼 अभियंता</h3><p class="small">साइट पर किया हर काम दर्ज, जिससे झूठे आरोप से बचाव होता है। ठेकेदार के ज़्यादा दावे अपने-आप पकड़े जाते हैं। ग़लत नियुक्ति पर आपत्ति का रास्ता है।</p></div>
     <div class="card"><h3>🏛️ विभाग / मुख्यालय</h3><p class="small">हर काम, हर अधिकारी और हर ठेकेदार की स्थिति एक जगह। समय-सीमा पार होते ही झंडा। Excel रिपोर्ट।</p></div>
     <div class="card"><h3>🧑‍🤝‍🧑 नागरिक</h3><p class="small">आपके क्षेत्र का काम कितना हुआ, कब पूरा होगा और कितना भुगतान हुआ: बिना लॉगिन के।</p></div>
   </div></section>
-  <footer class="foot small muted">साइट साक्षी: खुला स्रोत (open source), मुफ़्त। जनता बोर्ड पर किसी व्यक्ति का नाम या मोबाइल नंबर नहीं दिखाया जाता। सारे रिकॉर्ड विभाग के सर्वर पर रहते हैं।</footer>`;
+  <footer class="foot small muted">साइट साक्षी: खुला स्रोत (open source), मुफ़्त। हर काम, ठेकेदार और अधिकारी का रिकॉर्ड जनता के लिए खुला है। किसी का मोबाइल नंबर, हाज़िरी की सेल्फ़ी या शिकायत सार्वजनिक नहीं की जाती। सारे रिकॉर्ड विभाग के सर्वर पर रहते हैं।</footer>`;
   if (d.enabled) {
     const draw = () => {
       const qy = $('#bq').value.trim().toLowerCase(), dep = $('#bd').value, stg = $('#bs').value;
-      const list = d.works.filter((w) => (!qy || `${w.name} ${w.office} ${w.wo_no} ${w.tia}`.toLowerCase().includes(qy)) && (!dep || w.department === dep) && (!stg || (stg === 'flag' ? w.red_flags > 0 : w.stage === stg)));
+      const list = d.works.filter((w) => (!qy || `${w.name} ${w.office} ${w.wo_no} ${w.tia} ${w.contractor} ${w.jen} ${w.aen} ${w.xen}`.toLowerCase().includes(qy)) && (!dep || w.department === dep) && (!stg || (stg === 'flag' ? w.red_flags > 0 : w.stage === stg)));
       $('#blist').innerHTML = list.map((w) => `<div class="card">
         <div class="spread"><h3>${esc(w.name)}</h3><span class="pill ${STAGE[w.stage][1]}">${STAGE[w.stage][0]}</span></div>
         <p class="small muted">${esc(w.department)} ${esc(w.office)}${w.wo_no ? ' · W.O. ' + esc(w.wo_no) : ''} · ${mapLink(w.lat, w.lng, 'जगह')}</p>
-        <p class="small">वर्क ऑर्डर ${w.wo_amount ? crore(w.wo_amount) : '—'} · भुगतान ${crore(w.paid_amount)}</p>
+        ${w.contractor ? `<p class="small">ठेकेदार: <b>${esc(w.contractor)}</b><br>JEN ${esc(w.jen) || '—'} · AEN ${esc(w.aen) || '—'} · XEN ${esc(w.xen) || '—'}</p>` : ''}
+        <p class="small">वर्क ऑर्डर ${w.wo_amount ? crore(w.wo_amount) : '—'} · भुगतान ${crore(w.paid_amount)}${w.last_update ? ` · आख़िरी अपडेट ${fmtTime(w.last_update)}` : ''}</p>
         <div class="small">सत्यापित काम ${w.verified_pct}%</div><div class="bar"><div style="width:${w.verified_pct}%;background:var(--ok)"></div></div>
         <div class="small">ठेकेदार का दावा ${w.claimed_pct}%</div><div class="bar"><div style="width:${w.claimed_pct}%;background:var(--warn)"></div></div>
         <p class="small">${w.revised_end ? `पूर्णता तिथि ${fmtDay(w.revised_end)}${w.extension_days ? ` (विभाग के कारण +${w.extension_days} दिन)` : ''}` : w.stage === 'awarded' ? `अवार्ड ${fmtDay(w.award_date)}${w.wo_late_days ? ` · <span class="pill bad">वर्क ऑर्डर ${w.wo_late_days} दिन देर</span>` : ''}` : ''}
-          ${w.contractor_delay_days ? ` <span class="pill bad">ठेकेदार ${w.contractor_delay_days} दिन देर</span>` : ''}${w.red_flags ? ` <span class="pill bad">🚩 ${w.red_flags}</span>` : ''}</p></div>`).join('') || '<p class="muted">कोई काम नहीं मिला।</p>';
+          ${w.contractor_delay_days ? ` <span class="pill bad">ठेकेदार ${w.contractor_delay_days} दिन देर</span>` : ''}${w.red_flags ? ` <span class="pill bad">🚩 ${w.red_flags}</span>` : ''}</p>
+        <a class="btn" href="#work/${w.id}">पूरा विवरण और अपडेट →</a></div>`).join('') || '<p class="muted">कोई काम नहीं मिला।</p>';
     };
     ['bq', 'bd', 'bs'].forEach((id) => ($('#' + id).oninput = draw));
     draw();
   }
+  if (d.enabled) api('/api/public/updates').then((u) => { if ($('#hupd')) $('#hupd').innerHTML = eventsHtml(u.slice(0, 8), true); }).catch(() => {});
   if (scrollTo) document.getElementById(scrollTo)?.scrollIntoView();
 }
 function route() {
@@ -978,9 +985,88 @@ function route() {
   if (me) return;
   if (h === 'login') { publicHeader(); renderLogin(); }
   else if (h === 'register') { publicHeader(); renderOtp(); }
+  else if (h.startsWith('work/')) renderPublicWork(Number(h.slice(5)));
+  else if (h === 'updates') renderUpdates();
+  else if (h === 'contractors' || h === 'officers') renderPeople(h);
   else renderHome(h === 'board' ? 'board' : null);
 }
 window.addEventListener('hashchange', () => { if (!me) route(); });
+
+// ---------- public: one work, updates feed, contractors and officers ----------
+const EV_ICON = { award: '📜', wo: '📄', progress: '📷', verification_due: '⏳', measured: '📏', approved: '✍️', bill: '🧾', bill_passed: '✅', bill_hq: '🏛️', paid: '💰', hindrance: '⛔', hindrance_reply: '💬', hindrance_decided: '⚖️', visit: '📍', dpr: '📝', completed: '🏁' };
+const pubPhoto = (h) => `<img class="thumb" src="/api/public/photo/${esc(h)}" data-zoom="/api/public/photo/${esc(h)}" loading="lazy" alt="साइट फ़ोटो">`;
+const eventsHtml = (list, showWork) => `<div class="timeline">${list.map((e) => `<div><span>${EV_ICON[e.kind] || '•'}</span> <span class="small muted">${fmtTime(e.ts)}${showWork ? ` · <a href="#work/${e.work_id}">${esc(e.work)}</a>` : ''}</span><br>
+  ${esc(e.text)}${e.by ? ` <span class="small muted">: ${esc(e.by)}${e.role ? ` (${ROLE_SHORT[e.role] || ''})` : ''}</span>` : ''}
+  ${e.photos && e.photos.length ? `<div class="row" style="margin-top:4px">${e.photos.map(pubPhoto).join('')}</div>` : ''}</div>`).join('') || '<p class="muted">अभी कोई अपडेट नहीं।</p>'}</div>`;
+const personChip = (p, label) => p ? `<div class="card person"><div class="small muted">${label}</div><b>${esc(p.name)}</b>${p.verified ? ' <span class="pill ok" title="विभाग के रिकॉर्ड से जाँचा">✓</span>' : ''}
+  <div class="small">${esc(p.department)} ${esc(p.office)}</div>${p.reg_no ? `<div class="small muted">पंजीकरण ${esc(p.reg_no)}${p.gstin ? ' · GSTIN ' + esc(p.gstin) : ''}</div>` : ''}${p.joined ? '' : '<div class="small"><span class="pill warn">पोर्टल पर नहीं आए</span></div>'}</div>` : `<div class="card person"><div class="small muted">${label}</div>—</div>`;
+
+async function renderPublicWork(id) {
+  publicHeader();
+  const main = $('#main');
+  main.innerHTML = '<p class="muted center">लोड हो रहा है…</p>';
+  let w;
+  try { w = await api('/api/public/works/' + id); } catch (e) { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return; }
+  const t = w.timeline, base = w.wo_amount || 1;
+  const pct = (x) => Math.min(100, Math.round(x / base * 1000) / 10);
+  main.innerHTML = `<p><a href="#board">← जनता बोर्ड</a></p>
+    <div class="card infoboard"><div class="small muted">सूचना-पट्ट</div><h2>${esc(w.name)}</h2>
+      <div class="kv"><span>विभाग / कार्यालय</span><b>${esc(w.department)} ${esc(w.office)}</b><span>निविदा आमंत्रण प्राधिकारी</span><b>${esc(w.tia) || '—'}</b>
+      <span>वर्क ऑर्डर</span><b>${esc(w.wo_no) || 'जारी नहीं'}${t.wo_date ? ` · ${fmtDay(t.wo_date)}` : ''}</b><span>राशि</span><b>${w.wo_amount ? crore(w.wo_amount) : '—'}${w.tp_percent ? ` (T.P. ${w.tp_percent}%)` : ''}</b>
+      <span>अवार्ड</span><b>${t.award_date ? fmtDay(t.award_date) : '—'}</b><span>पूरा होना है</span><b>${t.revised_end ? fmtDay(t.revised_end) : t.stipulated_end ? fmtDay(t.stipulated_end) : '—'}${t.extension_days ? ` (विभाग के कारण +${t.extension_days} दिन)` : ''}</b>
+      <span>स्थान</span><b>${mapLink(w.lat, w.lng, 'नक्शे पर देखें')}</b></div></div>
+    <h3>ज़िम्मेदार लोग</h3><div class="grid people">${personChip(w.people.contractor, 'ठेकेदार')}${personChip(w.people.jen, 'JEN (कनिष्ठ अभियंता)')}${personChip(w.people.aen, 'AEN (सहायक अभियंता)')}${personChip(w.people.xen, 'XEN (अधिशासी अभियंता)')}</div>
+    <div class="card"><h3>प्रगति</h3>
+      <div class="small">JEN + AEN से सत्यापित ${crore(w.verified_amount)} (${pct(w.verified_amount)}%)</div><div class="bar"><div style="width:${pct(w.verified_amount)}%;background:var(--ok)"></div></div>
+      <div class="small">ठेकेदार का दावा ${crore(w.claimed_amount)} (${pct(w.claimed_amount)}%)</div><div class="bar"><div style="width:${pct(w.claimed_amount)}%;background:var(--warn)"></div></div>
+      <div class="small">भुगतान ${crore(w.paid_amount)} (${pct(w.paid_amount)}%)</div><div class="bar"><div style="width:${pct(w.paid_amount)}%;background:var(--brand)"></div></div>
+      <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>आइटम</th><th>BOQ मात्रा</th><th>ठेकेदार का दावा</th><th>सत्यापित</th></tr></thead><tbody>
+      ${w.items.map((i) => `<tr><td>${esc(i.description)}<br><span class="small muted">${rupees(i.rate)}/${esc(i.unit)}</span></td><td>${i.qty} ${esc(i.unit)}</td><td>${Math.round(i.claimed_qty * 100) / 100}</td><td>${i.verified_qty}</td></tr>`).join('')}</tbody></table></div></div>
+    ${w.red_flags.length ? `<div class="card" style="border-color:var(--bad)"><h3 style="color:var(--bad)">🚩 लाल झंडे</h3>${w.red_flags.map((f) => `<p class="small"><span class="pill ${f.severity === 'high' ? 'bad' : 'warn'}">${esc(FLAG_TYPE[f.type] || f.type)}</span> ${f.against_name ? `<b>${esc(f.against_name)}</b> (${ROLE_SHORT[f.against_role] || ''}): ` : ''}${esc(f.text)}</p>`).join('')}</div>` : '<div class="card"><span class="pill ok">कोई लाल झंडा नहीं</span></div>'}
+    <div class="grid">
+      <div class="card"><h3>इस सप्ताह साइट विज़िट</h3><table>${w.visits_this_week.map((v) => `<tr><td>${ROLE_SHORT[v.role]}</td><td>${esc(v.officer)}</td><td><b>${v.done}</b>/${v.required}</td><td class="small">${v.last_visit ? 'आख़िरी ' + fmtDay(v.last_visit) : '<span class="pill bad">कभी नहीं</span>'}</td></tr>`).join('') || '<tr><td class="muted">—</td></tr>'}</table></div>
+      <div class="card"><h3>समय-रेखा</h3>${timelineHtml(t)}</div>
+    </div>
+    ${t.hindrances.length ? `<div class="card"><h3>बाधाएँ (विभाग के कारण रुकावट)</h3><table>${t.hindrances.map((h) => `<tr><td>${esc(h.category)}</td><td>${ROLE_SHORT[h.responsible_role]}</td><td>${fmtDay(h.from_day)} – ${h.to_day ? fmtDay(h.to_day) : 'जारी'}</td><td>${h.days} दिन</td><td><span class="pill ${HSTATE[h.state]?.[1] || ''}">${HSTATE[h.state]?.[0] || h.state}</span></td></tr>`).join('')}</table></div>` : ''}
+    <div class="card"><h3>सभी अपडेट</h3>${eventsHtml(w.updates, false)}</div>`;
+}
+async function renderUpdates() {
+  publicHeader();
+  const main = $('#main');
+  const list = await api('/api/public/updates').catch((e) => { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return null; });
+  if (!list) return;
+  main.innerHTML = `<h2>ताज़ा अपडेट: सभी काम</h2><p class="small muted">साइट विज़िट, ठेकेदार के अपडेट (फ़ोटो सहित), JEN के नाप, AEN के अनुमोदन, बिल, भुगतान, बाधाएँ: जैसे ही दर्ज हों।</p><div class="card">${eventsHtml(list, true)}</div>`;
+}
+async function renderPeople(kind) {
+  publicHeader();
+  const main = $('#main');
+  main.innerHTML = '<p class="muted center">लोड हो रहा है…</p>';
+  const list = await api('/api/public/people?kind=' + kind).catch((e) => { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; return null; });
+  if (!list) return;
+  const isC = kind === 'contractors';
+  const worksLinks = (p) => p.works.map((w) => `<a href="#work/${w.id}">${esc(w.name)}</a>`).join(', ');
+  const flagsHtml = (p) => p.red_flags ? `<details><summary><span class="pill bad">🚩 ${p.red_flags} लाल झंडे</span></summary>${p.red_flag_texts.map((f) => `<p class="small">${esc(f.work)}: ${esc(f.text)}</p>`).join('')}</details>` : '<span class="pill ok">कोई झंडा नहीं</span>';
+  main.innerHTML = `<h2>${isC ? 'ठेकेदार' : 'अधिकारी'} (${list.length})</h2>
+    <div class="card row"><input id="pq" placeholder="नाम, विभाग, कार्यालय खोजें…" style="flex:1"></div>
+    <div id="plist" class="grid"></div>
+    <p class="small muted">यह रिकॉर्ड पोर्टल पर दर्ज तथ्यों से अपने-आप बनता है: समय-सीमाएँ, साइट विज़िट, नाप और बिल। किसी का मोबाइल नंबर सार्वजनिक नहीं किया जाता।</p>`;
+  const draw = () => {
+    const qy = $('#pq').value.trim().toLowerCase();
+    $('#plist').innerHTML = list.filter((p) => !qy || `${p.name} ${p.department} ${p.office} ${p.reg_no}`.toLowerCase().includes(qy)).map((p) => `<div class="card">
+      <div class="spread"><b>${esc(p.name)}</b><span class="pill">${isC ? 'ठेकेदार' : ROLE_SHORT[p.role]}</span></div>
+      <div class="small muted">${esc(p.department)} ${esc(p.office)}${p.reg_no ? ` · पंजीकरण ${esc(p.reg_no)}` : ''}${p.verified ? ' · ✓ विभाग से जाँचा' : ''}</div>
+      <p class="small">काम: ${p.works_total} (${p.works_active} जारी) · ${crore(p.works_value)}</p>
+      ${isC ? `<p class="small">पूरे काम ${p.completed} · JEN के नाप ${p.measurements} · ज़्यादा दावे <b>${p.overclaims}</b> · ठेकेदार की देरी <b>${p.contractor_delay_days}</b> दिन · विभाग की देरी ${p.department_delay_days} दिन</p>` : ''}
+      ${p.visits_4w ? `<p class="small">पिछले 4 सप्ताह साइट विज़िट: <b>${p.visits_4w.done}/${p.visits_4w.required}</b>${p.visits_4w.pct != null ? ` (${p.visits_4w.pct}%)` : ''}</p>` : ''}
+      ${p.measurements && !isC ? `<p class="small">नाप ${p.measurements.count} · देर से ${p.measurements.late}${p.measurements.avg_hours != null ? ` · औसत ${p.measurements.avg_hours} घंटे` : ''} · DPR ${p.dpr_count}</p>` : ''}
+      ${p.approvals ? `<p class="small">अनुमोदन ${p.approvals.count} · देर से ${p.approvals.late}</p>` : ''}
+      ${p.bills_passed != null ? `<p class="small">बिल पास किए ${p.bills_passed}</p>` : ''}
+      ${p.joined ? '' : '<p class="small"><span class="pill warn">पोर्टल पर नहीं आए</span></p>'}
+      ${flagsHtml(p)}
+      ${p.works.length ? `<p class="small">${worksLinks(p)}</p>` : ''}</div>`).join('') || '<p class="muted">कोई नहीं मिला।</p>';
+  };
+  $('#pq').oninput = draw; draw();
+}
 
 window.dlg = $('#dlg');
 boot();

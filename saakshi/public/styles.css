@@ -80,3 +80,17 @@ a { color: var(--brand); }
   body.app .tabs button { text-align: left; border-radius: 8px; }
   body.app main { width: 100%; max-width: 1100px; margin: 0; padding: 20px 28px; }
 }
+.infoboard { border: 2px solid var(--brand); }
+.infoboard h2 { margin: 2px 0 10px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; font-size: 14px; }
+.kv span { color: var(--muted); }
+.people .person { margin: 0; }
+details summary { cursor: pointer; list-style: none; }
+@media (max-width: 700px) {
+  .top { flex-direction: column; align-items: stretch; }
+  .pubnav { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; }
+  .pubnav a { white-space: nowrap; }
+  .kv { grid-template-columns: 1fr; } .kv span { margin-top: 6px; }
+}
+
+[hidden] { display: none !important; }
