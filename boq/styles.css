@@ -734,3 +734,13 @@ input.auto, textarea.auto { background: #eaf7ef; border-color: var(--brand); }
   .site-hero h2 { font-size: 1.12rem; }
 }
 #sitesRoot .diary-tab td:first-child input { min-width: 150px; }
+
+.mt-xs { margin-top: .25rem; }
+.save-bar { position: sticky; bottom: .8rem; z-index: 6; display: flex; justify-content: flex-end; align-items: center; gap: .8rem; margin-top: 1rem; pointer-events: none; }
+.save-bar > * { pointer-events: auto; }
+.save-state { background: rgba(255,255,255,.92); border: 1px solid var(--line); border-radius: 999px; padding: .45rem .9rem; font-size: .85rem; font-weight: 600; color: var(--muted); box-shadow: 0 6px 18px rgba(0,0,0,.08); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.save-state.saved { color: var(--brand); } .save-state.saving { color: var(--accent); } .save-state.error { color: var(--err); }
+.save-btn { border-radius: 999px !important; padding: .75rem 1.5rem !important; font-size: 1rem; box-shadow: 0 10px 24px rgba(22,105,77,.35); }
+.work-tab select[data-k="shape"] { min-width: 7.5rem; }
+#sitesRoot .grid-2:has([data-list="machinery"]) { grid-template-columns: 1fr; }
+#sitesRoot [data-list="machinery"] input[type="time"] { min-width: 6.5rem; }

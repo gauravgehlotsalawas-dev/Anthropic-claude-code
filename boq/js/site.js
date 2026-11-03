@@ -144,7 +144,22 @@ function entry(day, create = false) {
   return d;
 }
 let saveT = null;
-function saveEntry(d) { clearTimeout(saveT); saveT = setTimeout(() => idb.put("diary", d), 300); }
+function saveEntry(d) {
+  clearTimeout(saveT); setSaveState("saving");
+  saveT = setTimeout(() => idb.put("diary", d).then(() => setSaveState("saved")).catch((e) => setSaveState("error", e)), 300);
+}
+async function saveNow() {
+  clearTimeout(saveT);
+  const d = entry(state.date);
+  if (d) await idb.put("diary", d);
+  setSaveState("saved"); ctx.toast(`Saved: ${fd(state.date)} ✓`, 2000);
+}
+function setSaveState(st, err) {
+  const el = $("#saveState"); if (!el) return;
+  const t = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+  el.className = "save-state " + st;
+  el.textContent = st === "saving" ? "Saving…" : st === "saved" ? `✓ Saved ${t}` : `Not saved: ${err?.message || "error"}`;
+}
 const entriesOf = (siteId, from, to) => [...state.diary.values()].filter((d) => d.siteId === siteId && (!from || d.date >= from) && (!to || d.date <= to)).sort((a, b) => a.date.localeCompare(b.date));
 async function photosOf(siteId, from, to) {
   return (await allFiles()).filter((f) => f.owner === siteId && f.kind === "photo" && (!from || isoDay(f.date) >= from) && (!to || isoDay(f.date) <= to)).sort((a, b) => a.date.localeCompare(b.date));
@@ -236,7 +251,11 @@ async function rerenderDocs(body) {
 const timeDiff = (a, b) => { if (!a || !b) return null; const [h1, m1] = a.split(":").map(Number), [h2, m2] = b.split(":").map(Number); let m = h2 * 60 + m2 - (h1 * 60 + m1); if (m < 0) m += 1440; return round(m / 60, 2); };
 const CALC = {
   labour: (r) => round(num(r.count) * num(r.rate), 2),
-  machinery: (r) => { const n = num(r.count) || 1; return round(r.basis === "hour" ? num(r.hours) * num(r.rate) * n : num(r.rate) * n, 2); },
+  machinery: (r) => {
+    const n = num(r.count) || 1, basis = r.basis || "hour";
+    const hours = num(r.hours) || timeDiff(r.start, r.end) || 0;
+    return round(basis === "hour" ? hours * num(r.rate) * n : num(r.rate) * n, 2);
+  },
 };
 const inr = (v) => (num(v) ? "₹" + num(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "");
 const listTotal = (key, rows) => round((rows || []).reduce((a, r) => a + CALC[key](r), 0), 2);
@@ -268,20 +287,38 @@ function workInfo(r) {
   return `<span class="wi-top"><b class="ac-no">BOQ ${esc(boqKey(it))}</b>${num(it.qty) ? `${bar(pct)}<b class="pct ${pct > 100 ? "danger-text" : ""}">${pct}%</b>` : ""}</span>
     <span>${num(it.qty) ? `done ${q3(done)} of ${q3(it.qty)} ${esc(it.unit || "")} · <span class="${bal < 0 ? "danger-text" : ""}">${bal < 0 ? "excess" : "balance"} ${q3(Math.abs(bal))}</span>` : esc(it.unit || "")}${num(it.rate) ? ` · ₹${round(it.rate, 2)}/${esc(it.unit || "unit")}` : ""}</span>`;
 }
-/** Quantity from the measurement: Nos × L × B × H, using only the dimensions filled in. */
+const SHAPES = { rect: ["▭ Rectangle", "Nos × L × B × H"], tri: ["◺ Triangle", "½ × Nos × L × B × H (L = base, B = height of the triangle)"],
+  trap: ["⏢ Trapezium", "Nos × (L + L2) / 2 × B × H (L, L2 = parallel sides)"], circ: ["◯ Circle", "Nos × π/4 × L² × H (L = diameter)"] };
+const filled = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+/** Quantity from the measurement, using only the dimensions filled in. A negative Nos is a deduction. */
 function measuredQty(r) {
-  const dims = ["l", "b", "h"].map((k) => r[k]).filter((v) => v !== undefined && v !== null && String(v).trim() !== "");
-  if (!dims.length) return null;
-  const n = String(r.nos ?? "").trim() === "" ? 1 : num(r.nos);
-  return round(dims.reduce((a, v) => a * num(v), n), 3);
+  const shape = r.shape || "rect";
+  const n = filled(r.nos) ? num(r.nos) : 1;
+  const rest = (keys) => keys.filter((k) => filled(r[k])).reduce((a, k) => a * num(r[k]), 1);
+  if (shape === "circ") return filled(r.l) ? round(n * (Math.PI / 4) * num(r.l) ** 2 * rest(["h"]), 3) : null;
+  if (shape === "trap") return filled(r.l) || filled(r.l2) ? round(n * ((num(r.l) + num(r.l2)) / 2) * rest(["b", "h"]), 3) : null;
+  if (!["l", "b", "h"].some((k) => filled(r[k]))) return null;
+  return round(n * rest(["l", "b", "h"]) * (shape === "tri" ? 0.5 : 1), 3);
 }
-const workTable = (rows) => `<div class="table-wrap ac-wrap"><table class="data diary-tab work-tab" data-list="work"><thead><tr><th>Item of work</th><th>Location / chainage</th><th title="Number of like parts">Nos</th><th>L</th><th>B</th><th>H / D</th><th>Qty</th><th>Unit</th><th></th></tr></thead>
-  <tbody>${rows.map((r, i) => { const mq = measuredQty(r); return `<tr data-i="${i}"><td class="ac-cell"><input data-k="desc" data-ac autocomplete="off" value="${esc(r.desc ?? "")}" placeholder="Type item name or BOQ No."><div class="ac-info small muted">${workInfo(r)}</div></td>
+function measureText(w) {
+  if (measuredQty(w) == null) return "";
+  const sh = w.shape || "rect", d = (k) => (filled(w[k]) ? w[k] : null);
+  const n = filled(w.nos) ? w.nos : 1;
+  if (sh === "circ") return `${n} × π/4 × ${w.l}²${d("h") ? ` × ${w.h}` : ""}`;
+  if (sh === "trap") return `${n} × (${w.l || 0} + ${w.l2 || 0})/2${["b", "h"].map(d).filter(Boolean).map((v) => ` × ${v}`).join("")}`;
+  return `${sh === "tri" ? "½ × " : ""}${n} × ${["l", "b", "h"].map(d).filter(Boolean).join(" × ")}`;
+}
+const workTable = (rows) => `<div class="table-wrap ac-wrap"><table class="data diary-tab work-tab" data-list="work"><thead><tr><th>Item of work</th><th>Location / chainage</th><th>Shape</th><th title="Number of like parts (minus for a deduction)">Nos</th><th>L</th><th>B</th><th>H / D</th><th>Qty</th><th>Unit</th><th></th></tr></thead>
+  <tbody>${rows.map((r, i) => { const mq = measuredQty(r), sh = r.shape || "rect"; const num1 = (k, ph = "") => `<input data-k="${k}" type="number" step="any" inputmode="decimal" class="num w60" value="${esc(r[k] ?? "")}" placeholder="${ph}">`;
+    return `<tr data-i="${i}"><td class="ac-cell"><input data-k="desc" data-ac autocomplete="off" value="${esc(r.desc ?? "")}" placeholder="Type item name or BOQ No."><div class="ac-info small muted">${workInfo(r)}</div></td>
     <td><input data-k="loc" value="${esc(r.loc ?? "")}" placeholder="e.g. Ch. 0–30 m"></td>
-    ${["nos", "l", "b", "h"].map((k) => `<td><input data-k="${k}" type="number" step="any" inputmode="decimal" class="num w60" value="${esc(r[k] ?? "")}" placeholder="${k === "nos" ? "1" : ""}"></td>`).join("")}
-    <td><input data-k="qty" type="number" step="any" inputmode="decimal" class="num w80 ${mq != null ? "auto" : ""}" value="${esc(r.qty ?? "")}" ${mq != null ? 'title="Nos × L × B × H"' : ""}></td>
+    <td><select data-k="shape" title="${esc(SHAPES[sh][1])}">${Object.entries(SHAPES).map(([k, [l]]) => `<option value="${k}" ${sh === k ? "selected" : ""}>${l}</option>`).join("")}</select></td>
+    <td>${num1("nos", "1")}</td>
+    <td>${num1("l", sh === "circ" ? "dia" : sh === "tri" ? "base" : "")}${sh === "trap" ? `<div class="mt-xs">${num1("l2", "L2")}</div>` : ""}</td>
+    <td>${sh === "circ" ? `<span class="muted small">–</span>` : num1("b", sh === "tri" ? "height" : "")}</td><td>${num1("h")}</td>
+    <td><input data-k="qty" type="number" step="any" inputmode="decimal" class="num w80 ${mq != null ? "auto" : ""}" value="${esc(r.qty ?? "")}" ${mq != null ? `title="${esc(SHAPES[sh][1])}"` : ""}></td>
     <td><input data-k="unit" list="dlUnit" class="w60" value="${esc(r.unit ?? "")}"></td><td><button class="icon danger-text" data-delrow>×</button></td></tr>`; }).join("")}</tbody></table></div>
-  <div class="row gap wrap"><button class="ghost small" data-addrow="work">＋ Work item</button><span class="muted small">Fill Nos × L × B × H (metres) and the quantity is worked out; leave out what does not apply (L × B for sqm, L for rmt).</span></div>`;
+  <div class="row gap wrap"><button class="ghost small" data-addrow="work">＋ Work item</button><span class="muted small">Pick the shape and fill the sizes in metres: the quantity is worked out. Triangle = ½ × base × height × thickness; leave out what does not apply (L × B for sqm, L for rmt); a minus Nos is a deduction.</span></div>`;
 
 function acMatches(q) {
   const items = site().boqItems || [];
@@ -341,7 +378,8 @@ async function todayView() {
       <label class="field card">Instructions / visitors<textarea data-f="visitors" rows="3">${esc(d.visitors || "")}</textarea></label>
       <label class="field card">Remarks<textarea data-f="remarks" rows="3">${esc(d.remarks || "")}</textarea></label></div>
     <div class="card"><div class="row between"><h3><span class="hico">📷</span>Photos of this day (${photos.length})</h3><button class="ghost" data-act="camera">📷 Take photo</button></div>
-      ${photos.length ? `<div class="thumbs">${photos.map((p) => `<figure data-pid="${p.id}"><img src="${p.thumb}" alt="" data-view><figcaption>${esc(p.caption || "")}<small>${fmtDateTime(p.date).slice(11, 19)}</small></figcaption></figure>`).join("")}</div>` : `<p class="muted">Photos taken today with the GPS camera appear here and in the DPR.</p>`}</div>`;
+      ${photos.length ? `<div class="thumbs">${photos.map((p) => `<figure data-pid="${p.id}"><img src="${p.thumb}" alt="" data-view><figcaption>${esc(p.caption || "")}<small>${fmtDateTime(p.date).slice(11, 19)}</small></figcaption></figure>`).join("")}</div>` : `<p class="muted">Photos taken today with the GPS camera appear here and in the DPR.</p>`}</div>
+    <div class="save-bar"><span id="saveState" class="save-state saved">✓ Saved automatically</span><button class="primary save-btn" data-act="saveDay">💾 Save</button></div>`;
 }
 
 async function photosView() {
@@ -513,6 +551,7 @@ async function onClick(e) {
     if (!prev) { ctx.toast("No earlier day with labour entered."); return; }
     const d = entry(state.date, true); d.labour = structuredClone(prev.labour); d.machinery = structuredClone(prev.machinery || []); saveEntry(d); ctx.toast(`Copied from ${fd(prev.date)}.`); return renderSites();
   }
+  if (act === "saveDay") return saveNow();
   if (act === "printDpr") return printReport("DPR", state.date, state.date);
   if (t.matches("[data-view]")) { const f = (await allFiles()).find((x) => x.id === t.closest("[data-pid]").dataset.pid); if (f) viewPhoto(f); return; }
   if (act === "selAll") { if (state.photoSel.size) state.photoSel.clear(); else (await shownPhotos()).forEach((p) => state.photoSel.add(p.id)); return renderSites(); }
@@ -543,13 +582,17 @@ function onChange(e) {
   if (t.matches("[data-pf]")) { state.filter[t.dataset.pf] = t.value; return renderSites(); }
   if (t.id === "rpKind") { const [a, b] = defaultPeriod(t.value); $("#rpFrom").value = a; $("#rpTo").value = b; }
   if (t.matches("[data-f]")) { const d = entry(state.date, true); d[t.dataset.f] = t.value; saveEntry(d); }
-  if (t.matches("[data-list] select[data-k]")) { const d = entry(state.date, true); const r = d[t.closest("[data-list]").dataset.list][+t.closest("tr").dataset.i]; r[t.dataset.k] = t.value; updateRow(t, r); saveEntry(d); }
+  if (t.matches("[data-list] select[data-k], [data-list] input[data-k]")) {
+    const key = t.closest("[data-list]").dataset.list, d = entry(state.date, true), r = d[key][+t.closest("tr").dataset.i];
+    r[t.dataset.k] = t.value; updateRow(t, r); saveEntry(d);
+    if (key === "work" && t.dataset.k === "shape") renderSites();
+  }
 }
 /** Hours from start/end, the row amount and the card total, updated while typing. */
 function updateRow(t, r) {
   const key = t.closest("[data-list]").dataset.list, tr = t.closest("tr");
   if (key === "work") {
-    if (["nos", "l", "b", "h"].includes(t.dataset.k)) { const mq = measuredQty(r); const qi = $('[data-k="qty"]', tr); if (mq != null) { r.qty = mq; if (qi) { qi.value = mq; qi.classList.add("auto"); } } else qi?.classList.remove("auto"); }
+    if (["nos", "l", "l2", "b", "h", "shape"].includes(t.dataset.k)) { const mq = measuredQty(r); const qi = $('[data-k="qty"]', tr); if (mq != null) { r.qty = mq; if (qi) { qi.value = mq; qi.classList.add("auto"); } } else qi?.classList.remove("auto"); }
     const info = $(".ac-info", tr); if (info) info.innerHTML = workInfo(r);
     return;
   }
@@ -656,7 +699,7 @@ async function printReport(kind, from, to, photoOpt = "8") {
     : [...A.labour].map(([k, v]) => [esc(k), v, round(v / Math.max(1, A.E.length), 1), inr(A.labourAmt.get(k))]);
   const labourCost = one ? listTotal("labour", d?.labour) : round([...A.labourAmt.values()].reduce((a, v) => a + v, 0), 2);
   const boqOf = (desc) => (s.boqItems || []).find((i) => i.description.trim() === desc);
-  const workRows = [...A.work].map(([k, v]) => { const [desc, unit] = k.split("|"); const locs = one ? (d.work.filter((w) => (w.desc || "").trim() === desc).map((w) => [w.loc, measuredQty(w) != null ? `${w.nos || 1} × ${["l", "b", "h"].map((k) => w[k]).filter((v) => String(v ?? "").trim() !== "").join(" × ")}` : ""].filter(Boolean).join(" ")).filter(Boolean).join("; ")) : ""; const b = boqOf(desc); const up = A.upto.get(k) || v;
+  const workRows = [...A.work].map(([k, v]) => { const [desc, unit] = k.split("|"); const locs = one ? (d.work.filter((w) => (w.desc || "").trim() === desc).map((w) => [w.loc, measureText(w)].filter(Boolean).join(" ")).filter(Boolean).join("; ")) : ""; const b = boqOf(desc); const up = A.upto.get(k) || v;
     return [b ? esc(boqKey(b)) : "", esc(desc) + (locs ? `<br><small>${esc(locs)}</small>` : ""), esc(unit), v, up, b && num(b.qty) ? num(b.qty) : "", b && num(b.qty) ? round(num(b.qty) - up, 3) : "", b && num(b.qty) ? `${pctOf(up, b.qty)}%` : ""]; });
   const matRows = one ? (d?.materials || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.supplier || ""), esc(m.challan || "")]) : [...A.materials].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
   const conRows = one ? (d?.consumed || []).filter((m) => m.name).map((m) => [esc(m.name), num(m.qty), esc(m.unit || ""), esc(m.usedFor || "")]) : [...A.consumed].map(([k, v]) => { const [n, u] = k.split("|"); return [esc(n), v, esc(u)]; });
