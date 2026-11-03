@@ -20,6 +20,8 @@ const state = {
   bsrs: [],
   projects: [],
   projectId: null,
+  billId: null, // the Bills tab keeps its own works, separate from the estimates
+  tab: "ratebooks",
   index: null,
   drawings: [], // { id, file, status, parts, warning, error, dxf }
   itemById: new Map(),
@@ -28,7 +30,12 @@ const state = {
   nicTemplates: [],
   tender: null, // e-tender export options
 };
-const project = () => state.projects.find((p) => p.id === state.projectId);
+// Estimates (tabs 1-5) and bill works (tab 6) are separate lists that never share data.
+const isBillWork = (p) => p?.kind === "bill";
+const estimates = () => state.projects.filter((p) => !isBillWork(p));
+const billWorks = () => state.projects.filter(isBillWork);
+const project = () => state.projects.find((p) => p.id === state.projectId && !isBillWork(p));
+const billWork = () => state.projects.find((p) => p.id === state.billId && isBillWork(p));
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -41,13 +48,19 @@ async function boot() {
   setSettingsRef(state.settings);
   state.bsrs = bsrs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   state.projects = projects.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  if (!state.projects.length) {
-    const p = newProject("My first estimate");
-    state.projects.push(p);
-    await idb.put("projects", p);
+  // Older versions kept bills inside the estimate. Move them to a bill work of their own.
+  for (const p of [...state.projects]) {
+    if (isBillWork(p) || !(p.bills?.length || p.contract?.workOrderNo || p.photos?.length || p.extras?.length)) continue;
+    const w = { ...structuredClone(p), id: uid("p"), kind: "bill", updatedAt: Date.now() };
+    state.projects.push(w); await idb.put("projects", w);
+    delete p.bills; delete p.contract; delete p.extras; delete p.photos; await idb.put("projects", p);
   }
-  state.projectId = (kv.find((k) => k.id === "current")?.value) || state.projects[0].id;
-  if (!project()) state.projectId = state.projects[0].id;
+  if (!estimates().length) { const p = newProject("My first estimate"); state.projects.push(p); await idb.put("projects", p); }
+  if (!billWorks().length) { const w = { ...newProject("New work (bills)"), kind: "bill" }; state.projects.push(w); await idb.put("projects", w); }
+  state.projectId = (kv.find((k) => k.id === "current")?.value) || estimates()[0].id;
+  if (!project()) state.projectId = estimates()[0].id;
+  state.billId = kv.find((k) => k.id === "currentBill")?.value;
+  if (!billWork()) state.billId = billWorks()[0].id;
 
   // Keys from before OpenAI support was added belong to Claude.
   const legacy = localStorage.getItem("boq.apiKey");
@@ -59,8 +72,14 @@ async function boot() {
   bindGlobal();
   bindTender();
   initBills({
-    project, saveProject, toast, modal, closeModal, download,
-    addProject: async (np) => { state.projects.unshift(np); await idb.put("projects", np); switchProject(np.id); showTab("bills"); toast(`Demo loaded: ${np.client}. All names and figures are fictional.`, 5000); },
+    project: billWork, saveProject: saveBillWork, toast, modal, closeModal, download,
+    addProject: async (np) => { np.kind = "bill"; state.projects.unshift(np); await idb.put("projects", np); switchBillWork(np.id); showTab("bills"); toast(`Demo loaded: ${np.client}. All names and figures are fictional.`, 5000); },
+    deleteWork: async () => {
+      const w = billWork(); if (!w || !confirm(`Delete the work "${w.name}" with all its bills?`)) return;
+      state.projects = state.projects.filter((x) => x.id !== w.id); await idb.del("projects", w.id);
+      if (!billWorks().length) { const n = { ...newProject("New work (bills)"), kind: "bill" }; state.projects.push(n); await idb.put("projects", n); }
+      switchBillWork(billWorks()[0].id);
+    },
     searchItems: (q) => state.index.search(q, () => true, 200),
     findItem: (id) => state.itemById.get(id),
     rateOf: (it) => indexedRate(bsrById(it._bsr), it),
@@ -121,6 +140,15 @@ function redo() {
 function updateUndoButtons() {
   $$("[data-undo]").forEach((b) => (b.disabled = !hist.undo.length));
   $$("[data-redo]").forEach((b) => (b.disabled = !hist.redo.length));
+}
+
+let billSaveTimer = null;
+function saveBillWork() {
+  const w = billWork(); if (!w) return;
+  w.updatedAt = Date.now();
+  clearTimeout(billSaveTimer);
+  billSaveTimer = setTimeout(() => idb.put("projects", w), 300);
+  if (state.tab === "bills") queueMicrotask(renderProjectSelect);
 }
 
 function saveProject(coalesce = false) {
@@ -190,8 +218,15 @@ function bindGlobal() {
   });
 
   // Project switching
-  $("#projectSelect").addEventListener("change", (e) => switchProject(e.target.value));
+  $("#projectSelect").addEventListener("change", (e) => (state.tab === "bills" ? switchBillWork : switchProject)(e.target.value));
   $("#newProjectBtn").addEventListener("click", async () => {
+    if (state.tab === "bills") {
+      const name = prompt("Name of the work (for bills):", "New work");
+      if (!name) return;
+      const w = { ...newProject(name), kind: "bill" };
+      state.projects.unshift(w); await idb.put("projects", w); switchBillWork(w.id);
+      return;
+    }
     const name = prompt("Name of the new project / work:", "New estimate");
     if (!name) return;
     const p = newProject(name);
@@ -279,7 +314,7 @@ function bindGlobal() {
       const p = { ...data.project, id: uid("p"), updatedAt: Date.now() };
       state.projects.unshift(p);
       await idb.put("projects", p);
-      rebuildIndex(); switchProject(p.id); renderBsrList();
+      rebuildIndex(); if (isBillWork(p)) { switchBillWork(p.id); showTab("bills"); } else switchProject(p.id); renderBsrList();
       toast(`Opened "${p.name}".`);
     } catch (err) { toast("Could not open that file: " + err.message); }
   });
@@ -383,6 +418,8 @@ function renderKeyHint() {
 }
 
 function showTab(name) {
+  const was = state.tab; state.tab = name;
+  if ((was === "bills") !== (name === "bills")) renderProjectSelect();
   $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "pick") renderPick();
@@ -410,13 +447,22 @@ function guardEmpty() {
 // ---------------------------------------------------------------------------
 
 function renderProjectSelect() {
-  $("#projectSelect").innerHTML = state.projects.map((p) => `<option value="${p.id}" ${p.id === state.projectId ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+  const bills = state.tab === "bills";
+  const list = bills ? billWorks() : estimates(), cur = bills ? state.billId : state.projectId;
+  $("#projectSelect").innerHTML = list.map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+  $("#projectSelect").title = bills ? "Work for bills (separate from estimates)" : "Estimate / BOQ project";
+  $("#newProjectBtn").title = bills ? "New work for bills" : "New estimate";
+}
+function switchBillWork(id) {
+  state.billId = id;
+  idb.put("kv", { id: "currentBill", value: id });
+  renderProjectSelect(); renderBills();
 }
 function switchProject(id) {
   state.projectId = id;
   idb.put("kv", { id: "current", value: id });
   state.boqSel.clear(); state.tf = null; if (state.tender) state.tender.scope = "all";
-  renderProjectSelect(); renderBoq(); renderSectionOptions(); renderTakeoff(); renderBills();
+  renderProjectSelect(); renderBoq(); renderSectionOptions(); renderTakeoff();
   resetHistory();
 }
 
@@ -1514,8 +1560,8 @@ function renderProjectForm() {
     if (!confirm(`Delete the project "${p.name}"?`)) return;
     state.projects = state.projects.filter((x) => x.id !== p.id);
     await idb.del("projects", p.id);
-    if (!state.projects.length) { const np = newProject("My first estimate"); state.projects.push(np); await idb.put("projects", np); }
-    switchProject(state.projects[0].id);
+    if (!estimates().length) { const np = newProject("My first estimate"); state.projects.push(np); await idb.put("projects", np); }
+    switchProject(estimates()[0].id);
   };
 }
 

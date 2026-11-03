@@ -46,6 +46,8 @@ What changes in the file: only the item rows of `BoQ1`. The `Total in Figures` a
 
 ## Bills from the measurement book (tab 6)
 
+The Bills tab keeps its own list of works, separate from the estimates and e-tender BOQs of tabs 1–5: nothing loaded for a bill appears in the BOQ or e-Tender tabs, and the other way round. While the Bills tab is open, the selector at the top lists the bill works and **＋** starts a new one. Rate books are shared.
+
 For contractors, based on the project's BOQ (import the tender BOQ .xls; files with BoQ1 and BoQ2, for H- and G-Schedule, are read together):
 
 - **Start from the documents:** upload the work order and the BOQ as PDF (typed or scanned), Excel, Word or photos. Typed PDFs and spreadsheets are read directly; scans and photos are read on the computer with Tesseract OCR (English and Hindi, bundled in `vendor/ocr`, no internet service or API key). From the work order the tool picks the contractor, work order No. and date, amount, T.P. %, dates, office, engineers, H-Schedule rates and terms. You check every value in a review dialog, and empty or doubtful cells are highlighted. After loading, the contract value is checked against the work order amount. Uploading the BOQ also fills the name of work, department and NIT No. from its header.

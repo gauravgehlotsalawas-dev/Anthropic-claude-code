@@ -148,11 +148,12 @@ export function renderBills() {
 function contractView(p, c) {
   const f = (k, label, type = "text", ph = "") => `<label class="field">${label}<input data-c="${k}" type="${type}" value="${esc(c[k] ?? "")}" placeholder="${ph}"></label>`;
   return `<div class="card upload-card"><h2>Start from the documents</h2>
-    <p class="muted small">Upload the work order and the BOQ as PDF, Excel, Word or photos (several photos for several pages). Scans and photos are read on this computer with OCR, no internet service. You check every value before it is used.</p>
+    <p class="muted small"><b>Bills are kept separate from the estimates and e-tender BOQs</b> (tabs 1–5): choose or start a work with the selector at the top while this tab is open. Upload the work order and the BOQ as PDF, Excel, Word or photos (several photos for several pages). Scans and photos are read on this computer with OCR, no internet service. You check every value before it is used.</p>
     <div class="row gap wrap"><button class="primary" data-act="loadWO">Upload work order</button><button class="primary" data-act="loadBOQ">Upload BOQ</button><button class="ghost" data-act="demo" title="A complete fictional work with two running bills, extra items and photos">Load demo (Gaurav Nagar Nigam)</button><span class="status" id="docStatus"></span></div></div>
     <div class="card"><h2>Contract details</h2>
     <p class="muted small">From the work order / agreement. Used on the bill, extra item slip, deviation statement and photo sheets.</p>
     <div class="form-grid">
+      <label class="field" style="grid-column:1/-1">Name of work<textarea data-pname rows="2">${esc(p.name)}</textarea></label>
       ${f("contractor", "Name of contractor", "text", "M/s ...")}
       ${f("workOrderNo", "Work order / agreement No.", "text", "26-27/3260047")}
       ${f("woDate", "Work order date", "date")}
@@ -166,6 +167,7 @@ function contractView(p, c) {
       <label class="field">Extra items limit (% of contract value)<input data-c="extraLimitPct" type="number" step="0.1" value="${num(c.extraLimitPct)}"></label>
     </div>
     <label class="field mt">Terms and conditions of the work order (printed with the bill, one per line)<textarea data-terms rows="5">${esc((c.terms || []).join("\n"))}</textarea></label>
+    <p class="mt"><button class="ghost danger-text" data-act="delWork">Delete this work and its bills</button></p>
     <div class="kpis mt">
       <div class="kpi"><small>Contract value (after T.P.)</small><b>${money(contractValue(p))}</b></div>
       <div class="kpi"><small>Example: rate ₹100 becomes</small><b>${money(100 * (1 + tpFactor(c)))}</b></div>
@@ -332,6 +334,7 @@ function onClick(e) {
     const b = { id: uid("bl"), kind: "running", number: n, base: true, date: "", qty: {}, partRate: {}, parts: {}, mbs: {}, jen: c.jen || "", aen: c.aen || "" };
     p.bills.push(b); view.billId = b.id;
   }
+  if (act === "delWork") { ctx.deleteWork(); return; }
   if (act === "demo") { const d = buildDemoProject(); view.tab = "bill"; view.billId = d.bills.at(-1).id; ctx.addProject(d); return; }
   if (act === "loadBOQ") { pickFiles(".xls,.xlsx,.ods,.csv,.pdf,.docx,image/*", loadBoq); return; }
   if (act === "loadWO") { pickFiles(".pdf,.xls,.xlsx,.docx,.txt,image/*", loadWorkOrder); return; }
@@ -351,6 +354,7 @@ function onChange(e) {
   const p = ctx.project(); const c = contract(p); const el = e.target;
   if (el.id === "billSel") { view.billId = el.value; renderBills(); return; }
   if (el.id === "photoFile") { addPhotos([...el.files]); el.value = ""; return; }
+  if (el.matches("[data-pname]")) { p.name = el.value.trim() || p.name; ctx.saveProject(); return; }
   if (el.dataset.c) c[el.dataset.c] = el.type === "number" ? num(el.value) : el.value;
   else if (el.dataset.b) currentBill(p)[el.dataset.b] = el.dataset.b === "number" ? Math.round(num(el.value)) : el.value;
   else if (el.matches("[data-mbs]")) { const b = currentBill(p); (b.mbs ||= {})[el.closest("[data-line]").dataset.line] = el.value.trim(); ctx.saveProject(); return; }
@@ -569,7 +573,7 @@ function reviewBoq(items, header = {}) {
       p.sections = [mk("G"), mk("H")].filter((s) => s.items.length);
       p.bills = []; view.billId = "";
       // Name of work, department and NIT No. from the BOQ fill the project, unless already typed in.
-      const generic = !p.name || /^(untitled project|my first estimate|imported boq|new project)$/i.test(p.name.trim());
+      const generic = !p.name || /^(untitled project|my first estimate|imported boq|new project|new work( \(bills\))?)$/i.test(p.name.trim());
       if (header.work && generic) p.name = header.work;
       if (header.authority && !p.client) p.client = header.authority;
       if (header.contract && !p.reference) p.reference = header.contract;
