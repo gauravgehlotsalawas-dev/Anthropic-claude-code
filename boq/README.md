@@ -64,7 +64,7 @@ For contractors, based on the project's BOQ (import the tender BOQ .xls; files w
 
 ## Site diary (tab 7)
 
-One folder per construction site (the selector at the top lists sites while this tab is open; **＋** adds one).
+One folder per construction site (the selector at the top lists sites while this tab is open; **＋** adds one). When making a site you can add the work order, the BOQ and other documents (agreement, drawings, letters): the name of work, W.O. No. and date, department, amount, dates, contractor and engineers are read from them to fill the form, the BOQ items become the work items offered in the daily entry, and every file is saved in the site's folders. The same can be done later from *Site details*.
 
 - **Daily entry:** labour by category, machinery, work done (item, location, quantity, unit), materials received (supplier, challan), hindrances, instructions and remarks. *Copy last day's labour* saves typing.
 - **GPS camera:** choose the site, write what the photo is about, and choose what is stamped on it: GPS location, address (needs internet), date and time, site name and W.O. No. (or nothing). *Take photo* opens the camera on a phone or tablet; *Choose from gallery* reads the date and GPS position stored in the photo. Photos go to that site's gallery and to that day's DPR.

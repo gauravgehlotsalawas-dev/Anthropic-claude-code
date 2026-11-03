@@ -515,34 +515,41 @@ function pickFiles(accept, fn) {
 }
 const docStatus = (t, cls = "") => { const s = $("#docStatus"); if (s) { s.textContent = t; s.className = "status " + cls; } };
 
+/** Items and header (name of work, department, NIT No.) from BOQ files: NIC .xls, typed or scanned PDF, Excel, Word or photos. */
+export async function extractBoq(files, status = () => {}) {
+  const items = [], header = {};
+  const addHeader = (h) => { for (const [k, v] of Object.entries(h || {})) { const t = String(v || "").replace(/\s+/g, " ").replace(/\s*serial number\s*:?\s*$/i, "").trim(); if (t && !header[k]) header[k] = t; } };
+  const nicXls = files.filter((f) => /\.xls$/i.test(f.name));
+  for (const f of nicXls) {
+    try {
+      const buf = await f.arrayBuffer(); const first = readNicBoq(buf);
+      const strip = (t) => String(t || "").replace(/^[^:]*:\s*/, "").trim();
+      addHeader({ work: strip(first.work), authority: strip(first.authority), contract: strip(first.contract) });
+      for (const n of first.sheetNames) {
+        const info = readNicBoq(buf, n); const sched = info.boqType === "Percentage" ? "G" : "H";
+        info.items.filter((i) => !i.heading).forEach((i) => items.push({ schedule: sched, sno: String(i.sno), description: i.description, quantity: i.qty || 0, unit: i.unit, rate: i.rate || 0 }));
+      }
+    } catch { items.push(...parseBoqRows((await readDocument([f])).rows)); }
+  }
+  const rest = files.filter((f) => !nicXls.includes(f));
+  if (rest.length) {
+    const pdfs = rest.filter((f) => /\.pdf$/i.test(f.name));
+    for (const f of pdfs) { status(`Reading ${f.name}…`); const got = await parseNicPdf(f); addHeader(got.header); if (got.length) { items.push(...got); rest.splice(rest.indexOf(f), 1); } }
+    if (rest.length) {
+      const doc = await readDocument(rest, status);
+      addHeader(boqHeader(doc.lines));
+      items.push(...(doc.rows.length ? parseBoqRows(doc.rows) : []), ...parseBoqLines(doc.lines));
+    }
+  }
+  status("");
+  return { items, header };
+}
+
 async function loadBoq(files) {
   if (!files.length) return;
   try {
-    let items = [], header = {};
-    const addHeader = (h) => { for (const [k, v] of Object.entries(h || {})) { const t = String(v || "").replace(/\s+/g, " ").replace(/\s*serial number\s*:?\s*$/i, "").trim(); if (t && !header[k]) header[k] = t; } };
-    const nicXls = files.filter((f) => /\.xls$/i.test(f.name));
-    for (const f of nicXls) {
-      try {
-        const buf = await f.arrayBuffer(); const first = readNicBoq(buf);
-        const strip = (t) => String(t || "").replace(/^[^:]*:\s*/, "").trim();
-        addHeader({ work: strip(first.work), authority: strip(first.authority), contract: strip(first.contract) });
-        for (const n of first.sheetNames) {
-          const info = readNicBoq(buf, n); const sched = info.boqType === "Percentage" ? "G" : "H";
-          info.items.filter((i) => !i.heading).forEach((i) => items.push({ schedule: sched, sno: String(i.sno), description: i.description, quantity: i.qty || 0, unit: i.unit, rate: i.rate || 0 }));
-        }
-      } catch { items.push(...parseBoqRows((await readDocument([f])).rows)); }
-    }
-    const rest = files.filter((f) => !nicXls.includes(f));
-    if (rest.length) {
-      const pdfs = rest.filter((f) => /\.pdf$/i.test(f.name));
-      for (const f of pdfs) { docStatus(`Reading ${f.name}…`); const got = await parseNicPdf(f); addHeader(got.header); if (got.length) { items.push(...got); rest.splice(rest.indexOf(f), 1); } }
-      if (rest.length) {
-        const doc = await readDocument(rest, (t) => docStatus(t));
-        addHeader(boqHeader(doc.lines));
-        items.push(...(doc.rows.length ? parseBoqRows(doc.rows) : []), ...parseBoqLines(doc.lines));
-        if (!items.length) { docStatus("No BOQ items could be found. Check that the photo is straight and readable, or type the items.", "err"); return; }
-      }
-    }
+    const { items, header } = await extractBoq(files, (t) => docStatus(t));
+    if (!items.length) { docStatus("No BOQ items could be found. Check that the photo is straight and readable, or type the items.", "err"); return; }
     docStatus("");
     reviewBoq(items, header);
   } catch (e) { console.error(e); docStatus(e.message, "err"); }

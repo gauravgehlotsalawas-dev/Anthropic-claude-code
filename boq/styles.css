@@ -643,3 +643,8 @@ button.chip { background: #fff; color: var(--ink); }
   .r-signs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8pt; margin-top: 30pt; text-align: center; font-size: 9.5pt; }
   .r-page .r-signs, .r-page h4 { page-break-after: avoid; }
 }
+
+.ns-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .8rem; }
+.ns-grid > div { display: flex; flex-direction: column; gap: .35rem; align-items: flex-start; }
+.ns-grid small { word-break: break-all; }
+input.auto, textarea.auto { background: #eaf7ef; border-color: var(--brand); }

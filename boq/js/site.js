@@ -3,6 +3,8 @@
 import { idb, uid, num, round, esc } from "./store.js";
 import { saveFile, allFiles, putFile, delFile, readExif, getPosition, reverseGeocode, fmtLatLon, fmtDateTime, stampPhoto, thumbOf, makeZip, safeName } from "./files.js";
 import { docsPanel, SITE_FOLDERS } from "./docs.js";
+import { readDocument, parseWorkOrder } from "./docread.js";
+import { extractBoq } from "./bills.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -42,20 +44,81 @@ export function switchSite(id) {
   renderSites();
 }
 
+// Documents chosen while making (or editing) a site, read to fill the form and then saved in its folders.
+const OTHER_FOLDERS = ["Agreement", "Drawings", "Letters", "Challans", "MB & bills", "Others"];
+const docPicker = () => `<div class="card upload-card ns-docs"><h3>Start from documents <span class="muted small">(optional)</span></h3>
+  <p class="muted small">Add the work order and the BOQ (PDF, Excel, Word or photos). The name of work, W.O. No. and date, department, amount, dates, contractor and engineers are read from them (OCR on this device), and the BOQ items become the list of work items for the daily entry. Check the form below before saving. All files are saved in the site's document folders.</p>
+  <div class="ns-grid">
+    <div><b>Work order</b><label class="ghost btn-file">⇪ Choose<input type="file" multiple data-ns="wo" hidden></label><small data-nsl="wo" class="muted">No file</small></div>
+    <div><b>BOQ</b><label class="ghost btn-file">⇪ Choose<input type="file" multiple data-ns="boq" hidden></label><small data-nsl="boq" class="muted">No file</small></div>
+    <div><b>Agreement &amp; other documents</b><span class="row gap"><select data-nsfolder>${OTHER_FOLDERS.map((f) => `<option>${f}</option>`).join("")}</select><label class="ghost btn-file">⇪ Choose<input type="file" multiple data-ns="other" hidden></label></span><small data-nsl="other" class="muted">No file</small></div>
+  </div><p class="status" data-nsstatus></p></div>`;
+
+/** Wires the document picker inside el; returns what was read and the files to save. */
+function bindDocPicker(el) {
+  // Listen on the picker card itself: the modal body is reused, so listeners on it would pile up.
+  const card = $(".ns-docs", el);
+  const got = { files: [], boqItems: null, terms: null };
+  const status = (t, cls = "") => { const x = $("[data-nsstatus]", el); if (x) { x.textContent = t; x.className = "status " + cls; } };
+  const setField = (k, v, src = "wo") => {
+    if (v == null || v === "" || v === 0) return;
+    const i = $(`[data-sf="${k}"]`, el); if (!i) return;
+    if (i.value.trim() && !i.classList.contains("auto")) return; // never overwrite what the user typed
+    if (src === "wo" && i.dataset.src === "boq") return; // the BOQ's typed name of work beats an OCR reading of the work order
+    i.value = v; i.classList.add("auto"); i.dataset.src = src;
+  };
+  card.addEventListener("change", async (e) => {
+    const t = e.target; if (!t.matches("[data-ns]")) return;
+    const kind = t.dataset.ns, files = [...t.files]; t.value = ""; if (!files.length) return;
+    const folder = kind === "wo" ? "Work order" : kind === "boq" ? "BOQ" : $("[data-nsfolder]", el).value;
+    files.forEach((f) => got.files.push({ file: f, folder, kind }));
+    $(`[data-nsl="${kind}"]`, el).textContent = got.files.filter((x) => x.kind === kind).map((x) => x.file.name).join(", ");
+    try {
+      if (kind === "wo") {
+        status("Reading the work order… (photos and scans take a little longer)");
+        const doc = await readDocument(files, (m) => status(m));
+        const w = parseWorkOrder(doc.lines);
+        setField("name", w.workName); setField("workOrderNo", w.workOrderNo); setField("woDate", w.woDate); setField("client", w.office); setField("amount", w.amount);
+        setField("startDate", w.commence); setField("endDate", w.stipulated); setField("contractor", w.contractor); setField("jen", w.jen); setField("aen", w.aen); setField("xen", w.xen);
+        if (w.terms?.length) got.terms = w.terms;
+        const n = $$("[data-sf].auto", el).length;
+        status(n ? `Work order read: ${n} field(s) filled (shown in green). Please check them.` : "The work order will be saved, but no details could be read from it. Fill the form by hand.", n ? "ok" : "err");
+      } else if (kind === "boq") {
+        status("Reading the BOQ…");
+        const { items, header } = await extractBoq(files, (m) => status(m));
+        setField("name", header.work, "boq"); setField("client", header.authority, "boq");
+        if (items.length) got.boqItems = items.map((i) => ({ sno: i.sno, description: i.description, unit: i.unit, qty: num(i.quantity), rate: num(i.rate), schedule: i.schedule }));
+        status(items.length ? `BOQ read: ${items.length} items${header.work ? " and the name of work" : ""}.` : "The BOQ will be saved, but no items could be read from it.", items.length ? "ok" : "err");
+      } else status(`${files.length} document(s) will be saved in ${folder}.`, "ok");
+    } catch (err) { console.error(err); status("Could not read: " + err.message, "err"); }
+  });
+  $$("[data-sf]", el).forEach((i) => i.addEventListener("input", () => i.classList.remove("auto")));
+  return got;
+}
+async function saveSiteDocs(siteId, got) {
+  for (const { file, folder } of got.files) await saveFile(file, { owner: siteId, kind: "doc", folder, name: file.name, thumb: file.type.startsWith("image/") ? await thumbOf(file).catch(() => "") : "" });
+}
+
 export function newSiteDialog() {
-  ctx.modal(`<h2>New site</h2><p class="muted small">Each site keeps its own daily diary, photos, reports and documents.</p>${siteForm({})}
+  ctx.modal(`<h2>New site</h2><p class="muted small">Each site keeps its own daily diary, photos, reports and documents.</p>${docPicker()}${siteForm({})}
     <button class="primary mt" id="nsSave">Create site</button>`, (m) => {
+    const got = bindDocPicker(m);
     $("#nsSave", m).onclick = async () => {
       const s = { id: uid("site"), createdAt: Date.now(), updatedAt: Date.now(), folders: [...SITE_FOLDERS], ...readSiteForm(m) };
-      if (!s.name) { ctx.toast("Give the site a name."); return; }
+      if (!s.name) { ctx.toast("Give the site a name (or add the work order / BOQ to read it)."); return; }
+      if (got.boqItems) s.boqItems = got.boqItems;
+      if (got.terms) s.terms = got.terms;
+      $("#nsSave", m).disabled = true;
       state.sites.unshift(s); await idb.put("sites", s);
+      await saveSiteDocs(s.id, got);
       ctx.closeModal(); switchSite(s.id); ctx.refreshHeader();
+      ctx.toast(`Site created${got.files.length ? ` with ${got.files.length} document(s)` : ""}${s.boqItems ? ` and ${s.boqItems.length} BOQ items` : ""}.`, 5000);
     };
   });
 }
 const SITE_FIELDS = [["name", "Name of work / site *"], ["workOrderNo", "Work order No."], ["woDate", "Work order date", "date"], ["client", "Department / client"],
   ["location", "Location"], ["amount", "Work order amount (₹)", "number"], ["startDate", "Start date", "date"], ["endDate", "Stipulated completion", "date"],
-  ["engineer", "Site engineer / supervisor"], ["jen", "JEN"], ["aen", "AEN"], ["xen", "XEN"]];
+  ["contractor", "Contractor / firm"], ["engineer", "Site engineer / supervisor"], ["jen", "JEN"], ["aen", "AEN"], ["xen", "XEN"]];
 const siteForm = (s) => `<div class="form-grid">${SITE_FIELDS.map(([k, l, t]) => k === "name"
   ? `<label class="field" style="grid-column:1/-1">${l}<textarea data-sf="name" rows="2">${esc(s.name || "")}</textarea></label>`
   : `<label class="field">${l}<input data-sf="${k}" type="${t || "text"}" value="${esc(s[k] ?? "")}"></label>`).join("")}</div>`;
@@ -100,7 +163,12 @@ export async function renderSites() {
   if (state.tab === "today") body.innerHTML = await todayView();
   if (state.tab === "photos") body.innerHTML = await photosView();
   if (state.tab === "reports") body.innerHTML = reportsView();
-  if (state.tab === "details") body.innerHTML = `<div class="card"><h2>Site details</h2>${siteForm(s)}<div class="row gap mt"><button class="primary" data-act="saveSite">Save</button><button class="ghost danger-text" data-act="delSite">Delete this site</button></div></div>`;
+  if (state.tab === "details") {
+    body.innerHTML = `${docPicker()}<div class="card"><h2>Site details</h2>${siteForm(s)}<div class="row gap mt"><button class="primary" data-act="saveSite">Save</button><button class="ghost danger-text" data-act="delSite">Delete this site</button></div></div>
+      ${s.boqItems?.length ? `<div class="card"><h2>BOQ items (${s.boqItems.length})</h2><p class="muted small">Offered as work items in the daily entry.</p><div class="table-wrap tall"><table class="data small"><thead><tr><th>Sch.</th><th>No.</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Rate</th></tr></thead>
+        <tbody>${s.boqItems.map((i) => `<tr><td>${esc(i.schedule || "")}</td><td>${esc(i.sno || "")}</td><td>${esc(i.description)}</td><td>${esc(i.unit || "")}</td><td class="num">${q3(i.qty)}</td><td class="num">${i.rate ? round(i.rate, 2) : ""}</td></tr>`).join("")}</tbody></table></div></div>` : ""}`;
+    state.detailsGot = bindDocPicker(body);
+  }
   if (state.tab === "docs") await rerenderDocs(body);
 }
 async function rerenderDocs(body) {
@@ -117,7 +185,8 @@ const rowTable = (key, cols, rows, addLabel, quick = "") => `<div class="table-w
 async function todayView() {
   const day = state.date, d = entry(day) || { labour: [], work: [], materials: [], machinery: [] };
   const photos = await photosOf(state.siteId, day, day);
-  const prevWork = [...new Set([...state.diary.values()].filter((x) => x.siteId === state.siteId).flatMap((x) => x.work.map((w) => w.desc)).filter(Boolean))];
+  const boqWork = (site().boqItems || []).map((i) => i.description.replace(/\s+/g, " ").slice(0, 120));
+  const prevWork = [...new Set([...[...state.diary.values()].filter((x) => x.siteId === state.siteId).flatMap((x) => x.work.map((w) => w.desc)).filter(Boolean), ...boqWork])];
   const labourTotal = d.labour.reduce((a, l) => a + num(l.count), 0);
   return `<div class="card"><div class="row between wrap"><div class="row gap"><button class="ghost" data-day="-1">‹</button><input type="date" id="diaryDate" value="${day}"><button class="ghost" data-day="1">›</button>
       <b>${longDay(day)}</b>${day === today() ? `<span class="badge">Today</span>` : ""}</div>
@@ -217,7 +286,14 @@ async function onClick(e) {
   if (act === "newSite") return newSiteDialog();
   if (act === "camera") { cameraDialog(); return; }
   if (t.closest("[data-day]")) { state.date = addDays(state.date, +t.closest("[data-day]").dataset.day); return renderSites(); }
-  if (act === "saveSite") { Object.assign(site(), readSiteForm($("#sitesRoot"))); await saveSite(site()); ctx.toast("Saved."); ctx.refreshHeader(); return renderSites(); }
+  if (act === "saveSite") {
+    const s = site(), got = state.detailsGot || { files: [] };
+    Object.assign(s, readSiteForm($("#sitesRoot")));
+    if (got.boqItems) s.boqItems = got.boqItems;
+    if (got.terms) s.terms = got.terms;
+    await saveSite(s); await saveSiteDocs(s.id, got); state.detailsGot = null;
+    ctx.toast(`Saved${got.files.length ? ` with ${got.files.length} document(s)` : ""}.`); ctx.refreshHeader(); return renderSites();
+  }
   if (act === "delSite") {
     const s = site(); if (!confirm(`Delete the site "${s.name}" with its diary, photos and documents?`)) return;
     for (const f of (await allFiles()).filter((x) => x.owner === s.id)) await delFile(f.id);
