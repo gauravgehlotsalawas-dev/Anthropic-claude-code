@@ -9,7 +9,8 @@ const REQ_TYPE = { measurement: 'नाप (MB में माप)', bill: 'ब
 const BILL_STAGE = { submitted: 'बिल जमा', mb_recorded: 'MB दर्ज (JEN)', checked_aen: 'जाँचा (AEN)', passed_xen: 'पास (XEN)', paid: 'भुगतान हुआ' };
 const STATUS = { open: ['खुला', 'warn'], reopened: ['दोबारा खुला', 'bad'], done: ['विभाग ने पूरा बताया', 'ok'], closed: ['बंद', ''] };
 const FLAG_TYPE = { jen_not_verified: 'JEN ने नाप नहीं लिया', aen_not_approved: 'AEN ने अनुमोदन नहीं किया', contractor_overclaim: 'ठेकेदार का ज़्यादा दावा', contractor_no_update: 'ठेकेदार ने अपडेट नहीं डाला',
-  request_overdue: 'अनुरोध समय-सीमा पार', assignment_disputed: 'काम सौंपने पर आपत्ति', officer_not_joined: 'अधिकारी ने लॉगिन नहीं किया' };
+  request_overdue: 'अनुरोध समय-सीमा पार', wo_not_issued: 'वर्क ऑर्डर जारी नहीं', contractor_not_started: 'काम शुरू नहीं', hindrance_undecided: 'बाधा पर निर्णय बाकी',
+  department_delay: 'विभाग के कारण देरी', contractor_delay: 'ठेकेदार की देरी', bill_delayed: 'बिल/भुगतान में देरी', final_not_approved: 'अंतिम बिल: मुख्यालय का अनुमोदन बाकी', assignment_disputed: 'काम सौंपने पर आपत्ति', officer_not_joined: 'अधिकारी ने लॉगिन नहीं किया' };
 const VSTATUS = { pending_jen: ['JEN का साइट-नाप बाकी', 'warn'], pending_aen: ['AEN का अनुमोदन बाकी', 'warn'], approved: ['JEN + AEN से सत्यापित', 'ok'] };
 const FLAG = { exceeds_boq: 'BOQ मात्रा से ज़्यादा',  outside_fence: 'साइट से बाहर', low_accuracy: 'GPS कमज़ोर', photo_reused: 'पुरानी फ़ोटो', no_photo: 'फ़ोटो नहीं', clock_mismatch: 'फ़ोन का समय गलत', from_gallery: 'गैलरी से फ़ोटो' };
 
@@ -126,7 +127,7 @@ function renderLogin() {
     <label>PIN</label><input id="lp" type="password" inputmode="numeric" maxlength="8" autocomplete="current-password">
     <p><button class="primary big" id="lb">लॉगिन करें</button></p>
     <p class="center"><button id="lotp">नया खाता / पहली बार / PIN भूल गए: OTP से लॉगिन</button></p>
-    <p class="small muted">ठेकेदार और अधिकारी (JEN, AEN, XEN) ख़ुद खाता बना सकते हैं। अगर किसी प्रोजेक्ट में आपका नाम और मोबाइल डाला गया है, तो आपका खाता पहले से बना है: बस OTP से लॉगिन करें।</p></div>`;
+    <p class="small muted">हर विभाग के इंजीनियर और सरकारी टेंडर में पंजीकृत हर ठेकेदार यहाँ अपना खाता बनाता है। अगर किसी प्रोजेक्ट में आपका नाम और मोबाइल डाला गया है, तो आपका खाता पहले से बना है: बस OTP से लॉगिन करें।</p></div>`;
   $('#lotp').onclick = renderOtp;
   const go = () => busy($('#lb'), async () => { await api('/api/login', { mobile: $('#lm').value.trim(), pin: $('#lp').value }); await boot(); });
   $('#lb').onclick = go; $('#lp').onkeydown = (e) => e.key === 'Enter' && go();
@@ -140,7 +141,10 @@ function renderOtp() {
       <div id="onew" hidden>
         <label>आपका नाम</label><input id="on">
         <label>आप कौन हैं?</label><select id="or"><option value="contractor">ठेकेदार / फ़र्म</option><option value="jen">JEN (कनिष्ठ अभियंता)</option><option value="aen">AEN (सहायक अभियंता)</option><option value="xen">XEN (अधिशासी अभियंता)</option></select>
+        <label>विभाग (PWD, जल संसाधन, PHED, RUIDP…)</label><input id="odp">
         <label>कार्यालय / फ़र्म का पता</label><input id="oo">
+        <label>ठेकेदार: पंजीकरण / एनलिस्टमेंट नं. · अधिकारी: कर्मचारी ID</label><input id="org">
+        <label>GSTIN (ठेकेदार)</label><input id="ogst" maxlength="15">
       </div>
       <label>नया PIN बनाएँ (4–8 अंक)</label><input id="op" type="password" inputmode="numeric" maxlength="8">
       <p><button class="primary big" id="ov">आगे बढ़ें</button></p></div>
@@ -153,7 +157,7 @@ function renderOtp() {
       + (r.dev_otp ? ` <span class="pill warn">डेमो OTP: ${esc(r.dev_otp)}</span>` : '');
   });
   $('#ov').onclick = () => busy($('#ov'), async () => {
-    await api('/api/otp/verify', { mobile: $('#om').value.trim(), code: $('#oc').value.trim(), pin: $('#op').value, name: $('#on').value, role: $('#or').value, office: $('#oo').value });
+    await api('/api/otp/verify', { mobile: $('#om').value.trim(), code: $('#oc').value.trim(), pin: $('#op').value, name: $('#on').value, role: $('#or').value, office: $('#oo').value, department: $('#odp').value, reg_no: $('#org').value, gstin: $('#ogst').value });
     await boot();
   });
 }
@@ -163,6 +167,8 @@ function tabsFor(role) {
   if (['jen', 'aen', 'xen'].includes(role)) t.unshift(['attend', 'हाज़िरी लगाएँ']);
   if (role !== 'hq') t.push(['newproject', '＋ नया प्रोजेक्ट']);
   t.push(['visits', role === 'contractor' ? 'हाज़िरी पुष्टि' : 'हाज़िरी रिकॉर्ड']);
+  t.push(['bills', 'बिल']);
+  t.push(['hindrances', 'बाधा / समय-वृद्धि']);
   t.push(['dpr', role === 'jen' ? 'आज की DPR' : 'DPR']);
   t.push(['requests', role === 'contractor' ? 'नाप / बिल अनुरोध' : 'अनुरोध']);
   if (['contractor', 'se', 'admin', 'hq'].includes(role)) t.push(['complaints', 'शिकायत']);
@@ -240,6 +246,8 @@ VIEWS.works = async (main) => {
     ${['jen', 'aen', 'xen'].map((r) => `<tr><td>${ROLE_SHORT[r]}</td><td>${esc(w[r]) || '<span class="muted">—</span>'}</td><td>${w[r] ? lv(w.last_visit[r]) : ''}</td></tr>`).join('')}</table>
     <p class="small">आज की DPR: ${w.dpr_today ? '<span class="pill ok">जमा</span>' : '<span class="pill warn">नहीं</span>'} · ठेकेदार का आज का अपडेट: ${w.progress_today ? '<span class="pill ok">जमा</span>' : '<span class="pill warn">नहीं</span>'} · खुले अनुरोध: ${w.open_requests}</p>
     ${w.items_count ? `<p class="small">दावा ${rupees(Math.round(w.claimed_amount))} / ${rupees(w.wo_amount || Math.round(w.boq_total))}${w.pending_verification ? ` · <span class="pill warn">${VSTATUS[w.pending_verification][0]}</span>` : ''}</p>` : ''}
+    ${w.timeline.award_date && !w.timeline.wo_date ? `<p class="small"><span class="pill ${w.timeline.wo_late_days ? 'bad' : 'warn'}">वर्क ऑर्डर बाकी${w.timeline.wo_late_days ? `: ${w.timeline.wo_late_days} दिन देर` : ''}</span></p>` : ''}
+    ${w.timeline.revised_end ? `<p class="small">पूर्णता तिथि ${fmtDay(w.timeline.revised_end)}${w.timeline.extension_days ? ` (समय-वृद्धि ${w.timeline.extension_days} दिन)` : ''}${w.timeline.contractor_delay_days ? ` <span class="pill bad">ठेकेदार ${w.timeline.contractor_delay_days} दिन देर</span>` : ''}</p>` : ''}
     <button data-wopen="${w.id}">विवरण</button></div>`).join('') || '<p class="muted">आपको अभी कोई काम नहीं सौंपा गया है।</p>'}</div>`;
   main.querySelectorAll('[data-wopen]').forEach((b) => (b.onclick = () => openWork(b.dataset.wopen)));
 };
@@ -367,7 +375,7 @@ VIEWS.requests = async (main) => {
     ${isC ? `<div class="card"><h3>नया अनुरोध</h3>
       <div class="notice">हर अनुरोध की एक समय-सीमा है: ${Object.entries(settings.sla_days).map(([k, v]) => `${REQ_TYPE[k]} ${v} दिन`).join(' · ')}। समय पार होने पर यह अपने-आप XEN और फिर S.E. के डैशबोर्ड पर लाल दिखता है।</div>
       <label>काम</label><select id="rw">${works.filter((w) => w.status === 'active').map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select>
-      <label>प्रकार</label><select id="rt">${Object.entries(REQ_TYPE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+      <label>प्रकार</label><select id="rt">${Object.entries(REQ_TYPE).filter(([k]) => k !== 'bill').map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
       <label>विषय *</label><input id="rs" placeholder="जैसे: नाली चैनेज 0-180 मी. का नाप MB में दर्ज करें">
       <label>विवरण</label><textarea id="rd"></textarea>
       <label>राशि (बिल हो तो)</label><input id="ra" inputmode="decimal">
@@ -445,7 +453,7 @@ VIEWS.admin = async (main) => {
       <p class="small muted">घेरे की जगह बदलने का हर बदलाव (पहले और बाद का GPS) ऑडिट लॉग में हमेशा के लिए दर्ज रहता है।</p></div>
     <div class="card"><div class="spread"><h3>उपयोगकर्ता (${users.length})</h3><button class="primary" id="nu">＋ नया उपयोगकर्ता</button></div>
       <div class="table-wrap"><table><thead><tr><th>नाम</th><th>मोबाइल</th><th>पद</th><th>कार्यालय</th><th></th></tr></thead><tbody>
-      ${users.map((u) => `<tr class="${u.active ? '' : 'warn'}"><td>${esc(u.name)}${u.active ? '' : ' <span class="pill">निष्क्रिय</span>'}${u.verified ? '' : ' <span class="pill warn">पहचान बाकी</span>'}${u.has_pin ? '' : ' <span class="pill">लॉगिन नहीं किया</span>'}</td><td>${esc(u.mobile)}</td><td>${ROLE_SHORT[u.role]}</td><td>${esc(u.office)}</td><td><button data-eu="${u.id}">बदलें</button></td></tr>`).join('')}</tbody></table></div></div>
+      ${users.map((u) => `<tr class="${u.active ? '' : 'warn'}"><td>${esc(u.name)}${u.active ? '' : ' <span class="pill">निष्क्रिय</span>'}${u.verified ? '' : ' <span class="pill warn">पहचान बाकी</span>'}${u.has_pin ? '' : ' <span class="pill">लॉगिन नहीं किया</span>'}</td><td>${esc(u.mobile)}</td><td>${ROLE_SHORT[u.role]}</td><td>${esc(u.department)} ${esc(u.office)}${u.reg_no ? `<br><span class="small muted">${esc(u.reg_no)}</span>` : ''}</td><td><button data-eu="${u.id}">बदलें</button></td></tr>`).join('')}</tbody></table></div></div>
     ${me.role === 'admin' ? `<div class="card"><h3>नियम</h3><div class="grid">
       <div><label>JEN विज़िट / सप्ताह</label><input id="sj" type="number" min="0" max="7" value="${settings.visits_per_week.jen}"></div>
       <div><label>AEN विज़िट / सप्ताह</label><input id="sa" type="number" min="0" max="7" value="${settings.visits_per_week.aen}"></div>
@@ -460,9 +468,21 @@ VIEWS.admin = async (main) => {
       <div><label>AEN अनुमोदन की सीमा (घंटे)</label><input id="sah" type="number" min="1" value="${settings.aen_approve_hours}"></div>
       <div><label>ठेकेदार के दावे में छूट (%)</label><input id="sot" type="number" min="0" value="${settings.overclaim_tolerance_percent}"></div>
       <div><label>ठेकेदार अपडेट न डाले तो झंडा (दिन)</label><input id="spg" type="number" min="1" value="${settings.progress_gap_days}"></div>
+      <div><label>अवार्ड के बाद वर्क ऑर्डर (दिन)</label><input id="swo" type="number" min="1" value="${settings.wo_issue_days}"></div>
+      <div><label>वर्क ऑर्डर के बाद काम शुरू (दिन)</label><input id="sst" type="number" min="1" value="${settings.start_within_days}"></div>
+      <div><label>बाधा पर अधिकारी का जवाब (दिन)</label><input id="shr" type="number" min="1" value="${settings.hindrance_response_days}"></div>
+      <div><label>बाधा-आपत्ति पर S.E./HQ निर्णय (दिन)</label><input id="shd" type="number" min="1" value="${settings.hindrance_decision_days}"></div>
+      <div><label>रनिंग बिल पास (दिन)</label><input id="sbp" type="number" min="1" value="${settings.bill_pass_days}"></div>
+      <div><label>भुगतान (दिन)</label><input id="spd" type="number" min="1" value="${settings.payment_days}"></div>
+      <div><label>काम पूरा: मुख्यालय का सत्यापन व भुगतान-अनुमोदन (दिन)</label><input id="sfa" type="number" min="1" value="${settings.final_approval_days}"></div>
+      <div><label><input type="checkbox" id="swv" ${settings.weekly_verification ? 'checked' : ''} style="width:auto"> हर हफ़्ते नाप अनिवार्य (बिना नाप का काम हो तो)</label></div>
       </div><p><button class="primary" id="ss">नियम सहेजें</button></p></div>` : ''}
+    <div class="card"><h3>विभाग की सूची से इंजीनियर / पंजीकृत ठेकेदार जोड़ें</h3>
+      <p class="small muted">हर पंक्ति: <b>नाम, मोबाइल, पद (jen/aen/xen/se/contractor), विभाग, पंजीकरण नं. / कर्मचारी ID</b>। Excel से सीधे पेस्ट करें। ये खाते "पहचान जाँची गई" माने जाएँगे और लोग OTP से लॉगिन करेंगे।</p>
+      <textarea id="imp" placeholder="Ramesh Kumar, 9876543210, jen, PWD, EMP1234"></textarea><p><button id="impb">जोड़ें</button> <span id="impr" class="small"></span></p></div>
     <div class="card"><h3>ऑडिट लॉग</h3><div id="audit" class="small muted">…</div></div>`;
   $('#nw').onclick = () => workForm(null, opts);
+  $('#impb').onclick = () => busy($('#impb'), async () => { const r = await api('/api/users/import', { text: $('#imp').value }); $('#impr').textContent = `${r.added} जोड़े` + (r.skipped.length ? `; छोड़े: ${r.skipped.join('; ')}` : ''); });
   main.querySelectorAll('[data-ew]').forEach((b) => (b.onclick = () => workForm(works.find((w) => String(w.id) === b.dataset.ew), opts)));
   $('#nu').onclick = () => userForm(null);
   main.querySelectorAll('[data-eu]').forEach((b) => (b.onclick = () => userForm(users.find((u) => String(u.id) === b.dataset.eu))));
@@ -473,6 +493,7 @@ VIEWS.admin = async (main) => {
       sla_days: Object.fromEntries(Object.keys(REQ_TYPE).map((k) => [k, n('#sl_' + k)])),
       max_gps_accuracy_m: n('#sg'), min_visit_minutes: n('#sm'), escalate_after_days: n('#se'),
       milestone_percent: n('#smp'), milestone_max_amount: n('#sma'), jen_verify_hours: n('#sjh'), aen_approve_hours: n('#sah'), overclaim_tolerance_percent: n('#sot'), progress_gap_days: n('#spg'),
+      wo_issue_days: n('#swo'), start_within_days: n('#sst'), hindrance_response_days: n('#shr'), hindrance_decision_days: n('#shd'), bill_pass_days: n('#sbp'), payment_days: n('#spd'), final_approval_days: n('#sfa'), weekly_verification: $('#swv').checked,
     }, 'PUT');
     toast('नियम सहेजे गए ✓');
   });
@@ -607,7 +628,7 @@ VIEWS.verify = async (main) => {
   main.innerHTML = `<h2>${settings.milestone_percent}% माइलस्टोन सत्यापन</h2>
     <div class="notice">ठेकेदार का दावा हर ${settings.milestone_percent}%${settings.milestone_max_amount ? ` (या ${rupees(settings.milestone_max_amount)})` : ''} पार करते ही: <b>JEN ${settings.jen_verify_hours} घंटे में साइट पर</b> (GPS घेरे के अंदर, लाइव फ़ोटो के साथ) नाप दर्ज करेगा, फिर <b>AEN ${settings.aen_approve_hours} घंटे में</b> अनुमोदन करेगा। देर होते ही लाल झंडा लगता है और मुख्यालय तक दिखता है।</div>
     <div class="list">${vs.map((v) => `<div class="card" style="box-shadow: inset 4px 0 ${v.overdue_hours ? 'var(--bad)' : v.status === 'approved' ? 'var(--ok)' : 'var(--warn)'}">
-      <div class="spread"><b>${esc(v.work)}: ${v.percent}% माइलस्टोन</b><span class="pill ${VSTATUS[v.status][1]}">${VSTATUS[v.status][0]}</span></div>
+      <div class="spread"><b>${esc(v.work)}: ${vkind(v)}</b><span class="pill ${VSTATUS[v.status][1]}">${VSTATUS[v.status][0]}</span></div>
       <p class="small">ठेकेदार का दावा <b>${rupees(v.claimed_amount)}</b> · ${fmtTime(v.created_ts)}
         ${v.measured_amount != null ? ` · JEN का नाप <b>${rupees(v.measured_amount)}</b>${v.overclaim ? ' <span class="pill bad">दावा ज़्यादा</span>' : ''}` : ''}
         ${v.rounds > 1 ? ` · <span class="pill warn">${v.rounds - 1} बार वापस भेजा</span>` : ''}</p>
@@ -632,13 +653,14 @@ VIEWS.verify = async (main) => {
     $('#vs').onclick = () => busy($('#vs'), async () => { await api(`/api/verifications/${b.dataset.vdis}/respond`, { status: 'disagreed', note: $('#vn').value }); $('#dlg').close(); show(); });
   })));
 };
+const vkind = (v) => ({ weekly: 'साप्ताहिक नाप', on_demand: 'ठेकेदार द्वारा माँगा नाप', final: '✅ काम पूरा: अंतिम नाप' }[v.kind] || `${v.percent}% माइलस्टोन`);
 async function verifyDialog(v, mode) {
   let lines = v.lines;
   if (mode === 'measure') { // offer every BOQ item, so items the contractor did not claim can be measured too
     const w = await api('/api/works/' + v.work_id);
     lines = w.items.map((i) => ({ ...(v.lines.find((l) => l.item_id === i.id) || { claimed_qty: 0, measured_qty: null }), item_id: i.id, description: i.description, unit: i.unit, rate: i.rate, code: i.code }));
   }
-  dialog(`<h3>${esc(v.work)}: ${v.percent}% माइलस्टोन</h3>
+  dialog(`<h3>${esc(v.work)}: ${vkind(v)}</h3>
     <div class="table-wrap"><table><thead><tr><th>आइटम</th><th>ठेकेदार का दावा (अब तक)</th><th>JEN का साइट नाप (अब तक)</th></tr></thead><tbody>
     ${lines.map((l) => `<tr><td>${esc(l.description)}<br><span class="small muted">@ ${rupees(l.rate)}/${esc(l.unit)}</span></td><td>${Math.round(l.claimed_qty * 100) / 100} ${esc(l.unit)}</td>
       <td>${mode === 'measure' ? `<input data-mq="${l.item_id}" inputmode="decimal" style="width:100px" value="${l.claimed_qty ? '' : '0'}" placeholder="नाप">` : l.measured_qty != null ? `<b>${l.measured_qty}</b> ${esc(l.unit)}${l.measured_qty < l.claimed_qty ? ' <span class="pill bad">कम</span>' : ''}` : '—'}</td></tr>`).join('')}
@@ -680,7 +702,10 @@ VIEWS.newproject = async (main) => {
       <label>काम का नाम *</label><input id="p_name">
       <div class="row"><div style="flex:1;min-width:150px"><label>W.O. / अनुबंध नं.</label><input id="p_wo"></div><div style="flex:1;min-width:150px"><label>वर्क ऑर्डर राशि (₹) *</label><input id="p_amt" inputmode="decimal"></div></div>
       <div class="row"><div style="flex:1;min-width:150px"><label>विभाग / कार्यालय</label><input id="p_office" placeholder="जैसे: PWD Division-II Jaipur"></div><div style="flex:1;min-width:150px"><label>निविदा आमंत्रण प्राधिकारी (TIA)</label><input id="p_tia" placeholder="जैसे: Chief Engineer PWD Jaipur"></div></div>
-      <div class="row"><div style="flex:1"><label>शुरू</label><input id="p_start" type="date"></div><div style="flex:1"><label>पूरा होने की तिथि</label><input id="p_end" type="date"></div></div></div>
+      <div class="row"><div style="flex:1;min-width:150px"><label>अवार्ड / LoA की तिथि *</label><input id="p_award" type="date"></div><div style="flex:1;min-width:150px"><label>वर्क ऑर्डर की तिथि (जारी न हुआ हो तो खाली)</label><input id="p_wodate" type="date"></div></div>
+      <div class="row"><div style="flex:1;min-width:150px"><label>कार्य अवधि (दिन) *</label><input id="p_dur" type="number" min="1" placeholder="जैसे 60"></div><div style="flex:1;min-width:150px"><label>T.P. % (कम हो तो माइनस, जैसे -8.5)</label><input id="p_tp" inputmode="decimal"></div></div>
+      <label>विभाग</label><input id="p_dept" placeholder="PWD / जल संसाधन / PHED…">
+      <p class="small muted">वर्क ऑर्डर अवार्ड के ${settings.wo_issue_days} दिन में न आए तो XEN पर लाल झंडा लगेगा। वर्क ऑर्डर के ${settings.start_within_days} दिन में काम शुरू करना ठेकेदार की ज़िम्मेदारी है।</p></div>
     <div class="card"><h3>2. लोग</h3>${person('contractor', 'ठेकेदार', true)}${person('jen', 'JEN', true)}${person('aen', 'AEN', true)}${person('xen', 'XEN', false)}</div>
     <div class="card"><h3>3. साइट की जगह</h3>
       <div class="row"><input id="p_lat" placeholder="latitude" style="flex:1"><input id="p_lng" placeholder="longitude" style="flex:1"><button id="p_here">📍 मैं साइट पर हूँ</button></div>
@@ -707,7 +732,7 @@ VIEWS.newproject = async (main) => {
   $('#p_save').onclick = () => busy($('#p_save'), async () => {
     const who = (r) => me.role === r ? undefined : ($(`#p_${r}_mobile`).value.trim() ? { name: $(`#p_${r}_name`).value, mobile: $(`#p_${r}_mobile`).value.trim() } : undefined);
     const r = await api('/api/projects', { name: $('#p_name').value, wo_no: $('#p_wo').value, wo_amount: $('#p_amt').value.replace(/,/g, ''), office: $('#p_office').value, tia: $('#p_tia').value,
-      start_date: $('#p_start').value, end_date: $('#p_end').value, lat: $('#p_lat').value, lng: $('#p_lng').value, radius_m: $('#p_radius').value,
+      award_date: $('#p_award').value, wo_date: $('#p_wodate').value, duration_days: $('#p_dur').value, tp_percent: $('#p_tp').value, department: $('#p_dept').value, lat: $('#p_lat').value, lng: $('#p_lng').value, radius_m: $('#p_radius').value,
       contractor: who('contractor'), jen: who('jen'), aen: who('aen'), xen: who('xen'), items: readItems() });
     dialog(`<h3>प्रोजेक्ट बन गया ✓</h3>${r.new_accounts.length ? `<p>इनके खाते बनाकर नियुक्त कर दिए गए हैं:</p>${r.new_accounts.map((a) => `<p>${ROLE_SHORT[a.role]}: <b>${esc(a.name)}</b> (${esc(a.mobile)})</p>`).join('')}<p class="small muted">इन्हें बताएँ: ऐप खोलें → "OTP से लॉगिन"।</p>` : '<p>सभी लोग पहले से ऐप में थे और नियुक्त हो गए हैं।</p>'}
       <p><button class="primary" onclick="dlg.close()">ठीक है</button></p>`);
@@ -728,12 +753,140 @@ async function openWork(id) {
     <div class="table-wrap"><table><thead><tr><th>आइटम</th><th>BOQ</th><th>दावा</th><th>नाप</th></tr></thead><tbody>
     ${w.items.map((i) => `<tr><td>${esc(i.description)}<br><span class="small muted">${rupees(i.rate)}/${esc(i.unit)}</span></td><td>${i.qty}</td><td>${Math.round(i.claimed_qty * 100) / 100}</td><td>${i.measured_qty ?? '—'}</td></tr>`).join('')}</tbody></table></div>
     <p class="small">JEN: ${esc(w.jen)} · AEN: ${esc(w.aen)} · XEN: ${esc(w.xen) || '—'} · ठेकेदार: ${esc(w.contractor)}</p>
+    <h3 style="margin-top:12px">समय-रेखा</h3>${timelineHtml(w.timeline)}
+    ${!w.wo_date && ['xen', 'aen', 'se', 'admin', 'hq'].includes(me.role) ? `<div class="row" style="margin:8px 0"><input id="wono" placeholder="वर्क ऑर्डर नं." style="flex:1"><input id="wodt" type="date" value="${today}" style="flex:1"><button class="primary" id="woiss">वर्क ऑर्डर जारी करें</button></div>` : ''}
     <div class="row">${me.role !== 'hq' ? '<button class="danger" id="wdisp">⚠ आपत्ति: यह काम/जानकारी गलत है</button>' : ''}<button onclick="dlg.close()">बंद करें</button></div>`, () => {
+    if ($('#woiss')) $('#woiss').onclick = () => busy($('#woiss'), async () => { await api(`/api/works/${w.id}/issue-wo`, { wo_no: $('#wono').value, wo_date: $('#wodt').value }); $('#dlg').close(); toast('वर्क ऑर्डर जारी ✓'); show(); });
     if ($('#wdisp')) $('#wdisp').onclick = () => {
       const note = prompt('आपत्ति का कारण (यह S.E. और मुख्यालय को दिखेगी):');
       if (note) busy($('#wdisp'), async () => { await api(`/api/works/${w.id}/dispute`, { note }); $('#dlg').close(); toast('आपत्ति दर्ज हुई'); });
     };
   });
+}
+
+// ---------- contract timeline block (used in the project detail) ----------
+const HCAT = { site_not_handed: 'साइट / ज़मीन नहीं सौंपी', work_not_shown: 'अधिकारी ने काम / ले-आउट नहीं बताया', drawing_decision: 'ड्रॉइंग / डिज़ाइन / निर्णय नहीं दिया', estimate_wrong: 'एस्टीमेट / BOQ गलत, मात्रा बदली',
+  utility_shifting: 'बिजली खंभे, पाइपलाइन, अतिक्रमण नहीं हटे', payment_delay: 'बिल का भुगतान अटका', department_material: 'विभाग की सामग्री नहीं मिली', other_department: 'विभाग का अन्य कारण' };
+const HCAT_ROLE = { site_not_handed: 'xen', work_not_shown: 'jen', drawing_decision: 'xen', estimate_wrong: 'aen', utility_shifting: 'xen', payment_delay: 'xen', department_material: 'xen', other_department: 'xen' };
+const HSTATE = { pending: ['अधिकारी का जवाब बाकी', 'warn'], deemed: ['जवाब नहीं आया: स्वीकार माना', 'ok'], accepted: ['स्वीकार', 'ok'], disputed: ['आपत्ति: S.E./HQ निर्णय बाकी', 'warn'], rejected: ['S.E./HQ ने अस्वीकार की', 'bad'], auto: ['स्वचालित (रिकॉर्ड से)', 'ok'] };
+function timelineHtml(t) {
+  const row = (k, v, cls = '') => v == null || v === '' ? '' : `<tr><td class="muted">${k}</td><td class="${cls}">${v}</td></tr>`;
+  return `<div class="table-wrap"><table>
+    ${row('अवार्ड (LoA)', t.award_date && fmtDay(t.award_date))}
+    ${row('वर्क ऑर्डर', t.wo_date ? fmtDay(t.wo_date) + (t.wo_late_days ? ` <span class="pill bad">विभाग ${t.wo_late_days} दिन देर से</span>` : ' <span class="pill ok">समय पर</span>') : t.award_date ? `<span class="pill bad">जारी नहीं (${fmtDay(t.wo_due_date)} तक होना था)</span>` : '')}
+    ${row('काम शुरू करने की तिथि', t.official_start && fmtDay(t.official_start) + (t.actual_start ? ` · असल शुरुआत ${fmtDay(t.actual_start)}` : ''))}
+    ${row('अनुबंध के अनुसार पूरा', t.stipulated_end && fmtDay(t.stipulated_end) + (t.duration_days ? ` (${t.duration_days} दिन)` : ''))}
+    ${row('विभाग के कारण समय-वृद्धि', t.extension_days ? `<b>${t.extension_days} दिन</b> (${Object.entries(t.department_days_by_role).map(([r, d]) => `${ROLE_SHORT[r]} ${d}`).join(', ')})` : '0')}
+    ${row('संशोधित पूर्णता तिथि', t.revised_end && `<b>${fmtDay(t.revised_end)}</b>`)}
+    ${row('पूरा हुआ', t.completed_day && fmtDay(t.completed_day))}
+    ${t.stipulated_end ? row('देरी', t.delay_days ? `${t.delay_days} दिन: विभाग ${t.department_delay_days}, ठेकेदार ${t.contractor_delay_days}` : 'नहीं') : ''}
+    ${t.stipulated_end ? row('ठेकेदार पर पेनल्टी', t.contractor_delay_days === 0 ? '<span class="pill ok">नहीं</span>' : t.penalty_applicable ? `<span class="pill bad">${t.contractor_delay_days} दिन की देरी पर लागू</span>` : '<span class="pill warn">बाधा पर निर्णय बाकी: अभी नहीं</span>') : ''}
+  </table></div>`;
+}
+
+// ---------- hindrances (बाधा) and extension of time ----------
+VIEWS.hindrances = async (main) => {
+  const [list, works] = await Promise.all([api('/api/hindrances'), api('/api/works')]);
+  const isC = me.role === 'contractor';
+  main.innerHTML = `<h2>बाधा और समय-वृद्धि</h2>
+    <div class="notice">काम विभाग के कारण रुका (साइट नहीं सौंपी, काम या ड्रॉइंग नहीं बताई, एस्टीमेट गलत निकला) तो ठेकेदार यहाँ उसी दिन दर्ज करे। ज़िम्मेदार अधिकारी को <b>${settings.hindrance_response_days} दिन</b> में स्वीकार या आपत्ति करनी है। <b>जवाब न दे तो बाधा स्वीकार मानी जाती है।</b> आपत्ति पर S.E./मुख्यालय ${settings.hindrance_decision_days} दिन में निर्णय देते हैं, और तब तक समय-वृद्धि ठेकेदार को मिलती रहती है। बाधा के दिन अपने-आप समय-वृद्धि बनते हैं: <b>उतने दिन की देरी पर ठेकेदार पर कोई पेनल्टी नहीं</b>, और ज़िम्मेदारी अधिकारी की दर्ज होती है।</div>
+    ${isC ? `<div class="card"><h3>नई बाधा दर्ज करें</h3>
+      <label>काम</label><select id="hw">${works.filter((w) => w.contractor_id === me.id && w.status === 'active').map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select>
+      <label>बाधा का प्रकार</label><select id="hc">${Object.entries(HCAT).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+      <label>ज़िम्मेदार अधिकारी</label><select id="hr">${['jen', 'aen', 'xen'].map((r) => `<option value="${r}">${ROLE[r]}</option>`).join('')}</select>
+      <label>पूरा विवरण * (क्या माँगा, कब माँगा, किससे बात हुई)</label><textarea id="hd"></textarea>
+      <div class="row"><div style="flex:1"><label>बाधा कब से</label><input id="hf" type="date" value="${today}"></div><div style="flex:1"><label>कब तक (अभी जारी हो तो खाली)</label><input id="ht" type="date"></div></div>
+      <div class="row" style="margin-top:10px"><button id="hp">📷 फ़ोटो / पत्र</button><span id="hpi" class="small muted"></span></div>
+      <p><button class="primary big" id="hs">बाधा दर्ज करें</button></p></div>` : ''}
+    <div class="list">${list.map((h) => `<div class="card"><div class="spread"><b>${esc(h.category_label)}</b><span class="pill ${HSTATE[h.state][1]}">${HSTATE[h.state][0]}</span></div>
+      <p class="small muted">${esc(h.work)} · ज़िम्मेदार: ${ROLE_SHORT[h.responsible_role]} · ${fmtDay(h.from_day)} – ${h.to_day ? fmtDay(h.to_day) : (h.auto ? fmtDay(h.to_effective) : 'जारी')} · <b>${h.days} दिन</b></p>
+      ${h.description ? `<p>${esc(h.description)}</p>` : ''}${photo(h.photo)}
+      ${h.response_note ? `<p class="small"><b>${esc(h.responder)}:</b> ${esc(h.response_note)}</p>` : ''}
+      ${h.decision_note ? `<p class="small"><b>निर्णय (${esc(h.decider)}):</b> ${esc(h.decision_note)}</p>` : ''}
+      ${h.state === 'pending' ? `<p class="small">अधिकारी के जवाब की अंतिम तिथि: ${fmtDay(h.response_due_day)}</p>` : ''}
+      <div class="row">
+        ${isC && !h.auto && !h.to_day ? `<button data-hclose="${h.id}">बाधा ख़त्म हुई (आज)</button>` : ''}
+        ${['jen', 'aen', 'xen'].includes(me.role) && h.state === 'pending' ? `<button class="primary" data-hacc="${h.id}">स्वीकार</button><button class="danger" data-hdis="${h.id}">आपत्ति</button>` : ''}
+        ${['se', 'hq', 'admin'].includes(me.role) && h.state === 'disputed' ? `<button class="primary" data-hdec="${h.id}" data-d="accepted">बाधा सही: समय-वृद्धि दें</button><button class="danger" data-hdec="${h.id}" data-d="rejected">अस्वीकार</button>` : ''}
+      </div></div>`).join('') || '<p class="muted">कोई बाधा दर्ज नहीं।</p>'}</div>`;
+  if (isC && $('#hs')) {
+    let pic = null;
+    $('#hc').onchange = () => { $('#hr').value = HCAT_ROLE[$('#hc').value]; };
+    $('#hc').onchange();
+    $('#hp').onclick = async () => { pic = await pickPhoto(); $('#hpi').textContent = pic ? 'जुड़ी ✓' : ''; };
+    $('#hs').onclick = () => busy($('#hs'), async () => {
+      await api('/api/hindrances', { work_id: Number($('#hw').value), category: $('#hc').value, responsible_role: $('#hr').value, description: $('#hd').value, from_day: $('#hf').value, to_day: $('#ht').value || null, photo: pic });
+      toast('बाधा दर्ज हुई ✓ अधिकारी को सूचना गई'); show();
+    });
+  }
+  main.querySelectorAll('[data-hclose]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/hindrances/${b.dataset.hclose}/close`, {}); show(); })));
+  main.querySelectorAll('[data-hacc]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/hindrances/${b.dataset.hacc}/respond`, { decision: 'accepted' }); show(); })));
+  const noteDialog = (title, cb) => dialog(`<h3>${title}</h3><label>कारण *</label><textarea id="xnote"></textarea><div class="row" style="margin-top:10px"><button class="primary" id="xok">दर्ज करें</button><button onclick="dlg.close()">रद्द</button></div>`,
+    () => { $('#xok').onclick = () => busy($('#xok'), async () => { await cb($('#xnote').value); $('#dlg').close(); show(); }); });
+  main.querySelectorAll('[data-hdis]').forEach((b) => (b.onclick = () => noteDialog('बाधा पर आपत्ति (सबूत सहित)', (note) => api(`/api/hindrances/${b.dataset.hdis}/respond`, { decision: 'disputed', note }))));
+  main.querySelectorAll('[data-hdec]').forEach((b) => (b.onclick = () => noteDialog(b.dataset.d === 'accepted' ? 'बाधा स्वीकार' : 'बाधा अस्वीकार', (note) => api(`/api/hindrances/${b.dataset.hdec}/decide`, { decision: b.dataset.d, note }))));
+};
+
+// ---------- bills: running / final whenever the contractor wants, from verified quantities ----------
+const BSTATUS = { submitted: ['जमा', 'warn'], passed: ['XEN ने पास किया', 'ok'], hq_approved: ['मुख्यालय ने अनुमोदन किया', 'ok'], paid: ['भुगतान हुआ', 'ok'] };
+const ordinal = (n) => ({ 1: 'पहला', 2: 'दूसरा', 3: 'तीसरा', 4: 'चौथा' }[n] || `${n}वाँ`);
+VIEWS.bills = async (main) => {
+  const [bills, works] = await Promise.all([api('/api/bills'), api('/api/works')]);
+  const isC = me.role === 'contractor';
+  let mine = [];
+  if (isC) mine = await Promise.all(works.filter((w) => w.contractor_id === me.id && w.items_count).map((w) => api('/api/works/' + w.id)));
+  main.innerHTML = `<h2>बिल</h2>
+    <div class="notice">बिल सिर्फ़ <b>JEN + AEN से सत्यापित नाप</b> से बनता है, इसलिए दोबारा नाप या जाँच की ज़रूरत नहीं। ठेकेदार जब चाहे रनिंग बिल (पहला, दूसरा, तीसरा…) बना सकता है, और काम पूरा होने पर अंतिम बिल। रनिंग बिल XEN <b>${settings.bill_pass_days} दिन</b> में पास करेगा। अंतिम बिल <b>मुख्यालय / निविदा प्राधिकारी ${settings.final_approval_days} दिन</b> में सत्यापित और अनुमोदित करेगा। भुगतान उसके ${settings.payment_days} दिन में होगा। देर होते ही लाल झंडा लगता है।</div>
+    ${isC ? mine.map((w) => `<div class="card"><div class="spread"><h3>${esc(w.name)}</h3><span class="small">सत्यापित ${rupees(Math.round(w.approved_amount))} · बिल हुए ${w.bills.length}</span></div>
+      <div class="row">
+        ${w.can_bill.running ? `<button class="primary" data-mkbill="${w.id}">＋ ${ordinal(w.bills.length + 1)} रनिंग बिल बनाएँ</button>` : ''}
+        ${w.can_bill.final ? `<button class="primary" data-mkfinal="${w.id}">＋ अंतिम बिल बनाएँ</button>` : ''}
+        ${!w.can_bill.running && !w.can_bill.final && !w.bills.some((b) => b.is_final) ? `<span class="small muted">नया सत्यापित नाप नहीं है।</span> <button data-askv="${w.id}">📏 नाप माँगें (JEN ${settings.jen_verify_hours} घंटे में)</button>` : ''}
+        ${!w.completed_ts ? `<button data-done="${w.id}">✅ काम पूरा घोषित करें</button>` : '<span class="pill ok">काम पूरा घोषित</span>'}
+      </div></div>`).join('') : ''}
+    <div class="list">${bills.map((b) => `<div class="card" style="box-shadow: inset 4px 0 ${b.overdue_days ? 'var(--bad)' : b.status === 'paid' ? 'var(--ok)' : 'var(--warn)'}">
+      <div class="spread"><b>${b.is_final ? 'अंतिम बिल' : ordinal(b.bill_no) + ' रनिंग बिल'}: ${esc(b.work)}</b><span class="pill ${BSTATUS[b.status][1]}">${BSTATUS[b.status][0]}</span></div>
+      <p class="small">इस बिल की राशि <b>${rupees(b.net_amount)}</b> · अब तक कुल ${rupees(b.gross_upto)}${b.tp_percent ? ` (T.P. ${b.tp_percent > 0 ? '+' : ''}${b.tp_percent}%)` : ''} · जमा ${fmtTime(b.created_ts)}</p>
+      ${b.due ? `<p class="small">${ROLE_SHORT[b.due.by]}: ${b.due.what}, अंतिम तिथि ${fmtDay(b.due.due)} ${b.overdue_days ? `<span class="pill bad">🚩 ${b.overdue_days} दिन देर</span>` : ''}</p>` : ''}
+      <p class="small muted">${b.passed_name ? `पास: ${esc(b.passed_name)} ${fmtTime(b.passed_ts)} · ` : ''}${b.hq_name ? `अनुमोदन: ${esc(b.hq_name)} ${fmtTime(b.hq_ts)} · ` : ''}${b.paid_ts ? `भुगतान ${fmtTime(b.paid_ts)} (${esc(b.paid_ref)})` : ''}</p>
+      <div class="row"><button data-print="${b.id}">🖨 बिल देखें / प्रिंट</button>
+        ${b.status === 'submitted' && !b.is_final && (me.role === 'xen' || ['se', 'admin'].includes(me.role)) ? `<button class="primary" data-bact="${b.id}" data-a="pass">✍️ बिल पास करें</button>` : ''}
+        ${b.status === 'submitted' && b.is_final && ['hq', 'admin'].includes(me.role) ? `<button class="primary" data-bact="${b.id}" data-a="hq_approve">✍️ काम सत्यापित: भुगतान अनुमोदित</button>` : ''}
+        ${['passed', 'hq_approved'].includes(b.status) && ['xen', 'se', 'admin', 'hq'].includes(me.role) ? `<button data-bact="${b.id}" data-a="paid">₹ भुगतान दर्ज करें</button>` : ''}</div></div>`).join('') || '<p class="muted">अभी कोई बिल नहीं।</p>'}</div>`;
+  main.querySelectorAll('[data-mkbill],[data-mkfinal]').forEach((b) => (b.onclick = () => busy(b, async () => {
+    const final = !!b.dataset.mkfinal;
+    if (final && !confirm('अंतिम बिल के बाद इस काम का कोई और बिल नहीं बनेगा। आगे बढ़ें?')) return;
+    const r = await api('/api/bills', { work_id: Number(b.dataset.mkbill || b.dataset.mkfinal), final });
+    toast(`${final ? 'अंतिम' : ordinal(r.bill_no)} बिल ${rupees(r.net_amount)} जमा ✓`); show();
+  })));
+  main.querySelectorAll('[data-askv]').forEach((b) => (b.onclick = () => busy(b, async () => { await api(`/api/works/${b.dataset.askv}/request-verification`, {}); toast(`नाप माँगा गया: JEN को ${settings.jen_verify_hours} घंटे में साइट पर आना होगा`); show(); })));
+  main.querySelectorAll('[data-done]').forEach((b) => (b.onclick = () => busy(b, async () => {
+    if (!confirm('काम पूरा घोषित करें? JEN अंतिम नाप लेगा, AEN अनुमोदन करेगा, फिर आप अंतिम बिल बना सकेंगे।')) return;
+    await api(`/api/works/${b.dataset.done}/complete`, {}); toast('काम पूरा घोषित ✓ अंतिम नाप के लिए JEN को सूचना गई'); show();
+  })));
+  main.querySelectorAll('[data-bact]').forEach((b) => (b.onclick = () => busy(b, async () => {
+    let ref = '', note = '';
+    if (b.dataset.a === 'paid') { ref = prompt('भुगतान का संदर्भ (UTR / चेक नं.):'); if (!ref) return; }
+    if (b.dataset.a === 'hq_approve') { note = prompt('टिप्पणी (वैकल्पिक):') || ''; }
+    await api(`/api/bills/${b.dataset.bact}/action`, { action: b.dataset.a, ref, note }); toast('दर्ज हुआ ✓'); show();
+  })));
+  main.querySelectorAll('[data-print]').forEach((b) => (b.onclick = () => printBill(bills.find((x) => String(x.id) === b.dataset.print))));
+};
+function printBill(b) {
+  const n = (x) => Number(x).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const since = b.gross_upto - b.prev_upto;
+  const html = `<!doctype html><html lang="hi"><head><meta charset="utf-8"><title>${b.is_final ? 'Final' : 'RA'} Bill ${b.bill_no}</title>
+    <style>body{font:13px system-ui,sans-serif;margin:24px;color:#000}table{width:100%;border-collapse:collapse}th,td{border:1px solid #444;padding:4px 6px;text-align:right}th:nth-child(2),td:nth-child(2){text-align:left}h2,h3{margin:4px 0}.sig{display:flex;justify-content:space-between;margin-top:60px}</style></head><body>
+    <h2>${b.is_final ? 'अंतिम बिल (Final Bill)' : `${ordinal(b.bill_no)} रनिंग बिल (${b.bill_no} R.A. Bill)`}</h2>
+    <h3>${esc(b.work)}</h3><p>W.O. ${esc(b.wo_no)} · ठेकेदार: ${esc(b.contractor)} · बिल तिथि ${fmtTime(b.created_ts)} · मात्राएँ JEN + AEN सत्यापन #${b.verification_id} से</p>
+    <table><thead><tr><th>#</th><th>आइटम</th><th>इकाई</th><th>दर</th><th>अब तक मात्रा</th><th>पिछले बिल तक</th><th>इस बिल में</th><th>अब तक राशि</th><th>इस बिल की राशि</th></tr></thead><tbody>
+    ${b.lines.map((l, i) => `<tr><td>${esc(l.code) || i + 1}</td><td>${esc(l.description)}</td><td>${esc(l.unit)}</td><td>${n(l.rate)}</td><td>${n(l.upto_qty)}</td><td>${n(l.prev_qty)}</td><td>${n(l.since_qty)}</td><td>${n(l.upto_amount)}</td><td>${n(l.since_amount)}</td></tr>`).join('')}
+    <tr><th colspan="7">कुल</th><th>${n(b.gross_upto)}</th><th>${n(since)}</th></tr>
+    ${b.tp_percent ? `<tr><th colspan="8">T.P. ${b.tp_percent}%</th><th>${n(Math.round(since * b.tp_percent / 100))}</th></tr>` : ''}
+    <tr><th colspan="8">इस बिल की देय राशि</th><th>₹ ${n(b.net_amount)}</th></tr></tbody></table>
+    <div class="sig"><span>ठेकेदार</span><span>JEN</span><span>AEN</span><span>XEN</span>${b.is_final ? '<span>निविदा प्राधिकारी</span>' : ''}</div>
+    <script>print()<\/script></body></html>`;
+  const win = window.open('', '_blank'); win.document.write(html); win.document.close();
 }
 
 window.dlg = $('#dlg');

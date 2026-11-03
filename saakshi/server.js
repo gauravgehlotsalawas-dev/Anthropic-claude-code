@@ -37,6 +37,14 @@ const DEFAULT_SETTINGS = {
   aen_approve_hours: 48,        // AEN must approve within this time of the JEN measurement
   overclaim_tolerance_percent: 5,
   progress_gap_days: 2,         // contractor red flag after this many days without a work update
+  weekly_verification: true,    // claimed work unmeasured for a week → a measurement falls due
+  wo_issue_days: 10,            // work order must be issued within this many days of the award
+  start_within_days: 10,        // contractor must start within this many days of the work order
+  hindrance_response_days: 7,   // officer must accept or object to a hindrance; silence = accepted
+  hindrance_decision_days: 15,  // S.E./HQ must decide an objected hindrance
+  bill_pass_days: 7,            // XEN passes a running bill (quantities are already verified)
+  payment_days: 15,             // payment after the bill is passed / approved
+  final_approval_days: 15,      // top authority verifies the completed work and approves the final payment
 };
 
 // ---------- database ----------
@@ -99,11 +107,24 @@ CREATE TABLE IF NOT EXISTS verifications (
   contractor_status TEXT DEFAULT 'pending', contractor_note TEXT DEFAULT '', contractor_ts TEXT);
 CREATE TABLE IF NOT EXISTS verification_lines (id INTEGER PRIMARY KEY, verification_id INTEGER NOT NULL, item_id INTEGER NOT NULL, claimed_qty REAL NOT NULL, measured_qty REAL);
 CREATE TABLE IF NOT EXISTS work_flags (id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, user_id INTEGER NOT NULL, ts TEXT NOT NULL, kind TEXT NOT NULL, note TEXT DEFAULT '', status TEXT DEFAULT 'open');
+CREATE TABLE IF NOT EXISTS hindrances (
+  id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, raised_by INTEGER NOT NULL, category TEXT NOT NULL, description TEXT NOT NULL,
+  responsible_role TEXT NOT NULL, from_day TEXT NOT NULL, to_day TEXT, created_ts TEXT NOT NULL, response_due_day TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', responded_by INTEGER, responded_ts TEXT, response_note TEXT DEFAULT '',
+  decided_by INTEGER, decided_ts TEXT, decision_note TEXT DEFAULT '', photo TEXT);
+CREATE TABLE IF NOT EXISTS bills (
+  id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, bill_no INTEGER NOT NULL, is_final INTEGER NOT NULL DEFAULT 0, verification_id INTEGER NOT NULL,
+  created_by INTEGER NOT NULL, created_ts TEXT NOT NULL, gross_upto REAL NOT NULL, prev_upto REAL NOT NULL, tp_percent REAL DEFAULT 0, net_amount REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'submitted', passed_by INTEGER, passed_ts TEXT, hq_by INTEGER, hq_ts TEXT, hq_note TEXT DEFAULT '',
+  paid_by INTEGER, paid_ts TEXT, paid_ref TEXT DEFAULT '', note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS bill_lines (id INTEGER PRIMARY KEY, bill_id INTEGER NOT NULL, item_id INTEGER NOT NULL, upto_qty REAL NOT NULL, prev_qty REAL NOT NULL, rate REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS visits_work_day ON visits(work_id, day);
 CREATE INDEX IF NOT EXISTS visits_photo ON visits(photo);
 `);
 // columns added after the first release
-for (const [table, col, def] of [['users', 'verified', 'INTEGER DEFAULT 0'], ['works', 'wo_amount', 'REAL'], ['works', 'tia', "TEXT DEFAULT ''"], ['works', 'created_by', 'INTEGER']]) {
+for (const [table, col, def] of [['users', 'verified', 'INTEGER DEFAULT 0'], ['works', 'wo_amount', 'REAL'], ['works', 'tia', "TEXT DEFAULT ''"], ['works', 'created_by', 'INTEGER'],
+  ['works', 'award_date', 'TEXT'], ['works', 'wo_date', 'TEXT'], ['works', 'duration_days', 'INTEGER'], ['works', 'tp_percent', 'REAL DEFAULT 0'], ['works', 'completed_ts', 'TEXT'], ['works', 'department', "TEXT DEFAULT ''"],
+  ['users', 'department', "TEXT DEFAULT ''"], ['users', 'reg_no', "TEXT DEFAULT ''"], ['users', 'gstin', "TEXT DEFAULT ''"], ['verifications', 'kind', "TEXT DEFAULT 'milestone'"]]) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
 }
 // Records of attendance, DPRs and request history are append-only: no API updates the facts
@@ -193,7 +214,7 @@ function workOr404(user, id) {
   return w;
 }
 const userNames = () => Object.fromEntries(q('SELECT id, name FROM users').all().map((u) => [u.id, u.name]));
-function publicUser(u) { return u && { id: u.id, name: u.name, mobile: u.mobile, role: u.role, office: u.office, active: u.active, verified: u.verified, has_pin: !!u.pin_hash }; }
+function publicUser(u) { return u && { id: u.id, name: u.name, mobile: u.mobile, role: u.role, office: u.office, active: u.active, verified: u.verified, has_pin: !!u.pin_hash, department: u.department || '', reg_no: u.reg_no || '', gstin: u.gstin || '' }; }
 
 // ---------- attendance rules ----------
 // A visit counts when it was inside the site fence, the GPS was accurate enough, the photo was not
@@ -325,16 +346,16 @@ function redFlags(works, s) {
   const add = (w, f) => flags.push({ work_id: w.id, work: w.name, tia: w.tia || '', ...f, against_name: names[f.against_id] || '' });
   for (const w of works.filter((x) => x.status === 'active')) {
     for (const v of q("SELECT * FROM verifications WHERE work_id = ? AND status IN ('pending_jen','pending_aen')").all(w.id)) {
-      const pct = v.milestone_no * s.milestone_percent;
+      const pct = v.kind === 'milestone' || !v.kind ? `${v.milestone_no * s.milestone_percent}% माइलस्टोन` : { weekly: 'साप्ताहिक नाप', on_demand: 'ठेकेदार द्वारा माँगा नाप', final: 'काम पूरा: अंतिम नाप' }[v.kind];
       if (v.status === 'pending_jen' && now > v.jen_due_ts) add(w, { type: 'jen_not_verified', severity: 'high', against_role: 'jen', against_id: w.jen_id, since: v.jen_due_ts, hours: Math.round(hoursBetween(v.jen_due_ts, now)), ref: v.id,
-        text: `ठेकेदार ने ₹${Math.round(v.claimed_amount).toLocaleString('en-IN')} का काम (${pct}% माइलस्टोन) अपलोड किया; JEN ने ${s.jen_verify_hours} घंटे में साइट पर नाप नहीं लिया` });
+        text: `ठेकेदार ने ₹${Math.round(v.claimed_amount).toLocaleString('en-IN')} का काम (${pct}) अपलोड किया; JEN ने ${s.jen_verify_hours} घंटे में साइट पर नाप नहीं लिया` });
       if (v.status === 'pending_aen' && now > v.aen_due_ts) add(w, { type: 'aen_not_approved', severity: 'high', against_role: 'aen', against_id: w.aen_id, since: v.aen_due_ts, hours: Math.round(hoursBetween(v.aen_due_ts, now)), ref: v.id,
-        text: `JEN का नाप (${pct}% माइलस्टोन) ${s.aen_approve_hours} घंटे से AEN के अनुमोदन के बिना पड़ा है` });
+        text: `JEN का नाप (${pct}) ${s.aen_approve_hours} घंटे से AEN के अनुमोदन के बिना पड़ा है` });
     }
     const lastV = q("SELECT * FROM verifications WHERE work_id = ? AND measured_amount IS NOT NULL ORDER BY id DESC LIMIT 1").get(w.id);
     if (lastV && lastV.measured_amount < lastV.claimed_amount * (1 - s.overclaim_tolerance_percent / 100)) add(w, { type: 'contractor_overclaim', severity: 'medium', against_role: 'contractor', against_id: w.contractor_id, since: lastV.jen_ts, ref: lastV.id,
       text: `ठेकेदार का दावा ₹${Math.round(lastV.claimed_amount).toLocaleString('en-IN')}, JEN का साइट नाप ₹${Math.round(lastV.measured_amount).toLocaleString('en-IN')} (${Math.round(100 - lastV.measured_amount / lastV.claimed_amount * 100)}% कम)` });
-    if (w.contractor_id && items(w.id).length) {
+    if (w.contractor_id && items(w.id).length && !w.completed_ts && !(w.award_date && !w.wo_date)) {
       const last = q('SELECT day FROM progress WHERE work_id = ? ORDER BY day DESC LIMIT 1').get(w.id);
       const from = last ? last.day : (w.start_date || istDay(new Date(w.created_at)));
       const gap = daysBetween(from, today);
@@ -348,6 +369,24 @@ function redFlags(works, s) {
     }
     for (const f of q("SELECT * FROM work_flags WHERE work_id = ? AND status = 'open'").all(w.id)) add(w, { type: f.kind, severity: 'medium', against_role: '', against_id: null, since: f.ts, ref: f.id,
       text: `${names[f.user_id]}: ${f.kind === 'assignment_disputed' ? 'यह काम मुझे सौंपा नहीं गया / जानकारी गलत है' : 'आपत्ति'}: ${f.note}` });
+    // ---- contract timeline, hindrances and bills ----
+    const t = timeline(w, s);
+    if (w.award_date && !w.wo_date && t.wo_late_days > 0) add(w, { type: 'wo_not_issued', severity: 'high', against_role: 'xen', against_id: w.xen_id, since: t.wo_due_date, days: t.wo_late_days,
+      text: `काम ${w.award_date} को अवार्ड हुआ; ${s.wo_issue_days} दिन में वर्क ऑर्डर जारी होना था, ${t.wo_late_days} दिन से नहीं हुआ` });
+    if (w.wo_date && !t.actual_start && t.start_late_days > 0) add(w, { type: 'contractor_not_started', severity: 'medium', against_role: 'contractor', against_id: w.contractor_id, since: t.official_start, days: t.start_late_days,
+      text: `वर्क ऑर्डर ${w.wo_date} को मिला; ${t.start_late_days} दिन से काम शुरू नहीं हुआ` });
+    for (const h of t.hindrances.filter((x) => x.state === 'disputed' && x.decision_due_day < today)) add(w, { type: 'hindrance_undecided', severity: 'medium', against_role: 'se', against_id: null, since: h.decision_due_day, ref: h.id,
+      text: `बाधा "${h.category_label}" पर अधिकारी ने आपत्ति की; S.E./मुख्यालय ने ${s.hindrance_decision_days} दिन में निर्णय नहीं दिया (तब तक समय-वृद्धि ठेकेदार को मिलती रहेगी)` });
+    const deptDays = Object.entries(t.department_days_by_role).filter(([, d]) => d > 0);
+    if (deptDays.length) add(w, { type: 'department_delay', severity: 'medium', against_role: deptDays.sort((a, b) => b[1] - a[1])[0][0], against_id: w[deptDays[0][0] + '_id'] || null, since: t.stipulated_end || '', days: t.extension_days,
+      text: `विभाग के कारण ${t.extension_days} दिन की बाधा (${deptDays.map(([r, d]) => `${r.toUpperCase()} ${d} दिन`).join(', ')}): इतनी समय-वृद्धि ठेकेदार को, ज़िम्मेदारी अधिकारियों की` });
+    if (t.contractor_delay_days > 0) add(w, { type: 'contractor_delay', severity: 'medium', against_role: 'contractor', against_id: w.contractor_id, since: t.revised_end, days: t.contractor_delay_days,
+      text: `संशोधित तिथि ${t.revised_end} (समय-वृद्धि ${t.extension_days} दिन सहित) के बाद ${t.contractor_delay_days} दिन देरी${t.penalty_applicable ? '' : ' (बाधा पर निर्णय बाकी, अभी पेनल्टी नहीं)'}` });
+    for (const b of q("SELECT * FROM bills WHERE work_id = ? AND status IN ('submitted','passed','hq_approved')").all(w.id)) {
+      const d = billDue(b, s);
+      if (d && today > d.due) add(w, { type: b.is_final && b.status === 'submitted' ? 'final_not_approved' : 'bill_delayed', severity: 'high', against_role: d.by, against_id: d.by === 'xen' ? w.xen_id : null, since: d.due, days: daysBetween(d.due, today), ref: b.id,
+        text: `${b.is_final ? 'अंतिम बिल' : `${b.bill_no}वाँ रनिंग बिल`} (₹${Math.round(b.net_amount).toLocaleString('en-IN')}): ${d.what} ${daysBetween(d.due, today)} दिन से बाकी` });
+    }
     for (const role of OFFICER_ROLES) {
       const u = w[role + '_id'] && q('SELECT verified, pin_hash FROM users WHERE id = ?').get(w[role + '_id']);
       if (u && !u.pin_hash) add(w, { type: 'officer_not_joined', severity: 'low', against_role: role, against_id: w[role + '_id'], since: w.created_at, text: `${role.toUpperCase()} ने अभी तक ऐप में लॉगिन नहीं किया` });
@@ -355,6 +394,133 @@ function redFlags(works, s) {
   }
   const rank = { high: 0, medium: 1, low: 2 };
   return flags.sort((a, b) => rank[a.severity] - rank[b.severity] || String(a.since).localeCompare(String(b.since)));
+}
+
+// ---------- contract timeline: award → work order → start → stipulated end → extension → completion ----------
+// Delay is split by who caused it. The department's delays (late work order, hindrances the officers accepted or
+// did not answer, decisions/inspections they did not give in time) extend the time and can never be a penalty
+// on the contractor. Only delay beyond the revised date, with no pending hindrance, is the contractor's.
+const HINDRANCE_CATEGORIES = {
+  site_not_handed: { label: 'साइट / ज़मीन नहीं सौंपी', role: 'xen' },
+  work_not_shown: { label: 'अधिकारी ने काम / ले-आउट नहीं बताया', role: 'jen' },
+  drawing_decision: { label: 'ड्रॉइंग / डिज़ाइन / निर्णय नहीं दिया', role: 'xen' },
+  estimate_wrong: { label: 'एस्टीमेट / BOQ गलत, मात्रा बदली', role: 'aen' },
+  utility_shifting: { label: 'बिजली खंभे, पाइपलाइन, अतिक्रमण नहीं हटे', role: 'xen' },
+  payment_delay: { label: 'बिल का भुगतान अटका', role: 'xen' },
+  department_material: { label: 'विभाग की सामग्री नहीं मिली', role: 'xen' },
+  other_department: { label: 'विभाग का अन्य कारण', role: 'xen' },
+};
+function mergedDays(intervals) { // [{from, to}] inclusive days; overlaps counted once
+  const iv = intervals.filter((i) => i.from && i.to && i.to >= i.from).sort((a, b) => a.from.localeCompare(b.from));
+  let total = 0, curFrom = null, curTo = null;
+  for (const i of iv) {
+    if (curTo && i.from <= addDays(curTo, 1)) { if (i.to > curTo) curTo = i.to; continue; }
+    if (curFrom) total += daysBetween(curFrom, curTo) + 1;
+    curFrom = i.from; curTo = i.to;
+  }
+  if (curFrom) total += daysBetween(curFrom, curTo) + 1;
+  return total;
+}
+// hindrance status as it stands today: an officer who does not answer in time is taken to have accepted it
+function hindranceState(h, s, today = istDay()) {
+  if (h.status === 'pending' && today > h.response_due_day) return 'deemed';
+  return h.status;
+}
+function hindrances(w, s) {
+  const today = istDay();
+  const end = w.completed_ts ? istDay(new Date(w.completed_ts)) : today;
+  const names = userNames();
+  const list = q('SELECT * FROM hindrances WHERE work_id = ? ORDER BY from_day').all(w.id).map((h) => {
+    const state = hindranceState(h, s, today);
+    return { ...h, state, counts: ['accepted', 'deemed', 'disputed', 'pending'].includes(state), // disputed counts until S.E./HQ reject it
+      to_effective: h.to_day || end, days: daysBetween(h.from_day, h.to_day || end) + 1,
+      category_label: HINDRANCE_CATEGORIES[h.category]?.label || h.category, raised_by_name: names[h.raised_by], responder: names[h.responded_by] || '', decider: names[h.decided_by] || '',
+      decision_due_day: h.status === 'disputed' ? addDays(istDay(new Date(h.responded_ts)), s.hindrance_decision_days) : null };
+  });
+  // automatic hindrances from the system's own record: decisions and inspections the officers did not give in time
+  for (const r of q("SELECT * FROM requests WHERE work_id = ? AND type IN ('decision','inspection')").all(w.id)) {
+    const doneDay = r.done_ts ? istDay(new Date(r.done_ts)) : null;
+    const to = doneDay || end;
+    if (to > r.due_day) list.push({ id: 'R' + r.id, auto: true, category: r.type === 'decision' ? 'drawing_decision' : 'work_not_shown', category_label: `(स्वचालित) अनुरोध #${r.id} "${r.title}" समय पर पूरा नहीं`,
+      description: '', responsible_role: r.type === 'decision' ? 'xen' : 'jen', from_day: addDays(r.due_day, 1), to_effective: to, days: daysBetween(r.due_day, to), state: 'auto', counts: true });
+  }
+  return list;
+}
+function timeline(w, s) {
+  const today = istDay();
+  const t = { award_date: w.award_date || null, wo_date: w.wo_date || null, duration_days: w.duration_days || null };
+  if (w.award_date) {
+    t.wo_due_date = addDays(w.award_date, s.wo_issue_days);
+    const woDay = w.wo_date || today;
+    t.wo_late_days = Math.max(0, daysBetween(t.wo_due_date, woDay));
+  }
+  if (w.wo_date) {
+    t.official_start = w.start_date || addDays(w.wo_date, s.start_within_days);
+    const first = q('SELECT MIN(day) AS d FROM progress WHERE work_id = ?').get(w.id).d;
+    t.actual_start = first || null;
+    t.start_late_days = Math.max(0, daysBetween(t.official_start, first || today));
+    t.stipulated_end = w.end_date || (w.duration_days ? addDays(t.official_start, w.duration_days - 1) : null);
+  } else if (w.end_date) t.stipulated_end = w.end_date;
+  const hs = hindrances(w, s);
+  t.hindrances = hs;
+  t.extension_days = mergedDays(hs.filter((h) => h.counts).map((h) => ({ from: h.from_day, to: h.to_effective })));
+  const byRole = {};
+  for (const h of hs.filter((x) => x.counts)) byRole[h.responsible_role] = (byRole[h.responsible_role] || 0) + h.days;
+  t.department_days_by_role = byRole;
+  t.completed_day = w.completed_ts ? istDay(new Date(w.completed_ts)) : null;
+  if (t.stipulated_end) {
+    t.revised_end = addDays(t.stipulated_end, t.extension_days);
+    const upto = t.completed_day || today;
+    t.delay_days = Math.max(0, daysBetween(t.stipulated_end, upto));
+    t.contractor_delay_days = Math.max(0, daysBetween(t.revised_end, upto));
+    t.department_delay_days = t.delay_days - t.contractor_delay_days;
+    t.penalty_applicable = t.contractor_delay_days > 0 && !hs.some((h) => h.state === 'pending' || h.state === 'disputed');
+  }
+  return t;
+}
+
+// ---------- verification on demand / weekly, and bills from verified quantities ----------
+function createVerification(w, kind, s) {
+  if (q("SELECT 1 FROM verifications WHERE work_id = ? AND status IN ('pending_jen','pending_aen')").get(w.id)) return null;
+  const claimed = claimedAmount(w.id);
+  const step = milestoneStep(w, s);
+  const ts = nowIso();
+  const id = Number(q(`INSERT INTO verifications (work_id, milestone_no, claimed_amount, created_ts, jen_due_ts, jen_id, kind) VALUES (?,?,?,?,?,?,?)`)
+    .run(w.id, step ? Math.floor(claimed / step + 1e-9) : 0, Math.round(claimed), ts, addHours(ts, s.jen_verify_hours), w.jen_id, kind).lastInsertRowid);
+  const c = claimedQty(w.id);
+  for (const it of items(w.id)) if (c[it.id] || kind === 'final') q('INSERT INTO verification_lines (verification_id, item_id, claimed_qty) VALUES (?,?,?)').run(id, it.id, c[it.id] || 0);
+  const jen = w.jen_id && q('SELECT mobile FROM users WHERE id = ?').get(w.jen_id);
+  if (jen) sendSms(jen.mobile, `SiteSaakshi: "${w.name}" का ${kind === 'final' ? 'अंतिम (काम पूरा)' : kind === 'weekly' ? 'साप्ताहिक' : 'ठेकेदार द्वारा माँगा'} नाप। ${s.jen_verify_hours} घंटे में साइट पर जाकर नाप लें।`);
+  return id;
+}
+// weekly: if the contractor has claimed work that no one has measured for a week, a measurement falls due
+function weeklyVerifications() {
+  const s = getSettings();
+  if (!s.weekly_verification) return;
+  for (const w of q("SELECT * FROM works WHERE status = 'active' AND completed_ts IS NULL").all()) {
+    const last = q('SELECT MAX(created_ts) AS t FROM verifications WHERE work_id = ?').get(w.id).t;
+    const lastMeasured = q("SELECT claimed_amount FROM verifications WHERE work_id = ? ORDER BY id DESC LIMIT 1").get(w.id);
+    const claimed = claimedAmount(w.id);
+    if (claimed <= (lastMeasured?.claimed_amount || 0) + 1) continue;
+    const since = last || q('SELECT MIN(server_ts) AS t FROM progress WHERE work_id = ?').get(w.id).t;
+    if (since && hoursBetween(since, nowIso()) >= 7 * 24) createVerification(w, 'weekly', s);
+  }
+}
+function latestApproved(workId) {
+  const v = q("SELECT * FROM verifications WHERE work_id = ? AND status = 'approved' ORDER BY id DESC LIMIT 1").get(workId);
+  if (!v) return null;
+  return { v, qty: Object.fromEntries(q('SELECT item_id, measured_qty FROM verification_lines WHERE verification_id = ?').all(v.id).map((l) => [l.item_id, l.measured_qty || 0])) };
+}
+function billDetail(b) {
+  const lines = q('SELECT bl.*, i.description, i.unit, i.code, i.qty AS boq_qty FROM bill_lines bl JOIN work_items i ON i.id = bl.item_id WHERE bl.bill_id = ? ORDER BY i.id').all(b.id)
+    .map((l) => ({ ...l, since_qty: l.upto_qty - l.prev_qty, upto_amount: l.upto_qty * l.rate, since_amount: (l.upto_qty - l.prev_qty) * l.rate }));
+  return { ...b, lines };
+}
+function billDue(b, s) {
+  if (b.status === 'submitted' && !b.is_final) return { by: 'xen', due: addDays(istDay(new Date(b.created_ts)), s.bill_pass_days), what: 'बिल पास करना' };
+  if (b.status === 'submitted' && b.is_final) return { by: 'hq', due: addDays(istDay(new Date(b.created_ts)), s.final_approval_days), what: 'अंतिम बिल का सत्यापन और भुगतान-अनुमोदन' };
+  if (b.status === 'passed' || b.status === 'hq_approved') return { by: 'xen', due: addDays(istDay(new Date(b.passed_ts || b.hq_ts)), s.payment_days), what: 'भुगतान' };
+  return null;
 }
 
 // SMS: set SMS_WEBHOOK_URL to any gateway that accepts POST {to, message}. Otherwise messages go to the server log.
@@ -498,6 +664,7 @@ route('GET', '/api/works', async (req, res, { user }) => {
       open_requests: q("SELECT COUNT(*) AS n FROM requests WHERE work_id = ? AND status IN ('open','reopened')").get(w.id).n,
       dpr_today: !!q('SELECT 1 FROM dprs WHERE work_id = ? AND day = ?').get(w.id, today),
       claimed_amount: claimedAmount(w.id), boq_total: boqTotal(w.id), items_count: items(w.id).length,
+      timeline: (({ hindrances: _h, ...t }) => t)(timeline(w, getSettings())),
       progress_today: !!q('SELECT 1 FROM progress WHERE work_id = ? AND day = ?').get(w.id, today),
       pending_verification: q("SELECT status FROM verifications WHERE work_id = ? AND status IN ('pending_jen','pending_aen') ORDER BY id LIMIT 1").get(w.id)?.status || null,
     };
@@ -536,6 +703,7 @@ route('PUT', '/api/works/:id', async (req, res, { user, params }) => {
   if (!old) throw httpErr(404, 'काम नहीं मिला');
   const body = await readJson(req);
   const f = workFields(body, old);
+  for (const k of ['award_date', 'wo_date', 'duration_days', 'tp_percent', 'department']) if (body[k] !== undefined) q(`UPDATE works SET ${k} = ? WHERE id = ?`).run(k === 'duration_days' || k === 'tp_percent' ? num(body[k]) : str(body[k], 200) || null, old.id);
   if (body.wo_amount !== undefined || body.tia !== undefined) q('UPDATE works SET wo_amount = ?, tia = ? WHERE id = ?').run(body.wo_amount !== undefined ? num(body.wo_amount) : old.wo_amount, body.tia !== undefined ? str(body.tia, 200) : old.tia, old.id);
   q(`UPDATE works SET name=?, wo_no=?, office=?, contractor_id=?, jen_id=?, aen_id=?, xen_id=?, lat=?, lng=?, radius_m=?, start_date=?, end_date=?, status=? WHERE id=?`)
     .run(f.name, f.wo_no, f.office, f.contractor_id, f.jen_id, f.aen_id, f.xen_id, f.lat, f.lng, f.radius_m, f.start_date, f.end_date, f.status, old.id);
@@ -819,6 +987,7 @@ route('POST', '/api/otp/verify', async (req, res) => {
     if (!SELF_SIGNUP_ROLES.includes(b.role)) throw httpErr(400, 'अपनी भूमिका चुनें');
     if (!str(b.name)) throw httpErr(400, 'अपना नाम लिखें');
     const id = createUser({ name: str(b.name, 120), mobile, role: b.role, office: str(b.office, 200), pin: b.pin, verified: 0 });
+    q('UPDATE users SET department = ?, reg_no = ?, gstin = ? WHERE id = ?').run(str(b.department, 200), str(b.reg_no, 60), str(b.gstin, 20).toUpperCase(), id);
     audit(id, 'self_signup', { role: b.role });
     u = q('SELECT * FROM users WHERE id = ?').get(id);
   } else {
@@ -867,6 +1036,13 @@ route('POST', '/api/projects', async (req, res, { user }) => {
   if (!list.length) throw httpErr(400, 'कम से कम एक BOQ आइटम (काम, मात्रा, दर) डालें');
   const woAmount = num(b.wo_amount);
   if (woAmount != null && woAmount <= 0) throw httpErr(400, 'वर्क ऑर्डर राशि सही लिखें');
+  const day = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(x || '') ? x : null);
+  const awardDate = day(b.award_date), woDate = day(b.wo_date);
+  if (!awardDate && !woDate) throw httpErr(400, 'अवार्ड (LoA) की तारीख़ या वर्क ऑर्डर की तारीख़ लिखें');
+  if ((awardDate && awardDate > istDay()) || (woDate && woDate > istDay())) throw httpErr(400, 'भविष्य की तारीख़ नहीं');
+  if (woDate && !str(b.wo_no)) throw httpErr(400, 'वर्क ऑर्डर नंबर लिखें');
+  const duration = num(b.duration_days);
+  if (duration != null && (duration < 1 || duration > 3650)) throw httpErr(400, 'कार्य अवधि (दिन) सही लिखें');
   const people = { contractor: null, jen: null, aen: null, xen: null };
   const created = [];
   db.exec('BEGIN');
@@ -881,6 +1057,7 @@ route('POST', '/api/projects', async (req, res, { user }) => {
     const f = workFields({ ...b, contractor_id: people.contractor, jen_id: people.jen, aen_id: people.aen, xen_id: people.xen, status: 'active' });
     const id = Number(q(`INSERT INTO works (name, wo_no, office, contractor_id, jen_id, aen_id, xen_id, lat, lng, radius_m, start_date, end_date, status, created_at, wo_amount, tia, created_by)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(f.name, f.wo_no, f.office, f.contractor_id, f.jen_id, f.aen_id, f.xen_id, f.lat, f.lng, f.radius_m, f.start_date, f.end_date, 'active', nowIso(), woAmount, str(b.tia, 200), user.id).lastInsertRowid);
+    q('UPDATE works SET award_date = ?, wo_date = ?, duration_days = ?, tp_percent = ?, department = ? WHERE id = ?').run(awardDate, woDate, duration, num(b.tp_percent) || 0, str(b.department, 200), id);
     for (const it of list) q('INSERT INTO work_items (work_id, code, description, unit, qty, rate) VALUES (?,?,?,?,?,?)').run(id, it.code, it.description, it.unit, it.qty, it.rate);
     audit(user.id, 'project_created', { id, ...f, wo_amount: woAmount, items: list.length });
     db.exec('COMMIT');
@@ -908,6 +1085,10 @@ route('GET', '/api/works/:id', async (req, res, { user, params }) => {
     approved_amount: approved ? approved.measured_amount : 0, milestone_step: milestoneStep(w, s),
     verifications: q('SELECT * FROM verifications WHERE work_id = ? ORDER BY id DESC').all(w.id).map((v) => decorateVerification(v, s)),
     flags: redFlags([w], s),
+    timeline: timeline(w, s),
+    bills: q('SELECT * FROM bills WHERE work_id = ? ORDER BY bill_no').all(w.id),
+    can_bill: (() => { const la = latestApproved(w.id); const pb = q('SELECT verification_id, is_final FROM bills WHERE work_id = ? ORDER BY bill_no DESC LIMIT 1').get(w.id);
+      return { running: !!la && !pb?.is_final && pb?.verification_id !== la.v.id, final: !!la && !pb?.is_final && !!w.completed_ts && la.v.kind === 'final' }; })(),
   });
 });
 route('POST', '/api/works/:id/dispute', async (req, res, { user, params }) => {
@@ -1064,6 +1245,210 @@ route('GET', '/api/flags', async (req, res, { user, query }) => {
   send(res, 200, flags);
 });
 
+// ---- work order issue, completion, on-demand measurement ----
+route('POST', '/api/works/:id/issue-wo', async (req, res, { user, params }) => {
+  const w = workOr404(user, params.id);
+  if (!(OVERSIGHT.includes(user.role) || (['xen', 'aen'].includes(user.role) && w[user.role + '_id'] === user.id))) throw httpErr(403, 'वर्क ऑर्डर XEN / S.E. जारी करते हैं');
+  if (w.wo_date) throw httpErr(400, 'वर्क ऑर्डर पहले से जारी है');
+  const b = await readJson(req);
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(b.wo_date || '') ? b.wo_date : istDay();
+  if (day > istDay()) throw httpErr(400, 'भविष्य की तारीख़ नहीं');
+  if (w.award_date && day < w.award_date) throw httpErr(400, 'वर्क ऑर्डर अवार्ड से पहले का नहीं हो सकता');
+  if (!str(b.wo_no)) throw httpErr(400, 'वर्क ऑर्डर नंबर लिखें');
+  q('UPDATE works SET wo_no = ?, wo_date = ? WHERE id = ?').run(str(b.wo_no, 100), day, w.id);
+  audit(user.id, 'wo_issued', { work: w.id, wo_no: b.wo_no, wo_date: day });
+  const c = w.contractor_id && q('SELECT mobile FROM users WHERE id = ?').get(w.contractor_id);
+  if (c) sendSms(c.mobile, `SiteSaakshi: "${w.name}" का वर्क ऑर्डर ${b.wo_no} जारी। ${getSettings().start_within_days} दिन में काम शुरू करें।`);
+  send(res, 200, { ok: true });
+});
+route('POST', '/api/works/:id/request-verification', async (req, res, { user, params }) => {
+  need(user, ['contractor']);
+  const w = workOr404(user, params.id);
+  if (w.contractor_id !== user.id) throw httpErr(403, 'यह आपका काम नहीं है');
+  const last = q('SELECT claimed_amount FROM verifications WHERE work_id = ? ORDER BY id DESC LIMIT 1').get(w.id);
+  if (claimedAmount(w.id) <= (last?.claimed_amount || 0) + 1) throw httpErr(400, 'पिछले नाप के बाद कोई नया काम अपलोड नहीं हुआ');
+  const id = createVerification(w, 'on_demand', getSettings());
+  if (!id) throw httpErr(400, 'एक नाप पहले से बाकी है; वही पूरा होगा');
+  send(res, 201, { id });
+});
+route('POST', '/api/works/:id/complete', async (req, res, { user, params }) => {
+  need(user, ['contractor']);
+  const w = workOr404(user, params.id);
+  if (w.contractor_id !== user.id) throw httpErr(403, 'यह आपका काम नहीं है');
+  if (w.completed_ts) throw httpErr(400, 'काम पहले ही पूरा घोषित है');
+  const s = getSettings();
+  const ts = nowIso();
+  q('UPDATE works SET completed_ts = ? WHERE id = ?').run(ts, w.id);
+  // a pending measurement becomes the final one (it keeps its deadline); otherwise a new final measurement starts
+  const pend = q("SELECT * FROM verifications WHERE work_id = ? AND status IN ('pending_jen','pending_aen') ORDER BY id DESC LIMIT 1").get(w.id);
+  let vid;
+  if (pend) {
+    vid = pend.id;
+    q("UPDATE verifications SET kind = 'final' WHERE id = ?").run(vid);
+    const have = new Set(q('SELECT item_id FROM verification_lines WHERE verification_id = ?').all(vid).map((l) => l.item_id));
+    const c = claimedQty(w.id);
+    for (const it of items(w.id)) if (!have.has(it.id)) q('INSERT INTO verification_lines (verification_id, item_id, claimed_qty) VALUES (?,?,?)').run(vid, it.id, c[it.id] || 0);
+  } else vid = createVerification(w, 'final', s);
+  audit(user.id, 'work_completed', { work: w.id });
+  send(res, 200, { verification_id: vid });
+});
+
+// ---- hindrances (बाधा) → automatic extension of time ----
+route('GET', '/api/hindrances', async (req, res, { user, query }) => {
+  const s = getSettings();
+  const ws = query.work_id ? [workOr404(user, query.work_id)] : worksFor(user);
+  const out = [];
+  for (const w of ws) for (const h of timeline(w, s).hindrances) out.push({ ...h, work: w.name, work_id: w.id });
+  send(res, 200, out.sort((a, b) => String(b.from_day).localeCompare(String(a.from_day))));
+});
+route('POST', '/api/hindrances', async (req, res, { user }) => {
+  need(user, ['contractor']);
+  const b = await readJson(req);
+  const w = workOr404(user, b.work_id);
+  if (w.contractor_id !== user.id) throw httpErr(403, 'यह आपका काम नहीं है');
+  const cat = HINDRANCE_CATEGORIES[b.category];
+  if (!cat) throw httpErr(400, 'बाधा का प्रकार चुनें');
+  if (!str(b.description)) throw httpErr(400, 'बाधा का पूरा विवरण लिखें');
+  const today = istDay();
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(b.from_day || '') ? b.from_day : today;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(b.to_day || '') ? b.to_day : null;
+  if (from > today || (to && (to < from || to > today))) throw httpErr(400, 'तारीख़ें सही भरें');
+  const role = OFFICER_ROLES.includes(b.responsible_role) ? b.responsible_role : cat.role;
+  const s = getSettings();
+  const id = Number(q(`INSERT INTO hindrances (work_id, raised_by, category, description, responsible_role, from_day, to_day, created_ts, response_due_day, photo) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(w.id, user.id, b.category, str(b.description, 3000), role, from, to, nowIso(), addDays(today, s.hindrance_response_days), savePhoto(b.photo)).lastInsertRowid);
+  const o = w[role + '_id'] && q('SELECT mobile FROM users WHERE id = ?').get(w[role + '_id']);
+  if (o) sendSms(o.mobile, `SiteSaakshi: "${w.name}" पर ठेकेदार ने बाधा दर्ज की: ${cat.label}। ${s.hindrance_response_days} दिन में जवाब न देने पर इसे स्वीकार माना जाएगा।`);
+  send(res, 201, { id });
+});
+const hinOr404 = (user, id) => {
+  const h = q('SELECT * FROM hindrances WHERE id = ?').get(Number(id));
+  if (!h) throw httpErr(404, 'बाधा नहीं मिली');
+  return { h, w: workOr404(user, h.work_id) };
+};
+route('POST', '/api/hindrances/:id/close', async (req, res, { user, params }) => {
+  const { h, w } = hinOr404(user, params.id);
+  if (user.role !== 'contractor' || w.contractor_id !== user.id) throw httpErr(403, 'बाधा का अंत ठेकेदार दर्ज करता है');
+  if (h.to_day) throw httpErr(400, 'पहले ही बंद है');
+  const b = await readJson(req);
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(b.to_day || '') ? b.to_day : istDay();
+  if (to < h.from_day || to > istDay()) throw httpErr(400, 'तारीख़ सही भरें');
+  q('UPDATE hindrances SET to_day = ? WHERE id = ?').run(to, h.id);
+  send(res, 200, { ok: true });
+});
+route('POST', '/api/hindrances/:id/respond', async (req, res, { user, params }) => {
+  need(user, OFFICER_ROLES);
+  const { h, w } = hinOr404(user, params.id);
+  if (w[user.role + '_id'] !== user.id) throw httpErr(403, 'आप इस काम पर नियुक्त नहीं हैं');
+  const b = await readJson(req);
+  const state = hindranceState(h, getSettings());
+  if (h.status !== 'pending') throw httpErr(400, 'जवाब पहले दिया जा चुका है');
+  if (b.decision === 'disputed') {
+    if (state === 'deemed') throw httpErr(400, 'जवाब की समय-सीमा निकल चुकी है; बाधा स्वीकार मानी गई');
+    if (!str(b.note)) throw httpErr(400, 'आपत्ति का कारण और सबूत लिखें');
+  } else if (b.decision !== 'accepted') throw httpErr(400, 'स्वीकार या आपत्ति चुनें');
+  q('UPDATE hindrances SET status = ?, responded_by = ?, responded_ts = ?, response_note = ? WHERE id = ?').run(b.decision, user.id, nowIso(), str(b.note, 2000), h.id);
+  audit(user.id, 'hindrance_' + b.decision, { id: h.id });
+  send(res, 200, { ok: true });
+});
+route('POST', '/api/hindrances/:id/decide', async (req, res, { user, params }) => {
+  need(user, OVERSIGHT);
+  const { h } = hinOr404(user, params.id);
+  if (h.status !== 'disputed') throw httpErr(400, 'केवल आपत्ति वाली बाधा पर निर्णय होता है');
+  const b = await readJson(req);
+  if (!['accepted', 'rejected'].includes(b.decision)) throw httpErr(400, 'निर्णय चुनें');
+  if (!str(b.note)) throw httpErr(400, 'निर्णय का कारण लिखें');
+  q('UPDATE hindrances SET status = ?, decided_by = ?, decided_ts = ?, decision_note = ? WHERE id = ?').run(b.decision, user.id, nowIso(), str(b.note, 2000), h.id);
+  audit(user.id, 'hindrance_decided_' + b.decision, { id: h.id, note: str(b.note) });
+  send(res, 200, { ok: true });
+});
+
+// ---- bills: the contractor makes a running or final bill whenever he wants, from verified quantities ----
+route('POST', '/api/bills', async (req, res, { user }) => {
+  need(user, ['contractor']);
+  const b = await readJson(req);
+  const w = workOr404(user, b.work_id);
+  if (w.contractor_id !== user.id) throw httpErr(403, 'यह आपका काम नहीं है');
+  const la = latestApproved(w.id);
+  if (!la) throw httpErr(400, 'अभी कोई JEN + AEN से सत्यापित नाप नहीं है। "नाप माँगें" दबाएँ');
+  const prev = q('SELECT * FROM bills WHERE work_id = ? ORDER BY bill_no DESC LIMIT 1').get(w.id);
+  if (prev?.is_final) throw httpErr(400, 'अंतिम बिल बन चुका है');
+  const final = !!b.final;
+  if (final && (!w.completed_ts || la.v.kind !== 'final')) throw httpErr(400, 'अंतिम बिल के लिए पहले "काम पूरा" घोषित करें और अंतिम नाप का JEN + AEN सत्यापन होने दें');
+  if (prev && prev.verification_id === la.v.id && !final) throw httpErr(400, 'पिछले बिल के बाद नया सत्यापित नाप नहीं है। "नाप माँगें" दबाएँ');
+  const prevQty = prev ? Object.fromEntries(q('SELECT item_id, upto_qty FROM bill_lines WHERE bill_id = ?').all(prev.id).map((l) => [l.item_id, l.upto_qty])) : {};
+  const its = items(w.id);
+  const gross = its.reduce((t, i) => t + (la.qty[i.id] || 0) * i.rate, 0);
+  const prevGross = prev ? prev.gross_upto : 0;
+  const tp = w.tp_percent || 0;
+  const net = Math.round((gross - prevGross) * (1 + tp / 100));
+  db.exec('BEGIN');
+  try {
+    const id = Number(q(`INSERT INTO bills (work_id, bill_no, is_final, verification_id, created_by, created_ts, gross_upto, prev_upto, tp_percent, net_amount, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(w.id, (prev?.bill_no || 0) + 1, final ? 1 : 0, la.v.id, user.id, nowIso(), Math.round(gross), Math.round(prevGross), tp, net, str(b.note, 1000)).lastInsertRowid);
+    for (const i of its) if (la.qty[i.id] || prevQty[i.id]) q('INSERT INTO bill_lines (bill_id, item_id, upto_qty, prev_qty, rate) VALUES (?,?,?,?,?)').run(id, i.id, la.qty[i.id] || 0, prevQty[i.id] || 0, i.rate);
+    db.exec('COMMIT');
+    const s = getSettings();
+    const x = q('SELECT mobile FROM users WHERE id = ?').get(w.xen_id || 0);
+    if (x) sendSms(x.mobile, `SiteSaakshi: "${w.name}" का ${final ? 'अंतिम' : (prev?.bill_no || 0) + 1 + 'वाँ'} बिल ₹${net.toLocaleString('en-IN')} जमा। ${final ? `मुख्यालय ${s.final_approval_days}` : `XEN ${s.bill_pass_days}`} दिन में।`);
+    send(res, 201, { id, net_amount: net, bill_no: (prev?.bill_no || 0) + 1 });
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+});
+route('GET', '/api/bills', async (req, res, { user, query }) => {
+  const s = getSettings();
+  const names = userNames();
+  const ws = query.work_id ? [workOr404(user, query.work_id)] : worksFor(user);
+  const out = [];
+  for (const w of ws) for (const b of q('SELECT * FROM bills WHERE work_id = ? ORDER BY bill_no DESC').all(w.id)) {
+    const d = billDue(b, s);
+    out.push({ ...billDetail(b), work: w.name, wo_no: w.wo_no, contractor: names[w.contractor_id], passed_name: names[b.passed_by] || '', hq_name: names[b.hq_by] || '', paid_name: names[b.paid_by] || '',
+      due: d, overdue_days: d ? Math.max(0, daysBetween(d.due, istDay())) : 0 });
+  }
+  send(res, 200, out.sort((a, b) => b.created_ts.localeCompare(a.created_ts)));
+});
+route('POST', '/api/bills/:id/action', async (req, res, { user, params }) => {
+  const bill = q('SELECT * FROM bills WHERE id = ?').get(Number(params.id));
+  if (!bill) throw httpErr(404, 'बिल नहीं मिला');
+  const w = workOr404(user, bill.work_id);
+  const b = await readJson(req);
+  const ts = nowIso();
+  const isXen = (user.role === 'xen' && w.xen_id === user.id) || ['se', 'admin'].includes(user.role);
+  if (b.action === 'pass') {
+    if (!isXen || bill.is_final || bill.status !== 'submitted') throw httpErr(400, 'यह कदम अभी संभव नहीं');
+    q("UPDATE bills SET status = 'passed', passed_by = ?, passed_ts = ? WHERE id = ?").run(user.id, ts, bill.id);
+  } else if (b.action === 'hq_approve') {
+    if (!['hq', 'admin'].includes(user.role) || !bill.is_final || bill.status !== 'submitted') throw httpErr(400, 'अंतिम बिल का अनुमोदन मुख्यालय / निविदा प्राधिकारी करता है');
+    q("UPDATE bills SET status = 'hq_approved', hq_by = ?, hq_ts = ?, hq_note = ? WHERE id = ?").run(user.id, ts, str(b.note, 2000), bill.id);
+  } else if (b.action === 'paid') {
+    if (!(isXen || user.role === 'hq') || !['passed', 'hq_approved'].includes(bill.status)) throw httpErr(400, 'पहले बिल पास / अनुमोदित हो');
+    if (!str(b.ref)) throw httpErr(400, 'भुगतान का संदर्भ (UTR / चेक नं.) लिखें');
+    q("UPDATE bills SET status = 'paid', paid_by = ?, paid_ts = ?, paid_ref = ? WHERE id = ?").run(user.id, ts, str(b.ref, 100), bill.id);
+    const c = q('SELECT mobile FROM users WHERE id = ?').get(w.contractor_id);
+    if (c) sendSms(c.mobile, `SiteSaakshi: "${w.name}" के बिल ₹${Math.round(bill.net_amount).toLocaleString('en-IN')} का भुगतान दर्ज। संदर्भ ${str(b.ref, 100)}`);
+  } else throw httpErr(400, 'गलत कार्रवाई');
+  audit(user.id, 'bill_' + b.action, { bill: bill.id, note: str(b.note), ref: str(b.ref) });
+  send(res, 200, { ok: true });
+});
+
+// ---- the department's list of engineers and registered contractors, imported in one go ----
+route('POST', '/api/users/import', async (req, res, { user }) => {
+  need(user, OVERSIGHT);
+  const { text } = await readJson(req);
+  let added = 0; const skipped = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const c = line.split(/\t|,/).map((x) => x.trim());
+    if (c.length < 3 || !/^\d{10}$/.test(c[1])) { if (line.trim()) skipped.push(line.slice(0, 60) + ' (गलत पंक्ति)'); continue; }
+    const role = c[2].toLowerCase();
+    if (!['contractor', 'jen', 'aen', 'xen', 'se'].includes(role)) { skipped.push(line.slice(0, 60) + ' (गलत पद)'); continue; }
+    if (q('SELECT 1 FROM users WHERE mobile = ?').get(c[1])) { skipped.push(c[1] + ' (पहले से है)'); continue; }
+    const id = createUser({ name: c[0], mobile: c[1], role, office: c[3] || '', pin: null, verified: 1 });
+    q('UPDATE users SET department = ?, reg_no = ? WHERE id = ?').run(c[3] || '', c[4] || '', id);
+    added++;
+  }
+  audit(user.id, 'users_imported', { added, skipped: skipped.length });
+  send(res, 200, { added, skipped });
+});
+
 route('GET', '/api/settings', async (req, res) => send(res, 200, getSettings()));
 route('PUT', '/api/settings', async (req, res, { user }) => {
   need(user, ['admin']);
@@ -1172,6 +1557,15 @@ function seedDemo() {
     const vid = maybeCreateVerification(w0, before, claimed, s0);
     if (vid) q('UPDATE verifications SET created_ts = ?, jen_due_ts = ? WHERE id = ?').run(ts, addHours(ts, s0.jen_verify_hours), vid);
   }
+  // contract timeline: awarded 52 days ago, work order 12 days later (2 days late), 28 days to complete.
+  // The drawing for the drain was not given for 13 days; the XEN never answered the hindrance, so it is deemed accepted.
+  q("UPDATE works SET award_date = ?, wo_date = ?, duration_days = 28, start_date = '', end_date = '', department = 'PWD' WHERE id = ?").run(addDays(today, -52), addDays(today, -40), wid);
+  q(`INSERT INTO hindrances (work_id, raised_by, category, description, responsible_role, from_day, to_day, created_ts, response_due_day) VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(wid, ids.contractor, 'drawing_decision', 'Drain ki RCC drawing aur level nahi diye; kaam ruka raha', 'xen', addDays(today, -20), addDays(today, -8), new Date(Date.now() - 19 * 86400e3).toISOString(), addDays(today, -12));
+  // a second work: awarded 14 days ago, the work order still not issued
+  const w2 = Number(q(`INSERT INTO works (name, wo_no, office, contractor_id, jen_id, aen_id, xen_id, lat, lng, radius_m, status, created_at, wo_amount, tia, award_date, duration_days, department)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('School boundary wall, Bagru (demo)', '', 'Division-II', ids.contractor, ids.jen, ids.aen, ids.xen, 26.81, 75.54, 150, 'active', nowIso(), 640000, 'Chief Engineer, PWD Jaipur', addDays(today, -14), 60, 'PWD').lastInsertRowid);
+  q('INSERT INTO work_items (work_id, code, description, unit, qty, rate) VALUES (?,?,?,?,?,?)').run(w2, '3.02', 'Stone masonry in CM 1:6', 'cum', 160, 4000);
   q("UPDATE visits SET contractor_note = 'XEN site par nahi aaye; office se haziri lagai' WHERE contractor_status = 'disputed'").run();
   const mk = (type, title, daysAgo, sla) => {
     const created = new Date(Date.now() - daysAgo * 86400e3).toISOString();
@@ -1187,5 +1581,7 @@ function seedDemo() {
 }
 
 firstRun();
+weeklyVerifications();
+setInterval(weeklyVerifications, 30 * 60e3).unref();
 server.listen(PORT, () => console.log(`SiteSaakshi running at http://localhost:${PORT}`));
 module.exports = { server, haversine, weekStart };

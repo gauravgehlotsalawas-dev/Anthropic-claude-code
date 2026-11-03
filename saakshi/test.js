@@ -42,8 +42,8 @@ async function main() {
   const hq = await login('9000000006');
 
   const works = (await jen('GET', '/api/works')).data;
-  assert.equal(works.length, 1);
-  const w = works[0];
+  assert.equal(works.length, 2);
+  const w = works.find((x) => x.name.startsWith('C.C. road'));
 
   // inside the fence with a live photo: counts
   let r = await jen('POST', '/api/visits', { work_id: w.id, lat: w.lat + 0.0005, lng: w.lng, accuracy: 15, photo: fakePhoto(), client_ts: new Date().toISOString() });
@@ -148,9 +148,9 @@ async function main() {
 
   const site = { lat: 26.9, lng: 75.8 };
   // JEN mobile already belongs to the AEN: refused
-  assert.equal((await newCon('POST', '/api/projects', { name: 'P', wo_amount: 1000000, ...site, radius_m: 200, jen: { name: 'x', mobile: '9000000003' }, aen: { name: 'y', mobile: '9800000011' }, items: [{ description: 'a', unit: 'cum', qty: 10, rate: 100 }] })).status, 400);
+  assert.equal((await newCon('POST', '/api/projects', { name: 'P', award_date: '2026-01-01', wo_amount: 1000000, ...site, radius_m: 200, jen: { name: 'x', mobile: '9000000003' }, aen: { name: 'y', mobile: '9800000011' }, items: [{ description: 'a', unit: 'cum', qty: 10, rate: 100 }] })).status, 400);
   r = await newCon('POST', '/api/projects', {
-    name: 'Village road Kotputli', wo_no: 'WO/77', wo_amount: 1000000, tia: 'CE PWD Jaipur', ...site, radius_m: 200,
+    name: 'Village road Kotputli', wo_no: 'WO/77', wo_date: new Date(Date.now() - 2 * 86400e3).toISOString().slice(0, 10), duration_days: 60, wo_amount: 1000000, tia: 'CE PWD Jaipur', ...site, radius_m: 200,
     jen: { name: 'New JEN', mobile: '9800000010' }, aen: { name: 'AEN Sanganer', mobile: '9000000003' },
     items: [{ code: '1', description: 'Earthwork', unit: 'cum', qty: 1000, rate: 200 }, { code: '2', description: 'CC M-20', unit: 'cum', qty: 320, rate: 2500 }],
   });
@@ -199,6 +199,77 @@ async function main() {
   const pw = (await newCon('GET', '/api/works/' + pid)).data;
   assert.equal(pw.approved_amount, 115000); assert.equal(pw.verifications[0].rounds, 2);
   assert.ok(!pw.flags.some((f) => f.type === 'contractor_overclaim'), 'flag clears once the measurement matches');
+
+  // ---- bills from verified quantities, whenever the contractor wants ----
+  r = await newCon('POST', '/api/bills', { work_id: pid });
+  assert.equal(r.status, 201, JSON.stringify(r.data)); assert.equal(r.data.net_amount, 115000); assert.equal(r.data.bill_no, 1);
+  const bill1 = r.data.id;
+  assert.equal((await newCon('POST', '/api/bills', { work_id: pid })).status, 400, 'no new verified work since the last bill');
+  assert.equal((await newCon('POST', '/api/bills', { work_id: pid, final: true })).status, 400, 'final needs completion');
+  assert.equal((await nj('POST', `/api/bills/${bill1}/action`, { action: 'pass' })).status, 400, 'JEN cannot pass a bill');
+  assert.equal((await se('POST', `/api/bills/${bill1}/action`, { action: 'pass' })).status, 200);
+  assert.equal((await se('POST', `/api/bills/${bill1}/action`, { action: 'paid' })).status, 400, 'payment reference needed');
+  assert.equal((await se('POST', `/api/bills/${bill1}/action`, { action: 'paid', ref: 'UTR123' })).status, 200);
+  // more work, a measurement on demand, the second bill only for the new part
+  await up([{ item_id: its[0].id, qty: 50 }]);
+  r = await newCon('POST', `/api/works/${pid}/request-verification`, {});
+  assert.equal(r.status, 201);
+  assert.equal((await newCon('POST', `/api/works/${pid}/request-verification`, {})).status, 400, 'one at a time');
+  await nj('POST', `/api/verifications/${r.data.id}/measure`, { lines: [{ item_id: its[0].id, measured_qty: 251 }, { item_id: its[1].id, measured_qty: 30 }], photo: fakePhoto(), ...site, accuracy: 8 });
+  await aen('POST', `/api/verifications/${r.data.id}/approve`, { decision: 'approved' });
+  r = await newCon('POST', '/api/bills', { work_id: pid });
+  assert.equal(r.data.bill_no, 2); assert.equal(r.data.net_amount, 51 * 200);
+
+  // ---- completion: final measurement, final bill, approval by the top authority ----
+  r = await newCon('POST', `/api/works/${pid}/complete`, {});
+  assert.equal(r.status, 200); const fv = r.data.verification_id;
+  assert.equal((await newCon('POST', '/api/bills', { work_id: pid, final: true })).status, 400, 'final measurement not yet approved');
+  await nj('POST', `/api/verifications/${fv}/measure`, { lines: [{ item_id: its[0].id, measured_qty: 251 }, { item_id: its[1].id, measured_qty: 31 }], photo: fakePhoto(), ...site, accuracy: 8 });
+  await aen('POST', `/api/verifications/${fv}/approve`, { decision: 'approved' });
+  r = await newCon('POST', '/api/bills', { work_id: pid, final: true });
+  assert.equal(r.status, 201); assert.equal(r.data.net_amount, 2500);
+  const fbill = r.data.id;
+  assert.equal((await se('POST', `/api/bills/${fbill}/action`, { action: 'pass' })).status, 400, 'final goes to the top authority');
+  assert.equal((await hq('POST', `/api/bills/${fbill}/action`, { action: 'hq_approve', note: 'verified' })).status, 200);
+  assert.equal((await hq('POST', `/api/bills/${fbill}/action`, { action: 'paid', ref: 'UTR999' })).status, 200);
+  assert.equal((await newCon('POST', '/api/bills', { work_id: pid })).status, 400, 'no bill after the final');
+
+  // ---- hindrance: officer objects, the top authority decides, the extension follows ----
+  const fromDay = new Date(Date.now() - 6 * 86400e3).toISOString().slice(0, 10);
+  r = await newCon('POST', '/api/hindrances', { work_id: pid, category: 'work_not_shown', description: 'JEN ne layout nahi diya', from_day: fromDay });
+  assert.equal(r.status, 201);
+  const hid = r.data.id;
+  assert.equal((await nj('POST', `/api/hindrances/${hid}/respond`, { decision: 'disputed' })).status, 400, 'reason needed');
+  assert.equal((await nj('POST', `/api/hindrances/${hid}/respond`, { decision: 'disputed', note: 'layout diya tha, register dekhein' })).status, 200);
+  let tl = (await newCon('GET', '/api/works/' + pid)).data.timeline;
+  assert.ok(tl.extension_days >= 6, 'a disputed hindrance keeps counting until decided');
+  assert.equal(tl.penalty_applicable ?? false, false);
+  assert.equal((await nj('POST', `/api/hindrances/${hid}/decide`, { decision: 'rejected', note: 'x' })).status, 403);
+  assert.equal((await hq('POST', `/api/hindrances/${hid}/decide`, { decision: 'rejected', note: 'register me layout entry hai' })).status, 200);
+  tl = (await newCon('GET', '/api/works/' + pid)).data.timeline;
+  assert.equal(tl.extension_days, 0, 'rejected: no extension');
+
+  // demo work: the XEN never answered the hindrance → deemed accepted → extension, no penalty
+  const demo = (await con('GET', '/api/works/' + w.id)).data.timeline;
+  assert.equal(demo.extension_days, 13); assert.equal(demo.contractor_delay_days, 0); assert.equal(demo.wo_late_days, 2);
+  assert.ok(demo.hindrances.some((h) => h.state === 'deemed'));
+
+  // ---- award without a work order: red flag on the XEN until it is issued ----
+  const award = new Date(Date.now() - 15 * 86400e3).toISOString().slice(0, 10);
+  r = await newCon('POST', '/api/projects', { name: 'Awarded only', award_date: award, duration_days: 30, wo_amount: 100000, ...site, radius_m: 200,
+    jen: { mobile: '9800000010' }, aen: { mobile: '9000000003' }, xen: { mobile: '9000000002' }, items: [{ description: 'x', unit: 'no', qty: 10, rate: 10000 }] });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const aw = r.data.id;
+  assert.ok((await hq('GET', '/api/flags')).data.some((f) => f.work_id === aw && f.type === 'wo_not_issued' && f.against_role === 'xen'));
+  assert.equal((await newCon('POST', `/api/works/${aw}/issue-wo`, { wo_no: 'X' })).status, 403);
+  assert.equal((await xen('POST', `/api/works/${aw}/issue-wo`, { wo_no: 'WO/99' })).status, 200);
+  const flagsAfter = (await hq('GET', '/api/flags')).data;
+  assert.ok(!flagsAfter.some((f) => f.work_id === aw && f.type === 'wo_not_issued'));
+  assert.equal((await xen('GET', '/api/works/' + aw)).data.timeline.wo_late_days, 5);
+
+  // ---- the department's list imported in one go ----
+  r = await se('POST', '/api/users/import', { text: 'Suresh JEN, 9700000001, jen, PWD, EMP1\nBad line\nRam, 9000000004, jen, PWD\nM/s Shiv, 9700000002, contractor, PWD, AA/123' });
+  assert.equal(r.data.added, 2); assert.equal(r.data.skipped.length, 2);
 
   // ---- the demo work has a 10% milestone the JEN never measured: red flag up to HQ ----
   flags = (await hq('GET', '/api/flags')).data;
