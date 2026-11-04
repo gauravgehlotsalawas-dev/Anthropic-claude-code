@@ -13,6 +13,7 @@ import { readNicBoq, writeNicBoq, nicNumbering } from "./nicboq.js";
 import { initBills, renderBills } from "./bills.js";
 import { initSites, renderSites, siteList, currentSiteId, switchSite, newSiteDialog } from "./site.js";
 import { initOffice, renderOffice, company } from "./office.js";
+import { initTenders, renderTenders } from "./tenders.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -88,6 +89,7 @@ async function boot() {
   });
   await initSites({ toast, modal, closeModal, download, refreshHeader: renderProjectSelect, company });
   await initOffice({ toast, modal, closeModal, download, sites: siteList, currentSite: currentSiteId });
+  await initTenders({ toast, modal, closeModal });
   renderAll();
   resetHistory();
 }
@@ -433,6 +435,7 @@ function showTab(name) {
   if (name === "bills") renderBills();
   if (name === "sites") renderSites();
   if (name === "office") renderOffice();
+  if (name === "tenders") renderTenders();
   window.scrollTo({ top: 0 });
 }
 
@@ -454,7 +457,7 @@ function guardEmpty() {
 // ---------------------------------------------------------------------------
 
 function renderProjectSelect() {
-  $(".project-switch").classList.toggle("hidden", state.tab === "office");
+  $(".project-switch").classList.toggle("hidden", state.tab === "office" || state.tab === "tenders");
   if (state.tab === "sites") {
     const list = siteList();
     $("#projectSelect").innerHTML = list.length ? list.map((s) => `<option value="${s.id}" ${s.id === currentSiteId() ? "selected" : ""}>${esc(s.name.slice(0, 70))}</option>`).join("") : `<option value="">No sites yet: press ＋</option>`;

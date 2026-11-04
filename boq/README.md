@@ -81,6 +81,12 @@ One folder per construction site (the selector at the top lists sites while this
 - **Company profile:** printed on the progress reports.
 - **Backup & storage:** all data stays in the browser on that device. **Download full backup (ZIP)** regularly and keep it on Drive or email; **Restore** it on another device to move everything there.
 
+## Tenders (tab 9)
+
+- **My alerts:** each contractor chooses the tenders they want: departments (PWD, PHED, Nagar Nigam / LSG, development authorities, UIT, RUIDP, Water Resources, Panchayati Raj, RSRDC, RIICO, power companies and more), districts of Rajasthan, the amount (presets such as up to ₹25 L or ₹1–5 Cr, or their own range in lakh), the tender type (works, goods, services), kinds of work (road, building, drain, water supply, bridge, electrical, painting, repair…), words that must or must not appear, how many days before the bid end to be reminded, and how to be alerted (in the app; Telegram and email once the alert service runs). A sentence sums up the choices. Alerts can be paused or the choices cleared at any time.
+- **Matching tenders:** tenders from the feed (`data/tenders.json`, written by the eProc scraper once it is switched on) that match the choices, with value, EMD, bid end and opening dates, a link to eProc and *Track*.
+- **My tenders:** tenders being studied or bid, with status (studying, bid submitted, L1, work order received…) and a reminder when the app opens before the bid end and the opening date.
+
 ## File format notes
 
 | Format | Handling |
@@ -120,6 +126,8 @@ boq/
   js/office.js       accounts, company documents and backup (tab 8)
   js/docs.js         document folders, scan and merge
   js/files.js        photo stamping, EXIF, ZIP and PDF helpers
+  js/tenders.js      tender alert choices, matching tenders and my tenders (tab 9)
+  js/materials.js    approximate materials from BOQ items
   js/sample.js       sample rate book (demo rates only)
   vendor/            SheetJS 0.18.5, pdf.js 6.4, pdf-lib 1.17.1 (MIT), a browser bundle of @anthropic-ai/sdk 1.3 and fflate
 ```
