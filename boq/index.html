@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RateBook BOQ: estimates from your schedule of rates</title>
-  <script>window.APP_VERSION="202611030414";</script>
+  <script>window.APP_VERSION="202611041830";</script>
 <script id="guard">
   // Shows any start-up error on the page (works even when the app's modules fail to load).
   (function () {
@@ -24,9 +24,9 @@
     setTimeout(function () { if (!window.__booted) show("The app did not start. Please send a screenshot of this message."); }, 12000);
   })();
 </script>
-  <link rel="stylesheet" href="styles.css?v=202611030414">
-  <script src="vendor/xlsx.full.min.js?v=202611030414"></script>
-  <script type="importmap" id="versions">{"imports":{"./js/ai.js":"./js/ai.js?v=202611030414","./js/app.js":"./js/app.js?v=202611030414","./js/bills.js":"./js/bills.js?v=202611030414","./js/blueprint.js":"./js/blueprint.js?v=202611030414","./js/bsr-import.js":"./js/bsr-import.js?v=202611030414","./js/demo.js":"./js/demo.js?v=202611030414","./js/docread.js":"./js/docread.js?v=202611030414","./js/docs.js":"./js/docs.js?v=202611030414","./js/export.js":"./js/export.js?v=202611030414","./js/files.js":"./js/files.js?v=202611030414","./js/match.js":"./js/match.js?v=202611030414","./js/materials.js":"./js/materials.js?v=202611030414","./js/nicboq.js":"./js/nicboq.js?v=202611030414","./js/office.js":"./js/office.js?v=202611030414","./js/quick.js":"./js/quick.js?v=202611030414","./js/sample.js":"./js/sample.js?v=202611030414","./js/site.js":"./js/site.js?v=202611030414","./js/store.js":"./js/store.js?v=202611030414","./vendor/libs.mjs":"./vendor/libs.mjs?v=202611030414","./vendor/pdf-lib.esm.min.js":"./vendor/pdf-lib.esm.min.js?v=202611030414","./vendor/pdf.min.mjs":"./vendor/pdf.min.mjs?v=202611030414","./vendor/pdf.worker.min.mjs":"./vendor/pdf.worker.min.mjs?v=202611030414"}}</script>
+  <link rel="stylesheet" href="styles.css?v=202611041830">
+  <script src="vendor/xlsx.full.min.js?v=202611041830"></script>
+  <script type="importmap" id="versions">{"imports":{"./js/ai.js":"./js/ai.js?v=202611041830","./js/app.js":"./js/app.js?v=202611041830","./js/bills.js":"./js/bills.js?v=202611041830","./js/blueprint.js":"./js/blueprint.js?v=202611041830","./js/bsr-import.js":"./js/bsr-import.js?v=202611041830","./js/demo.js":"./js/demo.js?v=202611041830","./js/docread.js":"./js/docread.js?v=202611041830","./js/docs.js":"./js/docs.js?v=202611041830","./js/export.js":"./js/export.js?v=202611041830","./js/files.js":"./js/files.js?v=202611041830","./js/match.js":"./js/match.js?v=202611041830","./js/materials.js":"./js/materials.js?v=202611041830","./js/nicboq.js":"./js/nicboq.js?v=202611041830","./js/office.js":"./js/office.js?v=202611041830","./js/quick.js":"./js/quick.js?v=202611041830","./js/sample.js":"./js/sample.js?v=202611041830","./js/site.js":"./js/site.js?v=202611041830","./js/store.js":"./js/store.js?v=202611041830","./js/tenders.js":"./js/tenders.js?v=202611041830","./vendor/libs.mjs":"./vendor/libs.mjs?v=202611041830","./vendor/pdf-lib.esm.min.js":"./vendor/pdf-lib.esm.min.js?v=202611041830","./vendor/pdf.min.mjs":"./vendor/pdf.min.mjs?v=202611041830","./vendor/pdf.worker.min.mjs":"./vendor/pdf.worker.min.mjs?v=202611041830"}}</script>
 </head>
 <body>
   <header class="topbar">
@@ -46,6 +46,7 @@
       <button role="tab" data-tab="bills"><span class="step">6</span><span class="tab-label">Bills (MB)<small id="tbBills">RA / final bill</small></span></button>
       <button role="tab" data-tab="sites"><span class="step">7</span><span class="tab-label">Site diary<small>DPR · GPS camera</small></span></button>
       <button role="tab" data-tab="office"><span class="step">8</span><span class="tab-label">Office<small>Accounts · documents</small></span></button>
+      <button role="tab" data-tab="tenders"><span class="step">9</span><span class="tab-label">Tenders<small>alerts · my tenders</small></span></button>
       <button role="tab" data-tab="settings" class="tab-settings" title="Settings"><span class="step">⚙</span><span class="tab-label">Settings<small>AI &amp; defaults</small></span></button>
     </nav>
     <div class="project-switch">
@@ -261,6 +262,7 @@
     <section id="tab-bills" class="tab"><div id="billsRoot"></div></section>
     <section id="tab-sites" class="tab"><div id="sitesRoot"></div></section>
     <section id="tab-office" class="tab"><div id="officeRoot"></div></section>
+    <section id="tab-tenders" class="tab"><div id="tendersRoot"></div></section>
 
     <!-- ============ SETTINGS ============ -->
     <section id="tab-settings" class="tab">
@@ -304,6 +306,6 @@
   <div id="toast" class="toast hidden"></div>
   <div id="printArea"></div>
 
-  <script type="module" src="js/app.js?v=202611030414"></script>
+  <script type="module" src="js/app.js?v=202611041830"></script>
 </body>
 </html>

@@ -763,3 +763,26 @@ tr.sel-row td { background: #fdecec !important; }
 .sch-h.h::before { background: #b45309; }
 .badge.h-badge { background: #fdecd3; color: #8a4b0a; }
 tr.h-row td { background: #fffaf2; }
+
+/* ---------- Tenders ---------- */
+.tender-hero { display: flex; justify-content: space-between; align-items: center; gap: 1.2rem; padding: 1.4rem 1.6rem; margin-bottom: 1rem; border-radius: 20px; color: #fff;
+  background: radial-gradient(500px 220px at 90% -20%, rgba(255,200,120,.35), transparent 70%), linear-gradient(135deg, #1e2a4a, #233a6b 55%, #2d5aa0); box-shadow: 0 12px 30px rgba(30,42,74,.28); }
+.tender-hero h2 { color: #fff; margin: .2rem 0 .4rem; font-size: 1.3rem; } .tender-hero p { margin: 0; color: #d7e2f7; max-width: 640px; }
+.tender-hero .hero-kicker { color: #ffd59a; }
+.switch { display: inline-flex; align-items: center; gap: .6rem; cursor: pointer; flex: none; }
+.switch input { display: none; } .switch span { width: 52px; height: 30px; border-radius: 999px; background: rgba(255,255,255,.3); position: relative; transition: background .2s; }
+.switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: transform .2s; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+.switch input:checked + span { background: #34c38f; } .switch input:checked + span::after { transform: translateX(22px); }
+#tendersRoot .subnav { flex-wrap: nowrap; overflow-x: auto; }
+#tendersRoot .card { border-radius: 18px; box-shadow: 0 1px 2px rgba(16,32,26,.04), 0 8px 24px rgba(16,32,26,.06); }
+#tendersRoot .card h3 { display: flex; align-items: center; gap: .55rem; margin-top: 0; }
+.tchips { display: flex; flex-wrap: wrap; gap: .45rem; }
+.tchip { background: #fff; color: var(--ink); border: 1px solid #d9e1ec; border-radius: 999px; padding: .45rem .85rem; font-size: .88rem; font-weight: 500; }
+.tchip:hover { border-color: #2d5aa0; }
+.tchip.on { background: #e6efff; border-color: #2d5aa0; color: #1e3a6b; font-weight: 700; }
+.tlist { display: grid; gap: .7rem; margin-top: .8rem; }
+.tcard { padding: .9rem 1rem; border-radius: 14px; border: 1px solid #e3e9f2; background: #fbfcff; display: grid; gap: .35rem; }
+.tcard-h { display: flex; gap: .4rem; flex-wrap: wrap; }
+.tmeta { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .85rem; color: var(--muted); }
+.tmeta b { color: var(--ink); }
+@media (max-width: 720px) { .tender-hero { flex-direction: column; align-items: flex-start; } }
