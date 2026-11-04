@@ -111,7 +111,7 @@ git push origin HEAD:claude/cross-car-parts-database-0ivvqo   # if rejected: fet
 ## 4. The user's requirements (keep them)
 
 - **Language:** the user writes in Hinglish. Answer in short Hinglish and keep answers economical. The app's UI text is English, but Hindi documents (such as the STP application) are in Hindi.
-- **Prints must look like the department's papers.** Reference documents are the Keru work (Nagar Nigam Jodhpur, W.O. 2026-2027/3260047 dt. 18.05.2026, T.P. 7 % below, contract value 49,26,831).
+- **Prints must look like the department's papers.** Reference documents are the Keru work (Nagar Nigam Jodhpur, W.O. 2026-2027/3260047 dt. 18.05.2026, T.P. 1 % below, contract value 49,26,831).
   - Form 27G running/final bill with page 3 memorandum and certificate.
   - The extra item slip prints **portrait**.
   - Photo sheets: **4 per page, landscape**, with the work name and W.O. No. on top and JEN/AEN/XEN signature spaces below.
