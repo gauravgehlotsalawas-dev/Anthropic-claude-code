@@ -118,7 +118,9 @@ const ready = (async () => {
   const photos = await idb.get('photos');
   if (photos) for (const [k, v] of photos) files.set(k, Buf.from(v));
   session = (await idb.get('session')) || null;
-  const src = await (await fetch(new URL('../server.js', SCOPE))).text();
+  let src;
+  try { const r = await fetch(new URL('../server.js', SCOPE)); if (!r.ok) throw new Error(r.status); src = await r.text(); await idb.set('server_src', src); }
+  catch { src = await idb.get('server_src'); if (!src) throw new Error('पहली बार डेमो खोलने के लिए इंटरनेट चाहिए'); }
   const mods = { http: { createServer: (h) => { handler = h; return { listen: (p, cb) => cb && cb() }; } }, fs: fsShim, path: pathShim, crypto: cryptoShim, sqlite: { DatabaseSync } };
   const req = (name) => { const m = mods[name.replace(/^node:/, '')]; if (!m) throw new Error('demo: no module ' + name); return m; };
   const proc = { env: { QUIET: '1', DATA_DIR: '/data' }, argv: ['node', 'server.js', '--demo'], removeAllListeners() {} };
@@ -171,6 +173,12 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (url.origin !== SCOPE.origin || !url.pathname.startsWith(SCOPE.pathname)) return;
   const rel = url.pathname.slice(SCOPE.pathname.length);
-  if (!ROUTED.test(rel)) return;
+  if (!ROUTED.test(rel)) {
+    // the app itself: network first, cached copy offline, so the installed demo opens without internet
+    if (e.request.method !== 'GET') return;
+    e.respondWith(fetch(e.request).then((r) => { if (r.ok) { const c = r.clone(); caches.open('saakshi-demo-shell').then((x) => x.put(e.request, c)); } return r; })
+      .catch(() => caches.match(e.request, { ignoreSearch: true }).then((r) => r || caches.match(new URL('index.html', SCOPE).href))));
+    return;
+  }
   e.respondWith(serve(e.request, '/' + rel + url.search).catch((err) => new Response(JSON.stringify({ error: 'डेमो में गड़बड़ी: ' + err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })));
 });

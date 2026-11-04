@@ -15,6 +15,7 @@ const VSTATUS = { pending_jen: ['JEN का साइट-नाप बाकी'
 const FLAG = { exceeds_boq: 'BOQ मात्रा से ज़्यादा',  outside_fence: 'साइट से बाहर', low_accuracy: 'GPS कमज़ोर', photo_reused: 'पुरानी फ़ोटो', no_photo: 'फ़ोटो नहीं', clock_mismatch: 'फ़ोन का समय गलत', from_gallery: 'गैलरी से फ़ोटो' };
 
 let me = null, settings = null, today = '', tab = '';
+const VIEWS = {};
 
 // ---------- api ----------
 async function api(path, body, method) {
@@ -165,45 +166,176 @@ function renderOtp() {
     await boot();
   });
 }
+// ---------- icons (24×24, stroke) ----------
+const ICON_PATHS = {
+  home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',
+  pin: 'M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z',
+  camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+  chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  flag: 'M5 21V4M5 4h11l-2 4 2 4H5',
+  folder: 'M3 7h6l2 2h10v10H3z',
+  check: 'M9 12l2 2 4-4M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z',
+  plus: 'M12 5v14M5 12h14',
+  users: 'M16 19v-1a4 4 0 0 0-8 0v1M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 19v-1a3 3 0 0 0-2-2.8M4 19v-1a3 3 0 0 1 2-2.8',
+  bill: 'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3',
+  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
+  note: 'M5 4h14v16H5zM8 9h8M8 13h8M8 17h5',
+  help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.5V14M12 17h.01',
+  doc: 'M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6',
+  inbox: 'M3 13l3-8h12l3 8v6H3zM3 13h5l1 2h6l1-2h5',
+  alert: 'M12 3l10 18H2zM12 10v4M12 17h.01',
+  settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z',
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
+  report: 'M4 4h16v16H4zM8 15v-3M12 15V9M16 15v-5',
+  menu: 'M4 7h16M4 12h16M4 17h16',
+  grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+  download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
+};
+const icon = (name, size = 22) => `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON_PATHS[name] || ICON_PATHS.grid}"/></svg>`;
+
+// ---------- navigation: what each role sees, grouped; the first four go in the phone's bottom bar ----------
 function tabsFor(role) {
-  const t = [['dash', 'डैशबोर्ड'], ['flags', '🚩 लाल झंडे'], ['works', 'काम / प्रोजेक्ट'], ['verify', '10% सत्यापन']];
-  if (role === 'contractor') t.unshift(['today', 'आज का काम']);
-  if (['jen', 'aen', 'xen'].includes(role)) t.unshift(['attend', 'हाज़िरी लगाएँ']);
-  if (role !== 'hq') t.push(['newproject', '＋ नया प्रोजेक्ट']);
-  t.push(['visits', role === 'contractor' ? 'हाज़िरी पुष्टि' : 'हाज़िरी रिकॉर्ड']);
-  t.push(['bills', 'बिल']);
-  t.push(['instructions', 'निर्देश रजिस्टर']);
-  t.push(['explanations', 'स्पष्टीकरण']);
-  if (['se', 'hq', 'admin', 'xen', 'aen'].includes(role)) t.splice(1, 0, ['daily', '📋 दैनिक रिपोर्ट']);
-  t.push(['hindrances', 'बाधा / समय-वृद्धि']);
-  t.push(['dpr', role === 'jen' ? 'आज की DPR' : 'DPR']);
-  t.push(['requests', role === 'contractor' ? 'नाप / बिल अनुरोध' : 'अनुरोध']);
-  if (['contractor', 'se', 'admin', 'hq'].includes(role)) t.push(['complaints', 'शिकायत']);
-  if (['se', 'admin', 'hq'].includes(role)) t.push(['admin', 'प्रबंधन']);
-  t.push(['account', 'मेरा खाता']);
+  const officer = ['jen', 'aen', 'xen'].includes(role), top = ['se', 'hq', 'admin'].includes(role);
+  const t = [];
+  const add = (k, l, i, g) => t.push({ k, l, i, g });
+  add('home', 'आज का काम', 'home', 'मुख्य');
+  if (role === 'contractor') add('today', 'काम अपडेट करें', 'camera', 'मुख्य');
+  if (officer) add('attend', 'हाज़िरी लगाएँ', 'pin', 'मुख्य');
+  add('verify', 'नाप / सत्यापन', 'check', 'मुख्य');
+  add('bills', 'बिल', 'bill', 'मुख्य');
+  if (role !== 'contractor') add('daily', 'दैनिक रिपोर्ट', 'report', 'निगरानी');
+  add('flags', 'लाल झंडे', 'flag', 'निगरानी');
+  add('dash', 'हाज़िरी डैशबोर्ड', 'chart', 'निगरानी');
+  add('works', 'काम / प्रोजेक्ट', 'folder', 'काम');
+  if (role !== 'hq') add('newproject', 'नया प्रोजेक्ट', 'plus', 'काम');
+  add('dpr', role === 'jen' ? 'आज की DPR' : 'DPR', 'doc', 'काम');
+  add('visits', role === 'contractor' ? 'हाज़िरी पुष्टि' : 'हाज़िरी रिकॉर्ड', 'users', 'काम');
+  add('hindrances', 'बाधा / समय-वृद्धि', 'clock', 'रिकॉर्ड');
+  add('instructions', 'निर्देश रजिस्टर', 'note', 'रिकॉर्ड');
+  add('explanations', 'स्पष्टीकरण', 'help', 'रिकॉर्ड');
+  add('requests', role === 'contractor' ? 'अनुरोध' : 'ठेकेदार के अनुरोध', 'inbox', 'रिकॉर्ड');
+  if (role === 'contractor' || top) add('complaints', 'शिकायत', 'alert', 'रिकॉर्ड');
+  if (top) add('admin', 'प्रबंधन', 'settings', 'खाता');
+  add('account', 'मेरा खाता', 'user', 'खाता');
+  const primary = {
+    contractor: ['home', 'today', 'bills', 'works'], jen: ['home', 'attend', 'verify', 'dpr'], aen: ['home', 'attend', 'verify', 'flags'],
+    xen: ['home', 'attend', 'bills', 'flags'], se: ['home', 'daily', 'flags', 'works'], hq: ['home', 'daily', 'flags', 'works'], admin: ['home', 'daily', 'flags', 'admin'],
+  }[role] || ['home', 'flags', 'works', 'account'];
+  for (const x of t) x.p = primary.includes(x.k);
   return t;
 }
+const initials = (name) => String(name || '?').replace(/^(M\/s|Shri|Smt)\.?\s+/i, '').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 function renderShell() {
   document.body.classList.add('app');
-  $('#who').innerHTML = `${esc(me.name)}<br><span style="opacity:.8">${esc(ROLE[me.role])}</span>`;
-  const nav = $('#tabs'); nav.hidden = false;
   const tabs = tabsFor(me.role);
-  if (!tabs.some(([k]) => k === tab)) tab = tabs[0][0];
-  nav.innerHTML = tabs.map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('');
-  nav.onclick = (e) => { const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; location.hash = tab; renderShell(); } };
+  if (!tabs.some((x) => x.k === tab)) tab = tabs[0].k;
+  const cur = tabs.find((x) => x.k === tab);
+  $('#who').innerHTML = `<span class="pagetitle">${esc(cur.l)}</span>
+    <button class="avatar" id="avbtn" title="${esc(me.name)}"><span>${esc(initials(me.name))}</span><span class="avname"><b>${esc(me.name)}</b><small>${esc(ROLE_SHORT[me.role])}</small></span></button>`;
+  $('#avbtn').onclick = () => { tab = 'account'; location.hash = tab; renderShell(); };
+  const nav = $('#tabs'); nav.hidden = false;
+  let lastG = '';
+  nav.innerHTML = tabs.map((x) => {
+    const head = x.g !== lastG ? `<div class="navgroup">${esc(x.g)}</div>` : '';
+    lastG = x.g;
+    return `${head}<button data-tab="${x.k}" class="navitem ${x.k === tab ? 'on' : ''} ${x.p ? 'primary-nav' : ''}">${icon(x.i)}<span>${esc(x.l)}</span></button>`;
+  }).join('') + `<button class="navitem more-nav ${cur.p ? '' : 'on'}" id="navmore">${icon('menu')}<span>और</span></button>`;
+  nav.onclick = (e) => {
+    if (e.target.closest('#navmore')) {
+      dialog(`<div class="sheet"><div class="spread"><h3>सभी</h3><button onclick="dlg.close()">बंद</button></div>
+        <div class="sheetgrid">${tabs.map((x) => `<button data-sheet="${x.k}" class="${x.k === tab ? 'on' : ''}">${icon(x.i, 26)}<span>${esc(x.l)}</span></button>`).join('')}</div></div>`, (el) => {
+        el.querySelectorAll('[data-sheet]').forEach((b) => (b.onclick = () => { $('#dlg').close(); tab = b.dataset.sheet; location.hash = tab; renderShell(); }));
+      });
+      return;
+    }
+    const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; location.hash = tab; renderShell(); }
+  };
+  window.scrollTo(0, 0);
   show();
 }
 async function show() {
   const main = $('#main');
-  main.innerHTML = '<p class="muted center">लोड हो रहा है…</p>';
-  try { await VIEWS[tab](main); } catch (e) { main.innerHTML = `<p class="pill bad">${esc(e.message)}</p>`; }
+  main.innerHTML = '<div class="skeleton"></div><div class="skeleton short"></div>';
+  try { await VIEWS[tab](main); } catch (e) { main.innerHTML = `<div class="empty">${icon('alert', 40)}<p>${esc(e.message)}</p></div>`; }
+  wireGo(main);
   // an unanswered explanation follows the person on every screen until they reply
   if (tab !== 'explanations') api('api/explanations').then((exs) => {
     const n = exs.filter((e) => e.asked_to === me.id && !e.reply).length;
     if (!n || $('#exban')) return;
-    main.insertAdjacentHTML('afterbegin', `<div class="notice" id="exban" style="background:var(--bad-bg)">❓ आपसे <b>${n}</b> स्पष्टीकरण माँगे गए हैं। ${settings.explanation_days} दिन में जवाब न दिया तो लाल झंडा लगेगा। <a href="#explanations">जवाब दें →</a></div>`);
+    main.insertAdjacentHTML('afterbegin', `<div class="notice bad" id="exban">❓ आपसे <b>${n}</b> स्पष्टीकरण माँगे गए हैं। ${settings.explanation_days} दिन में जवाब न दिया तो लाल झंडा लगेगा। <a href="#explanations">जवाब दें →</a></div>`);
   }).catch(() => {});
 }
+function wireGo(el) {
+  el.querySelectorAll('[data-go]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); tab = a.dataset.go; location.hash = tab; renderShell(); }));
+}
+
+// ---------- "today's work": one screen with everything waiting on this person, with time left ----------
+function timeLeft(iso) {
+  const h = (new Date(iso) - Date.now()) / 3600e3;
+  const abs = Math.abs(h), txt = abs >= 48 ? `${Math.round(abs / 24)} दिन` : `${Math.max(1, Math.round(abs))} घंटे`;
+  return h >= 0 ? { txt: txt + ' बाकी', cls: h < 12 ? 'warn' : 'ok' } : { txt: txt + ' देर', cls: 'bad' };
+}
+const dayEnd = (d) => d + 'T23:59:59+05:30';
+VIEWS.home = async (main) => {
+  const role = me.role, officer = ['jen', 'aen', 'xen'].includes(role), top = ['se', 'hq', 'admin'].includes(role);
+  const [works, vers, bills, hins, instr, exps] = await Promise.all([api('api/works'), api('api/verifications'), api('api/bills'), api('api/hindrances'), api('api/instructions'), api('api/explanations')]);
+  const tasks = [];
+  const T = (o) => tasks.push(o);
+  const mineWorks = works.filter((w) => w.status === 'active' && (top || w[role + '_id'] === me.id));
+  for (const e of exps.filter((x) => x.asked_to === me.id && !x.reply)) T({ i: 'help', t: 'स्पष्टीकरण दें', s: `${e.work}: ${e.question}`, due: dayEnd(e.due_day), go: 'explanations', b: 'जवाब दें' });
+  for (const i of instr.filter((x) => x.state === 'pending' && works.find((w) => w.id === x.work_id)?.[x.to_role + '_id'] === me.id))
+    T({ i: 'note', t: i.kind === 'promise' ? 'वादे की पुष्टि या खंडन' : 'निर्देश की पुष्टि या खंडन', s: `${i.work}: ${i.text}`, due: dayEnd(i.respond_due_day), go: 'instructions', b: 'जवाब दें' });
+  if (role === 'contractor') {
+    for (const w of mineWorks.filter((x) => x.items_count && !x.progress_today && x.wo_date)) T({ i: 'camera', t: 'आज का काम अपडेट करें', s: `${w.name}: मात्रा और साइट की फ़ोटो`, go: 'today', b: 'अपडेट करें' });
+    for (const v of vers.filter((x) => x.measured_amount != null && x.contractor_status === 'pending')) T({ i: 'check', t: 'नाप देखें: सहमत या असहमत', s: `${v.work}: नाप ${rupees(v.measured_amount)} (दावा ${rupees(v.claimed_amount)})`, go: 'verify', b: 'देखें' });
+    for (const w of mineWorks) {
+      const pending = vers.find((v) => v.work_id === w.id && v.status === 'approved' && !bills.some((b) => b.verification_id === v.id));
+      if (pending && !bills.some((b) => b.work_id === w.id && b.is_final)) T({ i: 'bill', t: 'बिल बना सकते हैं', s: `${w.name}: सत्यापित ${rupees(pending.measured_amount)}`, go: 'bills', b: 'बिल बनाएँ', good: true });
+    }
+    const d = await api('api/dashboard');
+    if (d.pending_visit_confirmations) T({ i: 'users', t: 'अधिकारियों की हाज़िरी की पुष्टि करें', s: `${d.pending_visit_confirmations} विज़िट: सच में आए थे या नहीं`, go: 'visits', b: 'पुष्टि करें' });
+    for (const v of vers.filter((x) => x.status === 'pending_jen' || x.status === 'pending_aen')) T({ i: 'clock', t: v.status === 'pending_jen' ? 'JEN का नाप बाकी' : 'AEN का अनुमोदन बाकी', s: `${v.work}: अधिकारी की ज़िम्मेदारी, आपको कुछ नहीं करना`, due: v.status === 'pending_jen' ? v.jen_due_ts : v.aen_due_ts, go: 'verify', b: 'देखें', info: true });
+  }
+  if (officer) {
+    const visitsToday = await api('api/visits?from=' + today);
+    for (const w of mineWorks.filter((x) => x.wo_date)) if (!visitsToday.some((v) => v.work_id === w.id && v.user_id === me.id)) T({ i: 'pin', t: 'साइट पर हाज़िरी', s: w.name, go: 'attend', b: 'हाज़िरी लगाएँ', soft: true });
+    if (role === 'jen') for (const w of mineWorks.filter((x) => !x.dpr_today && x.wo_date)) T({ i: 'doc', t: 'आज की DPR', s: w.name, due: dayEnd(today), go: 'dpr', b: 'DPR भरें' });
+    for (const v of vers.filter((x) => x.status === 'pending_jen')) {
+      const mine = role === 'jen' || (role === 'aen' && v.overdue_hours >= settings.escalate_measure_aen_hours) || (role === 'xen' && v.overdue_hours >= settings.escalate_measure_xen_hours);
+      if (mine) T({ i: 'check', t: role === 'jen' ? 'साइट पर नाप लें' : 'JEN नहीं आया: आप नाप लें', s: `${v.work}: दावा ${rupees(v.claimed_amount)}`, due: v.jen_due_ts, go: 'verify', b: 'नाप लें' });
+    }
+    for (const v of vers.filter((x) => x.status === 'pending_aen' && x.jen_id !== me.id && (role === 'aen' || (role === 'xen' && (x.jen_id === x.w_aen || x.overdue_hours >= settings.escalate_approve_xen_hours)))))
+      T({ i: 'check', t: 'नाप का अनुमोदन करें', s: `${v.work}: नाप ${rupees(v.measured_amount)}`, due: v.aen_due_ts, go: 'verify', b: 'अनुमोदन' });
+    for (const h of hins.filter((x) => x.state === 'pending' && x.responsible_role === role)) T({ i: 'clock', t: 'बाधा पर जवाब दें', s: `${h.work}: ${h.category_label}. जवाब न दिया तो स्वीकार मानी जाएगी`, due: dayEnd(h.response_due_day), go: 'hindrances', b: 'जवाब दें' });
+  }
+  if (role === 'xen' || top) for (const b of bills.filter((x) => x.status === 'submitted' && !x.is_final)) T({ i: 'bill', t: 'रनिंग बिल पास करें', s: `${b.work}: ${rupees(b.net_amount)}`, due: b.due ? dayEnd(b.due.due) : null, go: 'bills', b: 'पास करें' });
+  if (['hq', 'admin'].includes(role)) for (const b of bills.filter((x) => x.status === 'submitted' && x.is_final)) T({ i: 'bill', t: 'अंतिम बिल: काम सत्यापित कर भुगतान अनुमोदित करें', s: `${b.work}: ${rupees(b.net_amount)}`, due: b.due ? dayEnd(b.due.due) : null, go: 'bills', b: 'अनुमोदन' });
+  if (top) for (const h of hins.filter((x) => x.state === 'disputed')) T({ i: 'clock', t: 'बाधा पर निर्णय दें', s: `${h.work}: ${h.category_label}`, due: h.decision_due_day ? dayEnd(h.decision_due_day) : null, go: 'hindrances', b: 'निर्णय दें' });
+  if (role === 'xen' || top) for (const b of bills.filter((x) => ['passed', 'hq_approved'].includes(x.status))) T({ i: 'bill', t: 'भुगतान दर्ज करें', s: `${b.work}: ${rupees(b.net_amount)}`, due: b.due ? dayEnd(b.due.due) : null, go: 'bills', b: 'भुगतान', soft: true });
+  let flags = [];
+  try { flags = await api('api/flags'); } catch { /* not every role */ }
+  const mineFlags = top ? flags.filter((f) => f.severity === 'high') : flags.filter((f) => f.against_id === me.id);
+  if (top && mineFlags.length) {
+    const old = mineFlags.filter((f) => f.age_days >= 7).length;
+    T({ i: 'flag', t: `${mineFlags.length} गंभीर लाल झंडों पर कार्रवाई करें`, s: `${old ? `${old} झंडे 7 दिन से पुराने। ` : ''}ज़िम्मेदार व्यक्ति से स्पष्टीकरण माँगें`, go: 'flags', b: 'झंडे देखें' });
+  }
+  tasks.sort((a, b) => (a.info ? 1 : 0) - (b.info ? 1 : 0) || (a.due ? new Date(a.due) : Infinity) - (b.due ? new Date(b.due) : Infinity));
+  const late = tasks.filter((x) => x.due && new Date(x.due) < Date.now() && !x.info).length;
+  const hour = new Date().getHours();
+  main.innerHTML = `
+    <section class="greet"><div><div class="muted small">${new Date().toLocaleDateString('hi-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
+      <h2>${hour < 12 ? 'सुप्रभात' : hour < 17 ? 'नमस्ते' : 'शुभ संध्या'}, ${esc(me.name)}</h2></div>
+      <div class="chips"><span class="chip">${icon('home', 16)} ${tasks.filter((x) => !x.info).length} काम बाकी</span>${late ? `<span class="chip bad">${icon('clock', 16)} ${late} देर से</span>` : ''}${mineFlags.length ? `<a class="chip bad" href="#flags" data-go="flags">${icon('flag', 16)} ${mineFlags.length} ${top ? 'गंभीर झंडे' : 'झंडे आप पर'}</a>` : ''}</div></section>
+    <div class="tasks">${tasks.map((x) => { const tl = x.due ? timeLeft(x.due) : null; return `<div class="task ${x.info ? 'info' : ''} ${x.good ? 'good' : ''}">
+      <div class="taskic">${icon(x.i)}</div><div class="taskbody"><b>${esc(x.t)}</b><span class="small muted clamp">${esc(x.s)}</span>${tl ? `<span class="due ${tl.cls}">${icon('clock', 14)} ${tl.txt}</span>` : ''}</div>
+      <button class="${x.info || x.soft ? '' : 'primary'}" data-go="${x.go}">${esc(x.b)}</button></div>`; }).join('') ||
+      `<div class="empty">${icon('check', 44)}<p><b>सब काम पूरे हैं 👍</b></p><p class="small muted">नया काम आते ही यहाँ दिखेगा।</p></div>`}</div>
+    <h3 class="sectionh">आपके काम (${mineWorks.length})</h3>
+    <div class="grid">${mineWorks.slice(0, 6).map((w) => { const base = w.wo_amount || w.boq_total || 1; const pc = Math.min(100, Math.round((w.claimed_amount / base) * 100)); return `<button class="workcard" data-wopen="${w.id}">
+      <b>${esc(w.name)}</b><span class="small muted">${esc(w.wo_no || 'वर्क ऑर्डर बाकी')} · ${esc(w.office)}</span>
+      <div class="bar"><div style="width:${pc}%;background:var(--brand)"></div></div><span class="small">${pc}% काम · ${w.open_requests} खुले अनुरोध${w.pending_verification ? ' · नाप बाकी' : ''}</span></button>`; }).join('') || '<p class="muted">कोई काम नहीं।</p>'}</div>`;
+  main.querySelectorAll('[data-wopen]').forEach((b) => (b.onclick = () => openWork(b.dataset.wopen)));
+};
 // ---------- demo: on static hosting (GitHub Pages) the server runs inside the browser ----------
 const STATIC_DEMO = location.hostname.endsWith('github.io') || new URLSearchParams(location.search).has('static-demo');
 let IS_DEMO = STATIC_DEMO;
@@ -238,7 +370,6 @@ async function boot() {
 }
 
 // ---------- views ----------
-const VIEWS = {};
 
 VIEWS.dash = async (main, week) => {
   const d = await api('api/dashboard' + (week ? '?week=' + week : ''));
@@ -271,7 +402,6 @@ VIEWS.dash = async (main, week) => {
   $('#prevW').onclick = () => VIEWS.dash(main, shiftDay(d.week, -7));
   $('#nextW').onclick = () => VIEWS.dash(main, shiftDay(d.week, 7));
   wireReqLinks(main);
-  main.querySelectorAll('[data-go]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); tab = a.dataset.go; renderShell(); }));
 };
 const shiftDay = (day, n) => { const x = new Date(day + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 
@@ -602,7 +732,8 @@ VIEWS.account = async (main) => {
   main.innerHTML = `<div class="card" style="max-width:420px"><h2>मेरा खाता</h2><p>${esc(me.name)}<br><span class="muted">${esc(ROLE[me.role])} · ${esc(me.mobile)}</span></p>
     <label>पुराना PIN</label><input id="p1" type="password" inputmode="numeric" maxlength="8">
     <label>नया PIN</label><input id="p2" type="password" inputmode="numeric" maxlength="8">
-    <p class="row"><button class="primary" id="pc">PIN बदलें</button><button id="lo">लॉगआउट</button></p></div>`;
+    <p class="row"><button class="primary" id="pc">PIN बदलें</button><button id="lo">लॉगआउट</button></p></div>${installHelpHtml()}`;
+  if ($('#instnow')) $('#instnow').onclick = async () => { installEvent.prompt(); await installEvent.userChoice; installEvent = null; show(); };
   $('#pc').onclick = () => busy($('#pc'), async () => { await api('api/me/pin', { old_pin: $('#p1').value, new_pin: $('#p2').value }); toast('PIN बदल गया ✓'); });
   $('#lo').onclick = async () => { await api('api/logout', {}); me = null; location.hash = 'home'; route(); };
 };
@@ -959,8 +1090,32 @@ const crore = (n) => n >= 1e7 ? `₹ ${(n / 1e7).toLocaleString('en-IN', { maxim
 function publicHeader() {
   document.body.classList.remove('app');
   $('#tabs').hidden = true;
-  $('#who').innerHTML = `<nav class="pubnav"><a href="#home">होम</a><a href="#board">जनता बोर्ड</a><a href="#updates">ताज़ा अपडेट</a><a href="#contractors">ठेकेदार</a><a href="#officers">अधिकारी</a>${me ? '<a href="#dash" class="btn primary">मेरा डैशबोर्ड</a>' : '<a href="#login" class="btn">लॉगिन</a><a href="#register" class="btn primary">पंजीकरण</a>'}</nav>`;
+  $('#who').innerHTML = `<nav class="pubnav" id="pubnav"><a class="navlink" href="#home">होम</a><a class="navlink" href="#board">जनता बोर्ड</a><a class="navlink" href="#updates">ताज़ा अपडेट</a><a class="navlink" href="#contractors">ठेकेदार</a><a class="navlink" href="#officers">अधिकारी</a>
+    ${me ? '<a href="#home" class="btn primary" id="todash">मेरा डैशबोर्ड</a>' : '<a href="#login" class="btn">लॉगिन</a><a href="#register" class="btn primary">पंजीकरण</a>'}<button class="pubmenu" id="pubmenu" aria-label="मेनू">${icon('menu')}</button></nav>`;
+  $('#pubmenu').onclick = (e) => { e.preventDefault(); $('#pubnav').classList.toggle('open'); };
+  $('#pubnav').querySelectorAll('a').forEach((a) => a.addEventListener('click', () => $('#pubnav').classList.remove('open')));
+  if ($('#todash')) $('#todash').onclick = (e) => { e.preventDefault(); tab = 'home'; renderShell(); };
 }
+
+// ---------- install as an app (PWA) ----------
+let installEvent = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; showInstall(); });
+window.addEventListener('appinstalled', () => { installEvent = null; $('#installbtn')?.remove(); toast('ऐप इंस्टॉल हो गया ✓'); });
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+function showInstall() {
+  if (!installEvent || isStandalone() || $('#installbtn')) return;
+  document.body.insertAdjacentHTML('beforeend', `<button class="primary installbtn" id="installbtn">${icon('download', 18)} ऐप इंस्टॉल करें</button>`);
+  $('#installbtn').onclick = async () => { installEvent.prompt(); await installEvent.userChoice; installEvent = null; $('#installbtn')?.remove(); };
+}
+function installHelpHtml() {
+  if (isStandalone()) return '<p class="small"><span class="pill ok">✓ ऐप के रूप में खुला है</span></p>';
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  return `<div class="card"><h3>${icon('download', 18)} फ़ोन पर ऐप की तरह इंस्टॉल करें</h3>
+    ${installEvent ? '<p><button class="primary" id="instnow">ऐप इंस्टॉल करें</button></p>' : ''}
+    <p class="small muted">${ios ? 'iPhone: Safari में नीचे "शेयर" (⬆️) बटन → "Add to Home Screen" (होम स्क्रीन में जोड़ें)।' : 'Android: Chrome में ऊपर ⋮ मेनू → "ऐप इंस्टॉल करें" या "Add to Home screen"।'} इसके बाद यह होम स्क्रीन के आइकन से पूरी स्क्रीन पर खुलेगा।</p></div>`;
+}
+// the app shell is cached so the app opens on a weak network; the demo build has its own worker (demo-sw.js)
+if ('serviceWorker' in navigator && !STATIC_DEMO) navigator.serviceWorker.register('sw.js').catch(() => {});
 async function renderHome(scrollTo) {
   publicHeader();
   const main = $('#main');
