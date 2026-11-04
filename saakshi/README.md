@@ -129,6 +129,18 @@
   - यह सिर्फ़ दिखाने के लिए है। असली इस्तेमाल के लिए सर्वर पर चलाएँ ([DEPLOY.md](DEPLOY.md))।
 - **असली सर्वर के साथ, GitHub Codespaces में:** https://codespaces.new/gauravgehlotsalawas-dev/Anthropic-claude-code?quickstart=1. खुलते ही `node server.js --demo` चलता है और पोर्टल का पेज खुल जाता है। इसके लिए GitHub खाता चाहिए; मुफ़्त सीमा हर महीने 60 घंटे।
 
+## 📱 मोबाइल ऐप
+
+- **Android ऐप (APK):** https://github.com/gauravgehlotsalawas-dev/Anthropic-claude-code/releases/latest से `SiteSaakshi.apk` फ़ोन पर डाउनलोड करें और इंस्टॉल करें। पहली बार "इस स्रोत से इंस्टॉल की अनुमति" देनी होगी।
+  - यही पोर्टल ऐप में खुलता है (Capacitor), साथ में फ़ोन की native सुविधाएँ:
+    - **नकली GPS (mock location) की पहचान:** ऐसी हाज़िरी गिनी नहीं जाती, नाप दर्ज नहीं होता, और ऐसी मात्रा "मान्य अनुमोदन" में नहीं गिनी जाती।
+    - बिल और QR बोर्ड Android के प्रिंट या "PDF के रूप में सेव" से।
+  - हर push पर GitHub Actions ([android-app.yml](../.github/workflows/android-app.yml)) APK बनाकर Releases में डालता है।
+  - असली सर्वर लगने पर workflow को "Run workflow" से `app_url` में उसका पता देकर चलाएँ। तब ऐप उसी सर्वर से जुड़ जाएगा।
+  - कोड: `saakshi/app/` (Capacitor की सेटिंग, `native/MainActivity.java`, `patch-android.js`)।
+- **iPhone / कोई भी फ़ोन (PWA):** पोर्टल खोलें और "ऐप इंस्टॉल करें" बटन दबाएँ (Android Chrome), या Safari में शेयर → "Add to Home Screen" (iPhone)। होम स्क्रीन के आइकन से यह पूरी स्क्रीन पर खुलता है, और कमज़ोर नेटवर्क में भी।
+- **Play Store:** इसके लिए Google का डेवलपर खाता (एक बार $25) और release-signing key चाहिए। अभी का APK जाँच वाला (debug) संस्करण है।
+
 ## पोर्टल
 
 - **सार्वजनिक होम पेज (बिना लॉगिन):**
