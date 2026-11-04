@@ -1,0 +1,14 @@
+{
+  "name": "site-saakshi-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Android app for SiteSaakshi (Capacitor shell around the portal, with fake-GPS detection)",
+  "scripts": {
+    "android:prepare": "cap add android && node patch-android.js && cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "6.1.2",
+    "@capacitor/cli": "6.1.2",
+    "@capacitor/core": "6.1.2"
+  }
+}

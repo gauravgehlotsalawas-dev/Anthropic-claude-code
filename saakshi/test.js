@@ -61,6 +61,10 @@ async function main() {
   r = await xen('POST', '/api/visits', { work_id: w.id, lat: w.lat, lng: w.lng, accuracy: 10, photo: p });
   assert.ok(r.data.flags.includes('photo_reused')); assert.equal(r.data.counts, false);
 
+  // the Android app reports a fake-GPS app: recorded, flagged, not counted; a measurement is refused
+  r = await xen('POST', '/api/visits', { work_id: w.id, lat: w.lat, lng: w.lng, accuracy: 5, photo: fakePhoto(), mock_location: true });
+  assert.ok(r.data.flags.includes('mock_location')); assert.equal(r.data.counts, false);
+
   // bad GPS accuracy: not counted
   r = await xen('POST', '/api/visits', { work_id: w.id, lat: w.lat, lng: w.lng, accuracy: 900, photo: fakePhoto() });
   assert.ok(r.data.flags.includes('low_accuracy'));

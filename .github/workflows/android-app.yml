@@ -1,0 +1,67 @@
+# Builds the साइट साक्षी Android app (APK) and publishes it as a GitHub release, ready to install on a phone.
+name: Android app (APK)
+
+on:
+  push:
+    paths:
+      - 'saakshi/app/**'
+      - 'saakshi/public/icon-512.png'
+      - '.github/workflows/android-app.yml'
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: 'Portal URL the app opens (leave empty for the GitHub Pages demo)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: saakshi/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Point the app at the portal URL
+        if: ${{ github.event.inputs.app_url != '' && github.event.inputs.app_url != null }}
+        run: node -e "const f='capacitor.config.json',c=require('./'+f);c.server.url=process.argv[1];require('fs').writeFileSync(f,JSON.stringify(c,null,2))" "${{ github.event.inputs.app_url }}"
+      - run: npm ci
+      - name: Create and patch the Android project
+        run: npx cap add android && node patch-android.js && npx cap sync android
+      - name: Build the APK
+        working-directory: saakshi/app/android
+        run: |
+          sed -i 's/versionCode 1$/versionCode ${{ github.run_number }}/; s/versionName "1.0"/versionName "1.0.${{ github.run_number }}"/' app/build.gradle
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          mkdir -p ../../../dist
+          cp app/build/outputs/apk/debug/app-debug.apk ../../../dist/SiteSaakshi.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SiteSaakshi-apk
+          path: dist/SiteSaakshi.apk
+      - name: Publish as a release (download link for phones)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: app-v1.0.${{ github.run_number }}
+          name: साइट साक्षी Android ऐप 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: dist/SiteSaakshi.apk
+          body: |
+            **साइट साक्षी का Android ऐप।** फ़ोन पर `SiteSaakshi.apk` डाउनलोड करें और खोलें।
+            पहली बार Android पूछेगा: "इस स्रोत से ऐप इंस्टॉल करने की अनुमति दें"। उसे चालू करें।
+
+            - यह ऐप पोर्टल खोलता है: अभी GitHub Pages वाला डेमो (डेटा सिर्फ़ उसी फ़ोन में)।
+            - नकली GPS (mock location) ऐप चालू हो तो हाज़िरी गिनी नहीं जाती और नाप दर्ज नहीं होता।
+            - बिल और QR बोर्ड फ़ोन के प्रिंट / "PDF के रूप में सेव" से।
+            - यह जाँच वाला (debug) संस्करण है। Play Store पर डालने के लिए release-signed संस्करण अलग बनेगा।

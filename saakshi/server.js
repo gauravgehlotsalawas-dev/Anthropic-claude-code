@@ -247,7 +247,7 @@ function publicUser(u) { return u && { id: u.id, name: u.name, mobile: u.mobile,
 function visitCounts(v, s) {
   if (!v.in_fence || v.contractor_status === 'disputed') return false;
   const flags = v.flags ? v.flags.split(',') : [];
-  if (flags.includes('photo_reused') || flags.includes('low_accuracy') || flags.includes('no_photo')) return false;
+  if (flags.includes('photo_reused') || flags.includes('low_accuracy') || flags.includes('no_photo') || flags.includes('mock_location')) return false;
   if (s.min_visit_minutes > 0) {
     if (!v.out_ts || v.out_distance_m == null) return false;
     const work = q('SELECT radius_m FROM works WHERE id = ?').get(v.work_id);
@@ -563,7 +563,7 @@ function eligibleClaimedQty(workId, uptoTs) {
     WHERE p.work_id = ? AND p.in_fence = 1 AND p.server_ts <= ?`).all(workId, uptoTs);
   for (const r of rows) {
     const f = r.flags ? r.flags.split(',') : [];
-    if (f.includes('from_gallery') || f.includes('photo_reused') || f.includes('low_accuracy')) continue;
+    if (f.includes('from_gallery') || f.includes('photo_reused') || f.includes('low_accuracy') || f.includes('mock_location')) continue;
     m[r.item_id] = (m[r.item_id] || 0) + r.qty;
   }
   for (const it of items(workId)) if (m[it.id] > it.qty) m[it.id] = it.qty;
@@ -873,6 +873,7 @@ route('POST', '/api/visits', async (req, res, { user }) => {
   if (acc == null || acc > s.max_gps_accuracy_m) flags.push('low_accuracy');
   if (b.client_ts && Math.abs(new Date(b.client_ts) - Date.now()) > 10 * 60e3) flags.push('clock_mismatch');
   if (b.from_gallery) flags.push('from_gallery');
+  if (b.mock_location) flags.push('mock_location'); // reported by the Android app: a fake-GPS app is on
   const distance = haversine(lat, lng, w.lat, w.lng);
   const inFence = distance <= w.radius_m ? 1 : 0;
   if (!inFence) flags.push('outside_fence');
@@ -1272,6 +1273,7 @@ route('POST', '/api/progress', async (req, res, { user }) => {
   if (d > w.radius_m) flags.push('outside_fence');
   if ((num(b.accuracy) ?? 999) > s.max_gps_accuracy_m) flags.push('low_accuracy');
   if (b.from_gallery) flags.push('from_gallery');
+  if (b.mock_location) flags.push('mock_location'); // reported by the Android app: a fake-GPS app is on
   for (const p of photos) if (q("SELECT 1 FROM progress WHERE photos LIKE ? LIMIT 1").get('%' + p + '%')) { flags.push('photo_reused'); break; }
   const before = claimedAmount(w.id);
   const c = claimedQty(w.id);
@@ -1323,6 +1325,7 @@ route('POST', '/api/verifications/:id/measure', async (req, res, { user, params 
   const d = Math.round(haversine(lat, lng, w.lat, w.lng));
   // the measurement has to be taken at the site, at the time: not from the office
   if (d > w.radius_m) throw httpErr(400, `आप साइट से ${d} मी. दूर हैं। नाप साइट पर (${w.radius_m} मी. के अंदर) ही दर्ज होगा`);
+  if (b.mock_location) throw httpErr(400, 'फ़ोन में नकली GPS (mock location) चालू है। उसे बंद करके साइट पर नाप दर्ज करें');
   if (acc == null || acc > s.max_gps_accuracy_m) throw httpErr(400, `GPS कमज़ोर है (±${acc ?? '?'} मी.)। खुले में जाकर दोबारा कोशिश करें`);
   const photo = savePhoto(b.photo);
   if (!photo) throw httpErr(400, 'नाप के समय की लाइव फ़ोटो ज़रूरी है');

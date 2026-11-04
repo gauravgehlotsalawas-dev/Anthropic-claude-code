@@ -12,7 +12,7 @@ const FLAG_TYPE = { jen_not_verified: 'JEN ने नाप नहीं लि�
   request_overdue: 'अनुरोध समय-सीमा पार', deemed_by_default: 'समय पर नहीं आए: ठेकेदार के पक्ष में मान्य', measure_escalated: 'नाप की ज़िम्मेदारी ऊपर गई', explanation_overdue: 'स्पष्टीकरण नहीं दिया', instruction_disputed: 'निर्देश/वादे पर विवाद', wo_not_issued: 'वर्क ऑर्डर जारी नहीं', contractor_not_started: 'काम शुरू नहीं', hindrance_undecided: 'बाधा पर निर्णय बाकी',
   department_delay: 'विभाग के कारण देरी', contractor_delay: 'ठेकेदार की देरी', bill_delayed: 'बिल/भुगतान में देरी', final_not_approved: 'अंतिम बिल: मुख्यालय का अनुमोदन बाकी', assignment_disputed: 'काम सौंपने पर आपत्ति', officer_not_joined: 'अधिकारी ने लॉगिन नहीं किया' };
 const VSTATUS = { pending_jen: ['JEN का साइट-नाप बाकी', 'warn'], pending_aen: ['AEN का अनुमोदन बाकी', 'warn'], approved: ['JEN + AEN से सत्यापित', 'ok'] };
-const FLAG = { exceeds_boq: 'BOQ मात्रा से ज़्यादा',  outside_fence: 'साइट से बाहर', low_accuracy: 'GPS कमज़ोर', photo_reused: 'पुरानी फ़ोटो', no_photo: 'फ़ोटो नहीं', clock_mismatch: 'फ़ोन का समय गलत', from_gallery: 'गैलरी से फ़ोटो' };
+const FLAG = { mock_location: 'नकली GPS चालू',  exceeds_boq: 'BOQ मात्रा से ज़्यादा',  outside_fence: 'साइट से बाहर', low_accuracy: 'GPS कमज़ोर', photo_reused: 'पुरानी फ़ोटो', no_photo: 'फ़ोटो नहीं', clock_mismatch: 'फ़ोन का समय गलत', from_gallery: 'गैलरी से फ़ोटो' };
 
 let me = null, settings = null, today = '', tab = '';
 const VIEWS = {};
@@ -54,7 +54,12 @@ function getPosition() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('इस फ़ोन/ब्राउज़र में GPS उपलब्ध नहीं'));
     navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: Math.round(p.coords.accuracy) }),
+      (p) => {
+        const pos = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: Math.round(p.coords.accuracy) };
+        // inside the Android app the phone itself says whether a fake-GPS (mock location) app is on
+        try { if (window.SaakshiNative) { const n = JSON.parse(window.SaakshiNative.locationCheck()); if (n.known && n.mock) pos.mock_location = true; pos.app = 'android'; } } catch { /* not in the app */ }
+        resolve(pos);
+      },
       (e) => reject(new Error(e.code === 1 ? 'लोकेशन की अनुमति दें (ब्राउज़र सेटिंग में)' : 'GPS लोकेशन नहीं मिली, खुले में जाकर फिर कोशिश करें')),
       { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 });
   });
@@ -1081,7 +1086,14 @@ function printBill(b) {
     <tr><th colspan="8">इस बिल की देय राशि</th><th>₹ ${n(b.net_amount)}</th></tr></tbody></table>
     <div class="sig"><span>ठेकेदार</span><span>JEN</span><span>AEN</span><span>XEN</span>${b.is_final ? '<span>निविदा प्राधिकारी</span>' : ''}</div>
     <script>print()<\/script></body></html>`;
-  const win = window.open('', '_blank'); win.document.write(html); win.document.close();
+  printDoc(html, `${b.is_final ? 'Final' : 'RA'} Bill ${b.bill_no}`);
+}
+// print a generated page: Android app → the phone's print screen; browser → a new tab that prints itself
+function printDoc(html, title) {
+  if (window.SaakshiNative && window.SaakshiNative.printHtml) { window.SaakshiNative.printHtml(html.replace(/<script>[\s\S]*?<\/script>/g, ''), title); return; }
+  const win = window.open('', '_blank');
+  if (!win) { toast('पॉप-अप की अनुमति दें', true); return; }
+  win.document.write(html); win.document.close();
 }
 
 // ---------- public portal home (no login) ----------
@@ -1354,9 +1366,7 @@ async function printSiteBoard(id) {
     ${row('कनिष्ठ अभियंता (JEN)', esc(p.jen?.name))}${row('सहायक अभियंता (AEN)', esc(p.aen?.name))}${row('अधिशासी अभियंता (XEN)', esc(p.xen?.name))}</table>
     <div class="qr">${qrSvg(workUrl(w.id), 6)}<div><p><b>📱 स्कैन करें</b></p><p>इस काम की प्रगति, अधिकारियों की साइट-विज़िट, नाप, बिल, भुगतान, देरी: सब कुछ, रोज़ के अपडेट और फ़ोटो के साथ।</p>
     <p class="url">${esc(workUrl(w.id))}</p></div></div></div><script>window.onload=()=>print()<\/script></body></html>`;
-  const win = window.open('', '_blank');
-  if (!win) { toast('पॉप-अप की अनुमति दें', true); return; }
-  win.document.write(html); win.document.close();
+  printDoc(html, 'Site board ' + w.id);
 }
 async function shareWork(id, name) {
   const url = workUrl(id);

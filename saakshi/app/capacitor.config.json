@@ -1,0 +1,10 @@
+{
+  "appId": "com.sitesaakshi.app",
+  "appName": "साइट साक्षी",
+  "webDir": "www",
+  "server": {
+    "url": "https://gauravgehlotsalawas-dev.github.io/Anthropic-claude-code/saakshi/public/",
+    "androidScheme": "https"
+  },
+  "android": { "allowMixedContent": false, "backgroundColor": "#0b5d3b" }
+}
