@@ -3,8 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RateBook BOQ: estimates from your schedule of rates</title>
-  <script>window.APP_VERSION="202611050921";</script>
+  <title>BuildRigs · Plan · Procure · Progress</title>
+  <meta name="theme-color" content="#F9A01B">
+  <link rel="icon" type="image/png" href="img/favicon.png">
+  <link rel="apple-touch-icon" href="img/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <script>window.APP_VERSION="202611051404";</script>
 <script id="guard">
   // Shows any start-up error on the page (works even when the app's modules fail to load).
   (function () {
@@ -24,21 +29,19 @@
     setTimeout(function () { if (!window.__booted) show("The app did not start. Please send a screenshot of this message."); }, 12000);
   })();
 </script>
-  <link rel="stylesheet" href="styles.css?v=202611050921">
-  <script src="vendor/xlsx.full.min.js?v=202611050921"></script>
-  <script type="importmap" id="versions">{"imports":{"./js/ai.js":"./js/ai.js?v=202611050921","./js/app.js":"./js/app.js?v=202611050921","./js/bills.js":"./js/bills.js?v=202611050921","./js/blueprint.js":"./js/blueprint.js?v=202611050921","./js/bsr-import.js":"./js/bsr-import.js?v=202611050921","./js/demo.js":"./js/demo.js?v=202611050921","./js/docread.js":"./js/docread.js?v=202611050921","./js/docs.js":"./js/docs.js?v=202611050921","./js/export.js":"./js/export.js?v=202611050921","./js/files.js":"./js/files.js?v=202611050921","./js/match.js":"./js/match.js?v=202611050921","./js/materials.js":"./js/materials.js?v=202611050921","./js/nicboq.js":"./js/nicboq.js?v=202611050921","./js/office.js":"./js/office.js?v=202611050921","./js/quick.js":"./js/quick.js?v=202611050921","./js/sample.js":"./js/sample.js?v=202611050921","./js/site.js":"./js/site.js?v=202611050921","./js/store.js":"./js/store.js?v=202611050921","./js/tenders.js":"./js/tenders.js?v=202611050921","./vendor/libs.mjs":"./vendor/libs.mjs?v=202611050921","./vendor/pdf-lib.esm.min.js":"./vendor/pdf-lib.esm.min.js?v=202611050921","./vendor/pdf.min.mjs":"./vendor/pdf.min.mjs?v=202611050921","./vendor/pdf.worker.min.mjs":"./vendor/pdf.worker.min.mjs?v=202611050921"}}</script>
+  <link rel="stylesheet" href="styles.css?v=202611051404">
+  <script src="vendor/xlsx.full.min.js?v=202611051404"></script>
+  <script type="importmap" id="versions">{"imports":{"./js/ai.js":"./js/ai.js?v=202611051404","./js/app.js":"./js/app.js?v=202611051404","./js/bills.js":"./js/bills.js?v=202611051404","./js/blueprint.js":"./js/blueprint.js?v=202611051404","./js/bsr-import.js":"./js/bsr-import.js?v=202611051404","./js/demo.js":"./js/demo.js?v=202611051404","./js/docread.js":"./js/docread.js?v=202611051404","./js/docs.js":"./js/docs.js?v=202611051404","./js/export.js":"./js/export.js?v=202611051404","./js/files.js":"./js/files.js?v=202611051404","./js/home.js":"./js/home.js?v=202611051404","./js/match.js":"./js/match.js?v=202611051404","./js/materials.js":"./js/materials.js?v=202611051404","./js/nicboq.js":"./js/nicboq.js?v=202611051404","./js/office.js":"./js/office.js?v=202611051404","./js/quick.js":"./js/quick.js?v=202611051404","./js/resources.js":"./js/resources.js?v=202611051404","./js/sample.js":"./js/sample.js?v=202611051404","./js/site.js":"./js/site.js?v=202611051404","./js/store.js":"./js/store.js?v=202611051404","./js/tenders.js":"./js/tenders.js?v=202611051404","./vendor/libs.mjs":"./vendor/libs.mjs?v=202611051404","./vendor/pdf-lib.esm.min.js":"./vendor/pdf-lib.esm.min.js?v=202611051404","./vendor/pdf.min.mjs":"./vendor/pdf.min.mjs?v=202611051404","./vendor/pdf.worker.min.mjs":"./vendor/pdf.worker.min.mjs?v=202611051404"}}</script>
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="logo" aria-hidden="true"><svg viewBox="0 0 32 32" width="30" height="30"><rect x="3" y="3" width="26" height="26" rx="7" fill="#7fd3ae"/><path d="M9 11h14M9 16h14M9 21h9" stroke="#10201a" stroke-width="2.6" stroke-linecap="round"/></svg></span>
-      <div>
-        <strong>RateBook BOQ</strong>
-        <small>BOQ &amp; estimates from your own schedule of rates</small>
-      </div>
+      <button class="brand-home" data-tab="home" title="Home"><img src="img/logo.png" alt="BuildRigs" class="brand-logo"></button>
+      <div class="brand-tag"><small>AI-powered construction super ecosystem</small><b>Plan · Procure · Progress</b></div>
     </div>
     <nav class="tabs" role="tablist">
-      <button role="tab" data-tab="ratebooks" class="active"><span class="step">1</span><span class="tab-label">Rate books<small id="tbRate"></small></span></button>
+      <button role="tab" data-tab="home" class="active"><span class="step">⌂</span><span class="tab-label">Home<small>dashboard</small></span></button>
+      <button role="tab" data-tab="ratebooks"><span class="step">1</span><span class="tab-label">Rate books<small id="tbRate"></small></span></button>
       <button role="tab" data-tab="pick"><span class="step">2</span><span class="tab-label">Pick items<small>from BSR</small></span></button>
       <button role="tab" data-tab="takeoff"><span class="step">3</span><span class="tab-label">Drawing takeoff<small id="tbTake"></small></span></button>
       <button role="tab" data-tab="boq"><span class="step">4</span><span class="tab-label">BOQ &amp; estimate<small id="tbBoq"></small></span></button>
@@ -47,6 +50,7 @@
       <button role="tab" data-tab="sites"><span class="step">7</span><span class="tab-label">Site diary<small>DPR · GPS camera</small></span></button>
       <button role="tab" data-tab="office"><span class="step">8</span><span class="tab-label">Office<small>Accounts · documents</small></span></button>
       <button role="tab" data-tab="tenders"><span class="step">9</span><span class="tab-label">Tenders<small>alerts · my tenders</small></span></button>
+      <button role="tab" data-tab="resources"><span class="step">10</span><span class="tab-label">Resources<small>workforce · stock · machines</small></span></button>
       <button role="tab" data-tab="settings" class="tab-settings" title="Settings"><span class="step">⚙</span><span class="tab-label">Settings<small>AI &amp; defaults</small></span></button>
     </nav>
     <div class="project-switch">
@@ -58,7 +62,9 @@
 
   <main>
     <!-- ============ RATE BOOKS ============ -->
-    <section id="tab-ratebooks" class="tab active">
+    <section id="tab-home" class="tab active"><div id="homeRoot"></div></section>
+
+    <section id="tab-ratebooks" class="tab">
       <div id="welcome"></div>
       <div class="grid-2">
         <div class="card">
@@ -263,6 +269,7 @@
     <section id="tab-sites" class="tab"><div id="sitesRoot"></div></section>
     <section id="tab-office" class="tab"><div id="officeRoot"></div></section>
     <section id="tab-tenders" class="tab"><div id="tendersRoot"></div></section>
+    <section id="tab-resources" class="tab"><div id="resourcesRoot"></div></section>
 
     <!-- ============ SETTINGS ============ -->
     <section id="tab-settings" class="tab">
@@ -306,6 +313,6 @@
   <div id="toast" class="toast hidden"></div>
   <div id="printArea"></div>
 
-  <script type="module" src="js/app.js?v=202611050921"></script>
+  <script type="module" src="js/app.js?v=202611051404"></script>
 </body>
 </html>

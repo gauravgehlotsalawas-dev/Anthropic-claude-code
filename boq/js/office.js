@@ -206,7 +206,7 @@ async function backup() {
     sites: await idb.all("sites"), diary: await idb.all("diary"), expenses: await idb.all("expenses"), projects: await idb.all("projects"), bsrs: await idb.all("bsrs"),
     files: files.map(({ blob, ...meta }) => ({ ...meta, path: `files/${meta.id}.${extOf(meta.type, meta.name)}` })) };
   const zip = await makeZip([{ name: "backup.json", data: JSON.stringify(data) }, ...files.map((f) => ({ name: `files/${f.id}.${extOf(f.type, f.name)}`, data: f.blob }))]);
-  ctx.download(zip, `RateBook_backup_${new Date().toISOString().slice(0, 10)}.zip`);
+  ctx.download(zip, `BuildRigs_backup_${new Date().toISOString().slice(0, 10)}.zip`);
 }
 
 async function restore(file) {
@@ -215,7 +215,7 @@ async function restore(file) {
     const { unzipSync, strFromU8 } = await import("../vendor/libs.mjs");
     const z = unzipSync(new Uint8Array(await file.arrayBuffer()));
     const data = JSON.parse(strFromU8(z["backup.json"]));
-    if (data.kind !== "full-backup") throw new Error("This is not a RateBook full backup.");
+    if (data.kind !== "full-backup") throw new Error("This is not a BuildRigs full backup.");
     for (const [store, list] of [["sites", data.sites], ["diary", data.diary], ["expenses", data.expenses], ["projects", data.projects], ["bsrs", data.bsrs]]) for (const x of list || []) await idb.put(store, x);
     for (const meta of data.files || []) { const bytes = z[meta.path]; if (!bytes) continue; const { path, ...rest } = meta; await idb.put("files", { ...rest, blob: new Blob([bytes], { type: meta.type }) }); }
     if (data.company) await idb.put("kv", { id: "company", value: data.company });

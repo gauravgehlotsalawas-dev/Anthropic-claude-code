@@ -151,7 +151,7 @@ function summary(p) {
 }
 
 function listView() {
-  if (!state.feed) return `<div class="card empty-state"><h2>Tender list not connected yet</h2>
+  if (!state.feed || state.feed.connected === false) return `<div class="card empty-state"><h2>Tender list not connected yet</h2>
     <p>The list of new tenders from eproc.rajasthan.gov.in starts once the tender scraper is switched on. Your alert choices are already saved and will be used from then on. Meanwhile add the tenders you are working on in <b>⭐ My tenders</b> for date reminders.</p>
     <button class="ghost" data-tact="reload">↻ Check again</button></div>`;
   const all = state.feed.tenders || [];
