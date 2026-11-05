@@ -786,3 +786,13 @@ tr.h-row td { background: #fffaf2; }
 .tmeta { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .85rem; color: var(--muted); }
 .tmeta b { color: var(--ink); }
 @media (max-width: 720px) { .tender-hero { flex-direction: column; align-items: flex-start; } }
+
+.bid-quote { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end; padding: .9rem 1rem; border-radius: 14px; background: #f3f7ff; border: 1px solid #dbe5f6; }
+.bid-quote .field { min-width: 170px; }
+.bid-total { display: grid; gap: .1rem; margin-left: auto; text-align: right; }
+.bid-total small { color: var(--muted); font-size: .75rem; }
+.bid-total b.big { font-size: 1.35rem; color: #1e3a6b; }
+.bid-tab input.need { background: #fff7e6; }
+.bid-actions { position: sticky; bottom: .6rem; z-index: 5; box-shadow: 0 10px 30px rgba(0,0,0,.12) !important; }
+.status ul { margin: .3rem 0 0 1.1rem; padding: 0; }
+.bid-actions { padding: .7rem 1rem !important; } .bid-actions .status { margin: .3rem 0 0; max-height: 30vh; overflow: auto; }

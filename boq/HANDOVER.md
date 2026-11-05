@@ -61,7 +61,7 @@ git push origin HEAD:claude/cross-car-parts-database-0ivvqo   # if rejected: fet
 | 6 Bills (MB) | `bills.js`, `docread.js`, `demo.js` | Contractor's running and final bills (P.W.A. Form 27G), part rates, MB references, extra items, deviation, photos. **No AI here** |
 | 7 Site diary | `site.js`, `materials.js`, `docs.js`, `files.js` | Sites; daily entry (labour, machinery rent, work done with L×B×H/shapes, materials received and consumed); GPS camera; gallery; DPR/WPR/MPR; documents; STP application; BOQ progress |
 | 8 Office | `office.js` | Purchase bills with OCR → accounts Excel/ZIP for the CA; company documents; company profile; full backup and restore |
-| 9 Tenders | `tenders.js` | Alert choices; matching tenders from `data/tenders.json` (feed not built yet); my tenders with reminders |
+| 9 Tenders | `tenders.js`, `nicboq.js` | Alert choices; matching tenders from `data/tenders.json` (feed not built yet); my tenders with reminders; **Bid BOQ**: fill the downloaded NIC BOQ (bidder name in B8, rates in column M for Item Rate / Item Wise, Excess/Less/At Par + % in the row under "Total in Figures" for Percentage; F holds a fraction, 5.25 % = 0.0525; At Par needs F = 0) with `readBidderBoq` / `checkBid` / `bidAmounts` / `fillBidderBoq` |
 
 ### Key functions
 
