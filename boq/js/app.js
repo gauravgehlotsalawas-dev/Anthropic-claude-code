@@ -14,6 +14,8 @@ import { initBills, renderBills } from "./bills.js";
 import { initSites, renderSites, siteList, currentSiteId, switchSite, newSiteDialog } from "./site.js";
 import { initOffice, renderOffice, company } from "./office.js";
 import { initTenders, renderTenders } from "./tenders.js";
+import { initHome, renderHome } from "./home.js";
+import { initResources, renderResources } from "./resources.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -24,7 +26,7 @@ const state = {
   projects: [],
   projectId: null,
   billId: null, // the Bills tab keeps its own works, separate from the estimates
-  tab: "ratebooks",
+  tab: "home",
   index: null,
   drawings: [], // { id, file, status, parts, warning, error, dxf }
   itemById: new Map(),
@@ -90,8 +92,11 @@ async function boot() {
   await initSites({ toast, modal, closeModal, download, refreshHeader: renderProjectSelect, company });
   await initOffice({ toast, modal, closeModal, download, sites: siteList, currentSite: currentSiteId });
   await initTenders({ toast, modal, closeModal, download, company });
+  initHome({ showTab, company, sites: siteList, estimates, billWorks });
+  await initResources({ toast, modal, closeModal, showTab, company, sites: siteList, currentSite: currentSiteId });
   renderAll();
   resetHistory();
+  renderHome();
 }
 
 function renderAll() {
@@ -206,7 +211,7 @@ const indexedRate = (bsr, it) => round(num(it.rate) * (1 + num(bsr?.costIndex) /
 // ---------------------------------------------------------------------------
 
 function bindGlobal() {
-  $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  $$(".tabs button, .brand-home").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   $(".modal-close").addEventListener("click", closeModal);
   $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
   document.addEventListener("keydown", (e) => {
@@ -436,6 +441,8 @@ function showTab(name) {
   if (name === "sites") renderSites();
   if (name === "office") renderOffice();
   if (name === "tenders") renderTenders();
+  if (name === "home") renderHome();
+  if (name === "resources") renderResources();
   window.scrollTo({ top: 0 });
 }
 
@@ -457,7 +464,7 @@ function guardEmpty() {
 // ---------------------------------------------------------------------------
 
 function renderProjectSelect() {
-  $(".project-switch").classList.toggle("hidden", state.tab === "office" || state.tab === "tenders");
+  $(".project-switch").classList.toggle("hidden", ["office", "tenders", "home", "resources"].includes(state.tab));
   if (state.tab === "sites") {
     const list = siteList();
     $("#projectSelect").innerHTML = list.length ? list.map((s) => `<option value="${s.id}" ${s.id === currentSiteId() ? "selected" : ""}>${esc(s.name.slice(0, 70))}</option>`).join("") : `<option value="">No sites yet: press ＋</option>`;
@@ -1967,8 +1974,8 @@ function renderSettings() {
 
 // If the start hangs (an old tab holds the database, or the browser kept old files), say so instead of showing dead buttons.
 const stuck = (msg) => { if (document.querySelector(".fatal")) return; document.body.insertAdjacentHTML("afterbegin", `<div class="fatal">${msg} <button onclick="location.reload()">Reload</button></div>`); };
-window.addEventListener("db-blocked", () => stuck("RateBook is open in another tab or window with an older version. Close the other RateBook tabs, then press Reload."));
-const bootTimer = setTimeout(() => stuck("The app is taking too long to start. Close other RateBook tabs and press Reload."), 15000);
+window.addEventListener("db-blocked", () => stuck("BuildRigs is open in another tab or window with an older version. Close the other BuildRigs tabs, then press Reload."));
+const bootTimer = setTimeout(() => stuck("The app is taking too long to start. Close other BuildRigs tabs and press Reload."), 15000);
 boot().then(() => { clearTimeout(bootTimer); window.__booted = true; }).catch((e) => {
   clearTimeout(bootTimer);
   console.error(e);

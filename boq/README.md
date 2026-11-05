@@ -1,4 +1,7 @@
-# RateBook BOQ
+# BuildRigs: Plan · Procure · Progress
+
+**BuildRigs** is an AI-powered construction super ecosystem for Indian contractors and engineers: projects, BOQs, bills, sites, people, materials, machinery, money and tenders in one connected place (www.buildrigs.com). This folder is the web app. Its estimating part was first called *RateBook BOQ*.
+
 
 A web tool for contractors and engineers that builds bills of quantities (BOQ) and cost estimates from **your own schedules of rates** (BSR / SOR / DSR or a company rate list). It can also prepare a first BOQ straight from drawings.
 
@@ -88,6 +91,17 @@ One folder per construction site (the selector at the top lists sites while this
 - **Bid BOQ (fill rates):** open the BOQ `.xls` downloaded from the tender on the portal. Enter the bidder's name (cell B8) and either a rate for every item (Item Rate and Item Wise BoQs; a "rates = estimate − %" helper is offered where estimated rates are given) or the offer below, above or at par with a percentage (Percentage BoQ). The amounts, totals, quoted amount and amount in words are worked out as the template does. **Check** lists what must be fixed (missing name or rates, no offer chosen, a percentage of 100 or more…) and what to look at. **Save** writes the same `.xls`, under the same file name, with its macros and protection kept and only the bidder's cells filled (percentages are stored as the template expects: 5.25 % as 0.0525). The draft is kept on the device until closed.
 - **My tenders:** tenders being studied or bid, with status (studying, bid submitted, L1, work order received…) and a reminder when the app opens before the bid end and the opening date.
 
+## Home (dashboard)
+
+The first screen. It shows the BuildRigs brand (black and BuildRigs orange #F9A01B, Outfit headings, logo in `img/`), live figures (sites, bills, estimates, money spent this month, tenders tracked, photos), the construction workflow from projects to accounts with a link into each step, a card for every module, and what is coming next (ThekedarGPT, equipment rental, marketplace).
+
+## Resources (tab 10)
+
+- **Workforce & attendance:** worker register (trade, daily wage, overtime rate, contractor or chowk, phone, sites). Mark each day P / ½ / A with overtime hours; *All present* for a quick start; **→ Diary labour** writes the day's attendance into the site diary as labour groups (trade × count × wage). Muster roll (day by day) and wage sheet for any period, with advances, as print or Excel.
+- **Materials & inventory:** stock per site from the diary (materials received minus consumed), last receipt, and an "alert below" level that flags low stock.
+- **Machinery & equipment:** register of own and rented machines (owner, phone, rate per hour / day / trip / month). Usage and rent for any period come from the diary, with the rent payable to each owner; machines found in the diary can be registered in one tap, and registered names are offered first in the diary.
+- **Vendors & suppliers:** directory (GSTIN, phone, supplies, bank), with bills, purchases and unpaid credit from Office → Purchase bills; vendors can be added from the bills in one tap.
+
 ## File format notes
 
 | Format | Handling |
@@ -127,7 +141,10 @@ boq/
   js/office.js       accounts, company documents and backup (tab 8)
   js/docs.js         document folders, scan and merge
   js/files.js        photo stamping, EXIF, ZIP and PDF helpers
-  js/tenders.js      tender alert choices, matching tenders and my tenders (tab 9)
+  js/tenders.js      tender alert choices, matching tenders, my tenders and bid BOQ (tab 9)
+  js/resources.js    workforce & attendance, inventory, equipment, vendors (tab 10)
+  js/home.js         BuildRigs home dashboard
+  img/               BuildRigs logo (black and white versions) and icons
   js/materials.js    approximate materials from BOQ items
   js/sample.js       sample rate book (demo rates only)
   vendor/            SheetJS 0.18.5, pdf.js 6.4, pdf-lib 1.17.1 (MIT), a browser bundle of @anthropic-ai/sdk 1.3 and fflate

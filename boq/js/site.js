@@ -143,6 +143,19 @@ function entry(day, create = false) {
   if (!d && create) { d = { id: k, siteId: state.siteId, date: day, weather: "", hours: "", labour: [], work: [], materials: [], machinery: [], consumed: [], hindrance: "", remarks: "", visitors: "" }; state.diary.set(k, d); }
   return d;
 }
+/** For other modules (Resources): read or create a site's diary day, and save it, keeping this module's copy in step. */
+export function diaryEntry(siteId, day, create = false) {
+  const k = dKey(siteId, day);
+  let d = state.diary.get(k);
+  if (!d && create) { d = { id: k, siteId, date: day, weather: "", hours: "", labour: [], work: [], materials: [], machinery: [], consumed: [], hindrance: "", remarks: "", visitors: "" }; state.diary.set(k, d); }
+  return d;
+}
+export const diaryEntries = (siteId, from = "", to = "") => entriesOf(siteId, from, to);
+export const putDiary = (d) => { state.diary.set(d.id, d); return idb.put("diary", d); };
+export const saveSiteRecord = (s) => saveSite(s);
+let knownMachines = [];
+/** Machines registered in Resources, offered first in the diary's machine list. */
+export const setKnownMachines = (names) => { knownMachines = names.filter(Boolean); };
 let saveT = null;
 function saveEntry(d) {
   clearTimeout(saveT); setSaveState("saving");
@@ -374,7 +387,7 @@ async function todayView() {
         <p class="muted small">Rent per hour (start and end time give the hours), per day or per trip.</p>${rowTable("machinery", [["name", "Machine", "", "dlMach"], ["count", "Nos / trips", "number"], ["basis", "Rent per", "sel:hour=Hour|day=Day|trip=Trip"], ["rate", "Rate ₹", "number"], ["start", "Start", "time"], ["end", "End", "time"], ["hours", "Hours", "number"], ["amt", "Amount", "calc"]], d.machinery, "Machine")}</div>
     </div>
     <div class="card"><h3><span class="hico">🏗️</span>Work done today</h3>${site().boqItems?.length ? `<p class="muted small">Type a few words or the BOQ No. and pick the item: its full description, unit and BOQ No. are filled in.</p>` : ""}${workTable(d.work)}</div>
-    <datalist id="dlMat">${MAT_NAMES.map((x) => `<option>${x}</option>`).join("")}</datalist><datalist id="dlMach">${MACHINES.map((x) => `<option>${x}</option>`).join("")}</datalist>
+    <datalist id="dlMat">${MAT_NAMES.map((x) => `<option>${x}</option>`).join("")}</datalist><datalist id="dlMach">${[...new Set([...knownMachines, ...MACHINES])].map((x) => `<option>${x}</option>`).join("")}</datalist>
     <div class="card"><h3><span class="hico">📦</span>Materials received</h3>${rowTable("materials", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["supplier", "Supplier"], ["challan", "Challan No."]], d.materials, "Material")}</div>
     <div class="card"><h3><span class="hico">🧮</span>Materials consumed today</h3>${rowTable("consumed", [["name", "Material", "", "dlMat"], ["qty", "Qty", "number"], ["unit", "Unit", "", "dlUnit"], ["usedFor", "Used for (item / location)", "", "dlWork"]], d.consumed || [], "Material used")}</div>
     <div class="grid-3">

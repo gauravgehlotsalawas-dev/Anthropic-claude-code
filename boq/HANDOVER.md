@@ -1,4 +1,4 @@
-# RateBook BOQ: handover notes
+# BuildRigs (RateBook BOQ): handover notes
 
 Read this first, then `README.md` (user-facing feature list). These notes are for a developer or an AI
 assistant continuing the work.
@@ -62,6 +62,8 @@ git push origin HEAD:claude/cross-car-parts-database-0ivvqo   # if rejected: fet
 | 7 Site diary | `site.js`, `materials.js`, `docs.js`, `files.js` | Sites; daily entry (labour, machinery rent, work done with L×B×H/shapes, materials received and consumed); GPS camera; gallery; DPR/WPR/MPR; documents; STP application; BOQ progress |
 | 8 Office | `office.js` | Purchase bills with OCR → accounts Excel/ZIP for the CA; company documents; company profile; full backup and restore |
 | 9 Tenders | `tenders.js`, `nicboq.js` | Alert choices; matching tenders from `data/tenders.json` (feed not built yet); my tenders with reminders; **Bid BOQ**: fill the downloaded NIC BOQ (bidder name in B8, rates in column M for Item Rate / Item Wise, Excess/Less/At Par + % in the row under "Total in Figures" for Percentage; F holds a fraction, 5.25 % = 0.0525; At Par needs F = 0) with `readBidderBoq` / `checkBid` / `bidAmounts` / `fillBidderBoq` |
+| Home | `home.js` | BuildRigs dashboard: brand hero, live figures, workflow, module cards, coming next (ThekedarGPT, equipment rental, marketplace) |
+| 10 Resources | `resources.js` | Workers + attendance (stored in each diary day as `attendance{workerId:{s:'P'|'H'|'A', ot}}`), muster roll / wages; inventory from the diary; equipment register (kv `equipment`) with usage from diary machinery; vendors (kv `vendors`) with purchases from `expenses` |
 
 ### Key functions
 
@@ -107,6 +109,10 @@ git push origin HEAD:claude/cross-car-parts-database-0ivvqo   # if rejected: fet
   - `weather, hours, hindrance, visitors, remarks`.
 - **File:** `{id, owner: siteId|"company", kind:"photo"|"doc"|"bill", folder, name, type, size, blob, date, caption, gps{lat,lon,acc,address}, thumb, stamped}`.
 - **Expense:** `{id, date, vendor, gstin, billNo, category, owner, taxable, gst, total, pay, note, fileId}`.
+
+## 3b. Brand
+
+BuildRigs: black `#141518` and orange `#F9A01B` on warm white `#FBF8F2`, Outfit headings (Google Fonts, falls back to Inter/system), logo files in `img/` (`logo.png` for light backgrounds, `logo-white.png` for dark, `icon-192/512.png`, `favicon.png`). Taglines: "Plan · Procure · Progress", "AI-powered construction super ecosystem", "Building the intelligence layer for construction". ThekedarGPT, equipment rental and the marketplace are shown as coming soon only. The theme is the last block of `styles.css`; print styles stay black and white.
 
 ## 4. The user's requirements (keep them)
 
