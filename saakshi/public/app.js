@@ -133,7 +133,7 @@ function renderLogin() {
     <label>PIN</label><input id="lp" type="password" inputmode="numeric" maxlength="8" autocomplete="current-password">
     <p><button class="primary big" id="lb">लॉगिन करें</button></p>
     <p class="center"><button id="lotp">नया खाता / पहली बार / PIN भूल गए: OTP से लॉगिन</button></p>
-    <p class="small muted">हर विभाग के इंजीनियर और सरकारी टेंडर में पंजीकृत हर ठेकेदार यहाँ अपना खाता बनाता है। अगर किसी प्रोजेक्ट में आपका नाम और मोबाइल डाला गया है, तो आपका खाता पहले से बना है: बस OTP से लॉगिन करें।</p></div>`;
+    <p class="small muted">साइट साक्षी · BuildRigs। हर विभाग के इंजीनियर और सरकारी टेंडर में पंजीकृत हर ठेकेदार यहाँ अपना खाता बनाता है। अगर किसी प्रोजेक्ट में आपका नाम और मोबाइल डाला गया है, तो आपका खाता पहले से बना है: बस OTP से लॉगिन करें।</p></div>`;
   $('#lotp').onclick = renderOtp;
   if (IS_DEMO) {
     $('.login').insertAdjacentHTML('beforeend', `<div class="demologin"><p><b>डेमो: एक क्लिक में किसी भी भूमिका से देखें</b></p><div class="row">${DEMO_USERS.map(([m, l]) => `<button data-dm="${m}">${l}</button>`).join('')}</div></div>`);
@@ -226,8 +226,18 @@ function tabsFor(role) {
     contractor: ['home', 'today', 'bills', 'works'], jen: ['home', 'attend', 'verify', 'dpr'], aen: ['home', 'attend', 'verify', 'flags'],
     xen: ['home', 'attend', 'bills', 'flags'], se: ['home', 'daily', 'flags', 'works'], hq: ['home', 'daily', 'flags', 'works'], admin: ['home', 'daily', 'flags', 'admin'],
   }[role] || ['home', 'flags', 'works', 'account'];
-  for (const x of t) x.p = primary.includes(x.k);
-  return t;
+  // the few things each role does every day; everything else waits under "और विकल्प"
+  const everyday = {
+    contractor: ['home', 'today', 'bills', 'works', 'visits', 'hindrances', 'instructions', 'flags', 'account'],
+    jen: ['home', 'attend', 'verify', 'dpr', 'works', 'hindrances', 'instructions', 'flags', 'account'],
+    aen: ['home', 'attend', 'verify', 'works', 'hindrances', 'daily', 'flags', 'account'],
+    xen: ['home', 'attend', 'verify', 'bills', 'works', 'hindrances', 'daily', 'flags', 'account'],
+    se: ['home', 'daily', 'flags', 'works', 'bills', 'hindrances', 'admin', 'account'],
+    hq: ['home', 'daily', 'flags', 'works', 'bills', 'hindrances', 'admin', 'account'],
+    admin: ['home', 'daily', 'flags', 'works', 'bills', 'admin', 'account'],
+  }[role] || t.map((x) => x.k);
+  for (const x of t) { x.p = primary.includes(x.k); x.extra = !everyday.includes(x.k); }
+  return t.filter((x) => !x.extra).concat(t.filter((x) => x.extra).map((x) => ({ ...x, g: 'और विकल्प' })));
 }
 const initials = (name) => String(name || '?').replace(/^(M\/s|Shri|Smt)\.?\s+/i, '').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 function renderShell() {
@@ -240,15 +250,20 @@ function renderShell() {
   $('#avbtn').onclick = () => { tab = 'account'; location.hash = tab; renderShell(); };
   const nav = $('#tabs'); nav.hidden = false;
   let lastG = '';
+  const showExtra = cur.extra || nav.classList.contains('showextra');
+  nav.classList.toggle('showextra', showExtra);
   nav.innerHTML = tabs.map((x) => {
-    const head = x.g !== lastG ? `<div class="navgroup">${esc(x.g)}</div>` : '';
+    const head = x.g !== lastG ? (x.extra ? `<button class="navgroup navextra-toggle" id="navextra">${esc(x.g)} ${showExtra ? '▴' : '▾'}</button>` : `<div class="navgroup">${esc(x.g)}</div>`) : '';
     lastG = x.g;
-    return `${head}<button data-tab="${x.k}" class="navitem ${x.k === tab ? 'on' : ''} ${x.p ? 'primary-nav' : ''}">${icon(x.i)}<span>${esc(x.l)}</span></button>`;
+    return `${head}<button data-tab="${x.k}" class="navitem ${x.k === tab ? 'on' : ''} ${x.p ? 'primary-nav' : ''} ${x.extra ? 'extra-nav' : ''}">${icon(x.i)}<span>${esc(x.l)}</span></button>`;
   }).join('') + `<button class="navitem more-nav ${cur.p ? '' : 'on'}" id="navmore">${icon('menu')}<span>और</span></button>`;
   nav.onclick = (e) => {
+    if (e.target.closest('#navextra')) { nav.classList.toggle('showextra'); e.target.closest('#navextra').innerHTML = `और विकल्प ${nav.classList.contains('showextra') ? '▴' : '▾'}`; return; }
     if (e.target.closest('#navmore')) {
-      dialog(`<div class="sheet"><div class="spread"><h3>सभी</h3><button onclick="dlg.close()">बंद</button></div>
-        <div class="sheetgrid">${tabs.map((x) => `<button data-sheet="${x.k}" class="${x.k === tab ? 'on' : ''}">${icon(x.i, 26)}<span>${esc(x.l)}</span></button>`).join('')}</div></div>`, (el) => {
+      const main = tabs.filter((x) => !x.extra), more = tabs.filter((x) => x.extra);
+      dialog(`<div class="sheet"><div class="spread"><h3>मेनू</h3><button onclick="dlg.close()">बंद</button></div>
+        <div class="sheetgrid">${main.map((x) => `<button data-sheet="${x.k}" class="${x.k === tab ? 'on' : ''}">${icon(x.i, 26)}<span>${esc(x.l)}</span></button>`).join('')}</div>
+        <details class="sheetmore" ${cur.extra ? 'open' : ''}><summary>और विकल्प</summary><div class="sheetlist">${more.map((x) => `<button data-sheet="${x.k}" class="${x.k === tab ? 'on' : ''}">${icon(x.i, 20)}<span>${esc(x.l)}</span></button>`).join('')}</div></details></div>`, (el) => {
         el.querySelectorAll('[data-sheet]').forEach((b) => (b.onclick = () => { $('#dlg').close(); tab = b.dataset.sheet; location.hash = tab; renderShell(); }));
       });
       return;
@@ -263,12 +278,22 @@ async function show() {
   main.innerHTML = '<div class="skeleton"></div><div class="skeleton short"></div>';
   try { await VIEWS[tab](main); } catch (e) { main.innerHTML = `<div class="empty">${icon('alert', 40)}<p>${esc(e.message)}</p></div>`; }
   wireGo(main);
+  collapseNotices(main);
   // an unanswered explanation follows the person on every screen until they reply
   if (tab !== 'explanations') api('api/explanations').then((exs) => {
     const n = exs.filter((e) => e.asked_to === me.id && !e.reply).length;
     if (!n || $('#exban')) return;
     main.insertAdjacentHTML('afterbegin', `<div class="notice bad" id="exban">❓ आपसे <b>${n}</b> स्पष्टीकरण माँगे गए हैं। ${settings.explanation_days} दिन में जवाब न दिया तो लाल झंडा लगेगा। <a href="#explanations">जवाब दें →</a></div>`);
   }).catch(() => {});
+}
+// long rule texts stay one tap away, so screens show the work first
+function collapseNotices(el) {
+  el.querySelectorAll('.notice:not(.bad)').forEach((n) => {
+    if (n.textContent.trim().length < 150 || n.closest('details')) return;
+    const d = document.createElement('details'); d.className = 'notice rules';
+    d.innerHTML = `<summary>ℹ️ नियम: यह कैसे काम करता है</summary><div>${n.innerHTML}</div>`;
+    n.replaceWith(d);
+  });
 }
 function wireGo(el) {
   el.querySelectorAll('[data-go]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); tab = a.dataset.go; location.hash = tab; renderShell(); }));
@@ -1195,7 +1220,7 @@ async function renderHome(scrollTo) {
     <div class="card"><h3>🏛️ विभाग / मुख्यालय</h3><p class="small">हर काम, हर अधिकारी और हर ठेकेदार की स्थिति एक जगह। समय-सीमा पार होते ही झंडा। Excel रिपोर्ट।</p></div>
     <div class="card"><h3>🧑‍🤝‍🧑 नागरिक</h3><p class="small">आपके क्षेत्र का काम कितना हुआ, कब पूरा होगा और कितना भुगतान हुआ: बिना लॉगिन के।</p></div>
   </div></section>
-  <footer class="foot small muted">साइट साक्षी: खुला स्रोत (open source), मुफ़्त। हर काम, ठेकेदार और अधिकारी का रिकॉर्ड जनता के लिए खुला है। किसी का मोबाइल नंबर, हाज़िरी की सेल्फ़ी या शिकायत सार्वजनिक नहीं की जाती। सारे रिकॉर्ड विभाग के सर्वर पर रहते हैं।</footer>`;
+  <footer class="foot small muted"><b>साइट साक्षी</b>: <a href="https://www.buildrigs.com" target="_blank" rel="noopener">BuildRigs</a> का उत्पाद, सरकार और ट्रस्टों के लिए मुफ़्त। संपर्क: hello@buildrigs.com। हर काम, ठेकेदार और अधिकारी का रिकॉर्ड जनता के लिए खुला है। किसी का मोबाइल नंबर, हाज़िरी की सेल्फ़ी या शिकायत सार्वजनिक नहीं की जाती। सारे रिकॉर्ड विभाग के सर्वर पर रहते हैं।</footer>`;
   if (d.enabled) {
     const draw = () => {
       const qy = $('#bq').value.trim().toLowerCase(), dep = $('#bd').value, stg = $('#bs').value;
