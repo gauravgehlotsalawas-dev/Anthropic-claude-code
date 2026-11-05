@@ -18,6 +18,15 @@ Before each deploy run `python3 tools/version.py`: it stamps a version on every 
 
 To put it online, serve the `boq/` folder from any static host (GitHub Pages, Netlify, an office web server). Opening `index.html` directly from disk does not work, because browsers block ES modules on `file://`.
 
+## Workspaces: Contractor and Engineer
+
+On first open the app asks who you are. Each workspace shows only the tools for that work (tabs, home cards and shortcuts), and can be switched from the top bar or Settings. The data stays the same.
+
+- **Contractor:** rate books, pick items, drawing takeoff, BOQ, bills, site diary, office & accounts, tenders, resources (workforce, materials, machinery, vendors).
+- **Engineer (JEN / AEN / XEN):** rate books, pick items, drawing takeoff, BOQ & estimate, e-Tender BOQ (GePNIC template), bills (checking), site diary. Shown in department blue.
+
+The choice is kept on the device (`localStorage` key `br.role`, set in `js/role.js`). It shapes the screens only. It is not a login, so it does not protect data from anyone using the same device.
+
 ## How it works
 
 1. **Rate books.** Upload one or more schedules of rates. Supported formats:
