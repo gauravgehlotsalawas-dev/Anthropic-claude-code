@@ -89,7 +89,7 @@ async function boot() {
   });
   await initSites({ toast, modal, closeModal, download, refreshHeader: renderProjectSelect, company });
   await initOffice({ toast, modal, closeModal, download, sites: siteList, currentSite: currentSiteId });
-  await initTenders({ toast, modal, closeModal });
+  await initTenders({ toast, modal, closeModal, download, company });
   renderAll();
   resetHistory();
 }

@@ -823,3 +823,268 @@ export function nicNumbering(sections, { headings = true } = {}) {
   });
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Bidder's side: read a BOQ downloaded from the portal and fill in the bidder's name and rates
+// ---------------------------------------------------------------------------
+
+const COL = { SNO: 0, DESC: 1, QTY: 3, UNIT: 4, EST: 5, RATE: 12, BA: 52, BB: 53, BC: 54 };
+const ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+const TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+const w2 = (n) => (n < 20 ? ONES[n] : `${TENS[Math.floor(n / 10)]}${n % 10 ? " " + ONES[n % 10] : ""}`);
+const w3 = (n) => [n >= 100 ? `${ONES[Math.floor(n / 100)]} Hundred` : "", n % 100 ? w2(n % 100) : ""].filter(Boolean).join(" ");
+/** Amount in words, Indian system, in the style of the template ("INR  One Lakh … Only"). */
+export function inrWords(v) {
+  const whole = Math.floor(Math.abs(v)), paise = Math.round((Math.abs(v) - whole) * 100);
+  if (!whole && !paise) return "INR Zero Only";
+  let n = whole; const parts = [];
+  const cr = Math.floor(n / 1e7); n %= 1e7; const lk = Math.floor(n / 1e5); n %= 1e5; const th = Math.floor(n / 1e3); n %= 1e3;
+  if (cr) parts.push(`${cr >= 1000 ? inrWords(cr).replace(/^INR\s+|\s+Only$/g, "") : w3(cr)} Crore`);
+  if (lk) parts.push(`${w2(lk)} Lakh`); if (th) parts.push(`${w2(th)} Thousand`); if (n) parts.push(w3(n));
+  return `INR  ${parts.join(" ") || "Zero"}${paise ? ` and Paise ${w2(paise)}` : ""} Only`;
+}
+
+/** Choices in the bidder's drop-down, read from cell A3 ("Select, At Par, Excess (+), Less (-)"). */
+const dirChoices = (a3) => String(a3 || "Select, Excess (+), Less (-)").split(",").map((s) => s.trim()).filter(Boolean);
+
+function openBook(buffer) {
+  const { cfb, entry, stream } = loadContainer(buffer);
+  const recs = readRecords(stream);
+  const subs = splitSubstreams(recs);
+  const globals = subs[0];
+  const sheets = sheetsInfo(globals);
+  const sstAt = globals.findIndex((r) => r.type === R.SST);
+  let sstEnd = sstAt + 1;
+  while (globals[sstEnd]?.type === R.CONTINUE) sstEnd++;
+  const sst = parseSST(globals.slice(sstAt, sstEnd).map((r) => r.data));
+  const xfLocked = (xf) => { const x = globals.filter((r) => r.type === R.XF)[xf]?.data; return x ? !!(x[4] & 1) : true; };
+  return { cfb, entry, subs, globals, sheets, sst, sstAt, sstEnd, xfLocked };
+}
+function sheetTable(sub) {
+  const tStart = sub.findIndex((r) => TABLE_TYPES.has(r.type));
+  let tEnd = tStart;
+  for (let i = tStart; i < sub.length; i++) if (TABLE_TYPES.has(sub[i].type)) tEnd = i;
+  const shared = [];
+  const rows = readCellTable(sub.slice(tStart, tEnd + 1).filter((r) => TABLE_TYPES.has(r.type)), shared);
+  return { tStart, tEnd, rows, shared };
+}
+const cellText = (rows, strings, r, c) => {
+  const x = rows.get(r)?.cells.get(c);
+  if (!x) return "";
+  if (x.kind === "sst") return strings[x.isst]?.text ?? "";
+  if (x.kind === "num") return x.value;
+  if (x.kind === "text") return x.text;
+  return "";
+};
+const footerOf = (rows, strings) => [...rows.keys()].sort((a, b) => a - b).find((r) => r >= 12 && /^total in figures/i.test(String(cellText(rows, strings, r, 0)).trim()));
+
+/**
+ * Everything a bidder needs from a downloaded BOQ: per BoQ sheet the type, items (with the
+ * estimated rate of a Percentage BoQ and any rate already quoted), the quote row and the name.
+ */
+export function readBidderBoq(buffer) {
+  const b = openBook(buffer);
+  const boqSheets = b.sheets.map((s, i) => ({ ...s, i })).filter((s) => /^BoQ\d+$/.test(s.name));
+  if (!boqSheets.length) throw new Error("This file has no BoQ sheet: it is not a GePNIC BOQ.");
+  const out = { sheets: [], hasMacros: b.cfb.FullPaths.some((p) => /_VBA_PROJECT/i.test(p)) };
+  for (const s of boqSheets) {
+    const sub = b.subs[s.i + 1];
+    const { rows } = sheetTable(sub);
+    const t = (r, c) => cellText(rows, b.sst.strings, r, c);
+    const footer = footerOf(rows, b.sst.strings);
+    if (footer == null) throw new Error(`Could not find the "Total in Figures" row in ${s.name}.`);
+    const type = String(t(1, 1)).trim();
+    const items = [];
+    for (let r = 12; r < footer; r++) {
+      if (!rows.has(r)) continue;
+      const sno = t(r, COL.SNO), desc = String(t(r, COL.DESC)).trim();
+      if (sno === "" && !desc) continue;
+      const qty = t(r, COL.QTY);
+      const heading = typeof qty !== "number";
+      const rc = rows.get(r).cells.get(COL.RATE);
+      items.push({ row: r, sno: String(sno), description: desc, qty: heading ? null : qty, unit: String(t(r, COL.UNIT)).trim(),
+        est: typeof t(r, COL.EST) === "number" ? t(r, COL.EST) : null, rate: typeof t(r, COL.RATE) === "number" ? t(r, COL.RATE) : null,
+        heading, rateOpen: !!rc && !b.xfLocked(rc.xf) });
+    }
+    const q = footer + 1;
+    const protect = sub.find((r) => r.type === R.PROTECT);
+    out.sheets.push({
+      name: s.name, hidden: s.hidden, type, version: String(t(1, 0)), title: String(t(0, 0)),
+      authority: String(t(3, 0)), work: String(t(4, 0)), contract: String(t(5, 0)),
+      bidder: String(t(7, 1) || ""), items, footerRow: footer,
+      // The template multiplies by F directly (cell formatted as %), so 5.25 % is stored as 0.0525.
+      quote: { dir: String(t(q, 4) || "Select"), pct: typeof t(q, 5) === "number" ? Math.round(t(q, 5) * 1e6) / 1e4 : null, choices: dirChoices(t(2, 0)) },
+      protected: !!(protect && u16(protect.data, 0)),
+      perItemRate: type !== "Percentage",
+    });
+  }
+  return out;
+}
+
+/** Problems a bidder must fix before the BOQ can be uploaded (the template's own checks, done here first). */
+export function checkBid(info, bid) {
+  const errors = [], warnings = [];
+  const name = String(bid.bidder || "").trim();
+  if (!name) errors.push("Enter the name of the bidder / firm (cell B8).");
+  else if (name.length < 3) errors.push("The bidder's name looks too short.");
+  for (const s of info.sheets) {
+    const b = bid.sheets[s.name] || {};
+    if (s.perItemRate) {
+      const missing = s.items.filter((it) => !it.heading && !(Number(b.rates?.[it.row]) > 0));
+      if (missing.length) errors.push(`${s.name}: no rate for ${missing.length} item${missing.length > 1 ? "s" : ""} (S.No ${missing.slice(0, 8).map((m) => m.sno).join(", ")}${missing.length > 8 ? "…" : ""}).`);
+      const neg = s.items.filter((it) => Number(b.rates?.[it.row]) < 0);
+      if (neg.length) errors.push(`${s.name}: rates cannot be negative.`);
+      const closed = s.items.filter((it) => !it.heading && !it.rateOpen);
+      if (closed.length) warnings.push(`${s.name}: ${closed.length} rate cell(s) are locked in the template; the department may not accept a rate there.`);
+      const far = s.type === "Item Rate" ? s.items.filter((it) => { const r = Number(b.rates?.[it.row]); return r > 0 && it.est > 0 && (r > it.est * 3 || r < it.est / 3); }) : [];
+      if (far.length) warnings.push(`${s.name}: ${far.length} rate(s) differ a lot from the estimated rate (S.No ${far.slice(0, 6).map((x) => x.sno).join(", ")}${far.length > 6 ? "…" : ""}). Check them.`);
+      const dec = s.items.filter((it) => { const r = Number(b.rates?.[it.row]); return r > 0 && Math.abs(Math.round(r * 100) - r * 100) > 1e-6; });
+      if (dec.length) warnings.push(`${s.name}: ${dec.length} rate(s) have more than 2 decimals; they are rounded to paise.`);
+    }
+    const dir = b.quote?.dir || "Select", pct = b.quote?.pct;
+    if (!s.perItemRate) {
+      if (!dir || dir === "Select") errors.push(`${s.name}: choose ${s.quote.choices.filter((c) => c !== "Select").join(" / ")}.`);
+      else if (dir !== "At Par" && !(Number(pct) >= 0 && pct !== "" && pct != null)) errors.push(`${s.name}: enter the percentage ${dir.startsWith("Less") ? "below" : "above"} the estimate.`);
+      if (Number(pct) > 99.99) errors.push(`${s.name}: the percentage must be less than 100.`);
+      if (Number(pct) < 0) errors.push(`${s.name}: the percentage cannot be negative.`);
+      if (dir === "At Par" && Number(pct)) warnings.push(`${s.name}: At Par ignores the percentage.`);
+    } else if (dir !== "Select" && (pct === "" || pct == null)) errors.push(`${s.name}: enter the overall percentage, or set the drop-down back to Select.`);
+  }
+  return { errors, warnings };
+}
+
+/** Amounts as the template's formulas would give them, so the totals are right even before Excel recalculates. */
+export function bidAmounts(s, b = {}) {
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const rows = new Map();
+  let total = 0;
+  for (const it of s.items) {
+    if (it.heading) continue;
+    const rate = s.perItemRate ? Number(b.rates?.[it.row]) || 0 : Number(it.est) || 0;
+    const amt = r2((Number(it.qty) || 0) * rate);
+    rows.set(it.row, amt); total += amt;
+  }
+  total = r2(total);
+  const dir = b.quote?.dir || "Select", pct = Number(b.quote?.pct) || 0;
+  const hasPct = b.quote?.pct !== "" && b.quote?.pct != null;
+  let quoted = 0;
+  if (dir === "At Par") quoted = total;
+  else if (hasPct && dir === "Excess (+)") quoted = r2(total + (total * pct) / 100);
+  else if (hasPct && dir === "Less (-)") quoted = r2(total - (total * pct) / 100);
+  return { rows, total, quoted, quotedRounded: Math.round(quoted) };
+}
+
+/**
+ * Write the bidder's name and rates into the downloaded BOQ and return the .xls bytes.
+ * bid: { bidder, sheets: { BoQ1: { rates: { rowIndex: rate }, quote: { dir, pct } } } }
+ * Only the bidder's cells change (name, rates, quote); the macros, protection and everything else stay.
+ */
+export function fillBidderBoq(buffer, bid) {
+  const info = readBidderBoq(buffer);
+  const b = openBook(buffer);
+  const sstMap = new Map();
+  b.sst.strings.forEach((s, i) => { if (!s.flags && !sstMap.has(s.text)) sstMap.set(s.text, i); });
+  const sstIndex = (t) => {
+    const s = String(t ?? "").slice(0, 32767);
+    if (sstMap.has(s)) return sstMap.get(s);
+    b.sst.strings.push({ text: s, flags: 0, cRun: 0, cbExt: 0, tail: new Uint8Array(0) });
+    sstMap.set(s, b.sst.strings.length - 1);
+    return b.sst.strings.length - 1;
+  };
+  const strResult = () => Uint8Array.from([0, 0, 0, 0, 0, 0, 0xff, 0xff]);
+  const strRec = (text) => { const t = String(text); const w = new W().u16(t.length).u8(0); for (const ch of t) w.u8(ch.charCodeAt(0) < 256 ? ch.charCodeAt(0) : 63); return w.out(); };
+  const replaced = new Map();
+  for (const s of info.sheets) {
+    const sb = bid.sheets?.[s.name]; if (!sb && !bid.bidder) continue;
+    const si = b.sheets.findIndex((x) => x.name === s.name);
+    const sub = b.subs[si + 1];
+    const { tStart, tEnd, rows, shared } = sheetTable(sub);
+    const am = bidAmounts(s, sb || {});
+    const setCell = (r, c, cell) => {
+      const row = rows.get(r); if (!row) return;
+      const old = row.cells.get(c);
+      const xf = old?.xf ?? row.cells.get(c - 1)?.xf ?? 15;
+      row.cells.set(c, { ...cell, xf });
+    };
+    const setResult = (r, c, value) => {
+      const cell = rows.get(r)?.cells.get(c); if (cell?.kind !== "formula") return;
+      cell.rgce = resolveFormula(cell, r, c, shared); // shared formulas become ordinary ones so each cell keeps its own result
+      if (typeof value === "string") { cell.result = strResult(); cell.string = strRec(value); }
+      else { cell.result = numResult(value); cell.string = null; }
+    };
+    if (bid.bidder != null) setCell(7, 1, String(bid.bidder).trim() ? { kind: "text", text: String(bid.bidder).trim() } : { kind: "blank" });
+    if (sb) {
+      if (s.perItemRate) for (const it of s.items) {
+        if (it.heading) continue;
+        const v = sb.rates?.[it.row];
+        setCell(it.row, COL.RATE, v === "" || v == null ? { kind: "blank" } : { kind: "num", value: Math.round(Number(v) * 100) / 100 });
+      }
+      for (const [r, amt] of am.rows) { setResult(r, COL.BA, amt); setResult(r, COL.BB, amt); setResult(r, COL.BC, inrWords(amt)); }
+      const f = s.footerRow, q = f + 1;
+      setResult(f, COL.BA, am.total); setResult(f, COL.BB, am.total); setResult(f, COL.BC, inrWords(am.total));
+      const dir = sb.quote?.dir || "Select";
+      setCell(q, 4, { kind: "text", text: dir });
+      const pct = dir === "At Par" ? 0 : sb.quote?.pct;
+      setCell(q, 5, pct === "" || pct == null || dir === "Select" ? { kind: "blank" } : { kind: "num", value: Math.round(Number(pct) * 1e4) / 1e6 });
+      setResult(q, COL.BA, am.quoted); setResult(q, COL.BB, am.quotedRounded); setResult(q, COL.BC, inrWords(am.quotedRounded));
+      // "Quoted Rate in Words": the amount its formula points at (the total for some templates, the quoted rate for others).
+      const wr = rows.get(q + 1);
+      for (const [c, cell] of wr?.cells || []) {
+        if (cell.kind !== "formula") continue;
+        const rg = resolveFormula(cell, q + 1, c, shared);
+        let refRow = null;
+        eachPtg(rg, (t, i) => { if (refRow == null && (t === 0x24) && (u16(rg, i + 3) & 0x3fff) === COL.BB) refRow = u16(rg, i + 1); });
+        setResult(q + 1, c, inrWords(refRow === f ? am.total : am.quotedRounded));
+      }
+    }
+    // Rebuild the sheet's cell table. No forced recalculation: the results written above are already right,
+    // and Excel without macros enabled would otherwise turn the template's own functions into #NAME?.
+    const order = [...rows.keys()].sort((x, y) => x - y);
+    const table = [];
+    for (let k = 0; k < order.length; k += 32) {
+      const block = order.slice(k, k + 32);
+      for (const r of block) if (rows.get(r).rowRec) table.push({ type: R.ROW, data: rows.get(r).rowRec });
+      for (const r of block) table.push(...writeRowCells(r, rows.get(r).cells, sstIndex));
+    }
+    const pre = sub.slice(0, tStart).filter((r) => r.type !== R.INDEX);
+    replaced.set(si, [...pre, ...table, ...sub.slice(tEnd + 1)]);
+  }
+  return assemble(b, replaced);
+}
+
+/** Lay the workbook stream out again after sheets changed: SST, EXTSST, BOUNDSHEET offsets. */
+function assemble(b, replaced) {
+  const sstBuilt = buildSST(b.sst.strings, b.sst.cstTotal);
+  const g2 = [];
+  b.globals.forEach((r, i) => {
+    if (i === b.sstAt) { g2.push(...sstBuilt.records); return; }
+    if (i > b.sstAt && i < b.sstEnd) return;
+    if (r.type === R.EXTSST) { g2.push({ type: R.EXTSST, data: new Uint8Array(2) }); return; }
+    g2.push(r);
+  });
+  const others = b.subs.slice(1).map((s, k) => replaced.get(k) || s);
+  const layout = () => {
+    let pos = 0;
+    const recPos = g2.map((r) => { const p = pos; pos += 4 + r.data.length; return p; });
+    const sheetPos = others.map((s) => { const p = pos; for (const r of s) pos += 4 + r.data.length; return p; });
+    return { recPos, sheetPos };
+  };
+  let { recPos, sheetPos } = layout();
+  const fixBound = () => { let bs = 0; for (const r of g2) if (r.type === R.BOUNDSHEET) { const d = r.data.slice(); set32(d, 0, sheetPos[bs++]); r.data = d; } };
+  fixBound();
+  const sstRecIdx = g2.findIndex((r) => r.type === R.SST);
+  const dsst = Math.max(8, Math.ceil(b.sst.strings.length / 128));
+  const ext = new W().u16(dsst);
+  for (let k = 0; k < b.sst.strings.length; k += dsst) { const [ri, off] = sstBuilt.marks[k]; ext.u32(recPos[sstRecIdx + ri] + 4 + off).u16(4 + off).u16(0); }
+  const extAt = g2.findIndex((r) => r.type === R.EXTSST);
+  if (extAt >= 0) g2[extAt] = { type: R.EXTSST, data: ext.out() };
+  ({ recPos, sheetPos } = layout());
+  fixBound();
+  let refs = 0;
+  for (const r of others.flat()) if (r.type === R.LABELSST) refs++;
+  const sstData = g2[sstRecIdx].data.slice(); set32(sstData, 0, refs); g2[sstRecIdx] = { type: R.SST, data: sstData };
+  const newStream = recordsToBytes([...g2, ...others.flat()]);
+  b.entry.content = newStream; b.entry.size = newStream.length;
+  const out = X().CFB.write(b.cfb, { type: "array" });
+  return out instanceof Uint8Array ? out : Uint8Array.from(out);
+}
