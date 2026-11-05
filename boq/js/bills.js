@@ -1176,6 +1176,23 @@ const ROMAN_N = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 
 const numTokens = (s) => (String(s).replace(/(\d),(\d)/g, "$1$2").match(/-?\d+(?:\.\d+)?/g) || []).map((t) => ({ v: Number(t), d: (t.split(".")[1] || "").length }));
 const normNo = (s) => String(s ?? "").trim().replace(/^0+(?=\d)/, "").replace(/\.0*1$/, "").replace(/\.$/, "");
 
+/** Every "quantity × rate = amount" in a list of numbers, one per rate (the largest amount: up to date). */
+function qtyRateAmount(nums, strict = false) {
+  const n = nums.slice(0, 60), byAmt = new Map();
+  for (let c = 2; c < n.length; c++) for (let x = 0; x < c; x++) for (let y = 0; y < c; y++) {
+    if (x === y) continue;
+    const q = n[x].v, rate = n[y].v, amt = n[c].v;
+    if (!(q > 0 && rate >= 1 && amt >= 10) || Math.abs(q * rate - amt) > (strict ? Math.max(0.51, amt * 0.0005) : Math.max(1, amt * 0.002))) continue;
+    const score = (n[x].d === 3 ? 3 : 0) + (n[y].d === 2 ? 1 : 0) + (n[c].d === 2 ? 1 : 0) + (x < y ? 1 : 0);
+    const cur = byAmt.get(c);
+    if (!cur || score > cur.score) byAmt.set(c, { qty: q, rate, amt, score });
+  }
+  // The same rate pairs with "since last" and "up-to-date" figures: keep the larger (up-to-date).
+  const best = new Map();
+  for (const t of byAmt.values()) { const k = Math.round(t.rate * 100), cur = best.get(k); if (!cur || t.amt > cur.amt) best.set(k, { qty: t.qty, rate: t.rate, amt: t.amt }); }
+  return [...best.values()];
+}
+
 /** Read a Form 27G style bill: its number, date and, per item, the up-to-date quantity, rate and amount. */
 export function parsePrevBill(lines) {
   const text = lines.join("\n");
@@ -1212,19 +1229,7 @@ export function parsePrevBill(lines) {
     // Each part line holds quantity up-to-date × rate = amount up-to-date; find those triplets in order.
     // qty × rate = amount, with qty and rate in either order before the amount (stacked part-rate
     // cells come out of PDFs in a mixed order); quantities are written with 3 decimals, rates with 2.
-    const n = b.nums.slice(0, 60), byAmt = new Map();
-    for (let c = 2; c < n.length; c++) for (let x = 0; x < c; x++) for (let y = 0; y < c; y++) {
-      if (x === y) continue;
-      const q = n[x].v, rate = n[y].v, amt = n[c].v;
-      if (!(q > 0 && rate >= 1 && amt >= 10) || Math.abs(q * rate - amt) > Math.max(1, amt * 0.002)) continue;
-      const score = (n[x].d === 3 ? 3 : 0) + (n[y].d === 2 ? 1 : 0) + (n[c].d === 2 ? 1 : 0) + (x < y ? 1 : 0);
-      const cur = byAmt.get(c);
-      if (!cur || score > cur.score) byAmt.set(c, { qty: q, rate, amt, score });
-    }
-    // The same rate pairs with "since last" and "up-to-date" figures: keep the larger (up-to-date).
-    const best = new Map();
-    for (const t of byAmt.values()) { const k = Math.round(t.rate * 100), cur = best.get(k); if (!cur || t.amt > cur.amt) best.set(k, { qty: t.qty, rate: t.rate, amt: t.amt }); }
-    const parts = [...best.values()];
+    const parts = qtyRateAmount(b.nums);
     const sig = `${b.mb}/${b.no}/${b.sched}/${parts.map((x) => `${x.qty}@${x.rate}`).join("+")}`;
     if (out.items.some((x) => x.sig === sig)) continue; // the same page photographed twice
     out.items.push({ mb: b.mb, no: b.no, sched: b.sched, desc: b.desc.slice(0, 160), parts, ok: parts.length > 0, sig });
@@ -1246,6 +1251,103 @@ function matchLine(p, it) {
   return score >= 0.5 ? best.id : "";
 }
 
+// Any layout: a bill in any format (own Excel, typed letter, a different department's form, photos).
+// Every line that holds "quantity × rate = amount" is an item; it is matched to the work's BOQ by
+// rate, item number, unit and words of the description. Lines that match nothing are dropped, so
+// totals, T.P., taxes and page numbers do not turn into items.
+const NOT_ITEM_EN = /\b(total|sub[-\s]?total|grand|less|add|deduct|t\.?\s?p\.?|tender\s+premium|premium|gst|cgst|sgst|igst|cess|royalty|security|income\s*tax|tds|net|say|rounded|carried|b\/f|brought|page|previous\s+bill|withheld|retention)\b/i;
+const NOT_ITEM_HI = /(कुल|योग|कटौती|शुद्ध|पिछला\s*बिल|जीएसटी|रॉयल्टी)/;
+const NOT_ITEM = { test: (t) => NOT_ITEM_EN.test(t) || NOT_ITEM_HI.test(t) };
+const UNITS = /\b(cum|cu\.?\s?m|sqm|sq\.?\s?m|rmt|r\.?m|nos?|each|kg|qtl|mt|tonne|ltr|litre|metre|meter|mtr|rm|job|ls)\b/i;
+const words = (t) => String(t).toLowerCase().split(/[^a-z\u0900-\u097f]+/).filter((w) => w.length > 3);
+
+function scoreLine(l, it) {
+  let s = 0;
+  const rates = it.parts.map((x) => x.rate);
+  if (rates.some((r) => Math.abs(num(l.rate) - r) < 0.01)) s += 3;
+  else if (num(l.rate) && rates.every((r) => r < num(l.rate) * 1.001 && r > num(l.rate) * 0.05)) s += 0.5; // a part rate below the full rate
+  else if (num(l.rate)) s -= 1;
+  if (it.lead && !l.extra && normNo(l.no) === normNo(it.lead)) s += 1.5;
+  const w = words(it.desc), d = String(l.desc).toLowerCase();
+  if (w.length) s += 3 * w.filter((x) => d.includes(x)).length / w.length;
+  const u = it.desc.match(UNITS)?.[0]; if (u && l.unit && canonUnit(u) === canonUnit(l.unit)) s += 0.5;
+  return s;
+}
+const canonUnit = (u) => String(u).toLowerCase().replace(/[.\s]/g, "").replace(/^cum$|^cu?m$/, "cum").replace(/^sq?m$/, "sqm").replace(/^(mtr|metre|meter|rm|r?mt?)$/, "rmt").replace(/^nos?$|^each$/, "nos");
+
+/**
+ * A line without "quantity × rate = amount": bills that show only quantity and rate, or only the
+ * quantity. (a) A number equal to a BOQ rate plus another number: that is quantity @ rate.
+ * (b) No rate at all, but the line clearly names one BOQ item (its No. and words or unit): the number
+ * next to the unit, or the last number, is the up-to-date quantity at the BOQ rate.
+ */
+function qtyOnly(text, desc, L) {
+  const nums = nt(text);
+  if (!nums.length) return null;
+  for (const l of L) {
+    const r = num(l.rate); if (!r) continue;
+    const k = nums.findIndex((x) => Math.abs(x.v - r) < 0.01);
+    if (k < 0) continue;
+    const others = nums.filter((x, i) => i !== k && x.v > 0 && Math.abs(x.v - num(l.tqty)) > 1e-6 && !(x.d === 0 && x.v === Number(normNo(l.no))));
+    const q = others.find((x) => x.d === 3) || others.at(-1);
+    if (q) return { part: { qty: q.v, rate: r, amt: round(q.v * r, 2) }, check: true };
+  }
+  const full = [...desc, text].join(" ");
+  const lead = text.match(/^\s*(\d{1,3}(?:\.\d{1,2})?)\b[.)]?/)?.[1];
+  let best = null, sc = 0;
+  for (const l of L) { const s = scoreLine(l, { desc: full, lead, parts: [] }); if (s > sc) { sc = s; best = l; } }
+  if (!best || sc < 3.5 || !num(best.rate)) return null;
+  const u = specFree(text).match(new RegExp(`(-?\\d[\\d,]*(?:\\.\\d+)?)\\s*${UNITS.source}|${UNITS.source}\\s*(-?\\d[\\d,]*(?:\\.\\d+)?)`, "i"));
+  let q = u ? Number(String(u[1] || u[u.length - 1]).replace(/,/g, "")) : NaN;
+  if (!(q > 0)) { const c = nums.filter((x) => x.v > 0 && !(x.d === 0 && String(x.v) === lead) && Math.abs(x.v - num(best.tqty)) > 1e-6); q = (c.find((x) => x.d === 3) || c.at(-1))?.v; }
+  if (!(q > 0)) return null;
+  return { part: { qty: q, rate: num(best.rate), amt: round(q * num(best.rate), 2) }, check: true };
+}
+
+// Figures inside a description that are not quantities or rates: mixes (1:4:8), grades (M20),
+// sizes (40 mm, 110 mm dia), percentages and dates.
+const specFree = (t) => String(t).replace(/\d+(?:\s*[:/]\s*\d+(?:\.\d+)?){1,3}(?![\d.])/g, " ").replace(/\b[MF]\s?-?\d{2}\b/gi, " ")
+  .replace(/\d+(?:\.\d+)?\s*(?:mm|cm|dia|inch|"|%|kv|kw|hp|swg|gauge|micron|kg\/cm)\b/gi, " ").replace(/\b\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}\b/g, " ");
+const nt = (t) => numTokens(specFree(t));
+
+export function parseAnyBill(textLines, L) {
+  const clean = textLines.map((l) => String(l).replace(/\|/g, " ").replace(/\s+/g, " ").trim()).filter(Boolean);
+  const found = [];
+  let desc = [];
+  for (let i = 0; i < clean.length; i++) {
+    let text = clean[i], parts = NOT_ITEM.test(text) ? [] : qtyRateAmount(nt(text), true), used = 1;
+    // A row split over two or three lines (wrapped cells, OCR): try it joined with the next lines.
+    for (let k = 1; !parts.length && k <= 2 && i + k < clean.length; k++) {
+      const joined = clean.slice(i, i + k + 1).join(" ");
+      if (NOT_ITEM.test(joined)) break;
+      const t = qtyRateAmount(nt(joined), true);
+      if (t.length) { parts = t; text = joined; used = k + 1; }
+    }
+    let check = false;
+    if (!parts.length && !NOT_ITEM.test(text)) { const q = qtyOnly(text, desc, L); if (q) { parts = [q.part]; check = q.check; } }
+    if (!parts.length) { if (/[a-z\u0900-\u097f]{3}/i.test(text) && !NOT_ITEM.test(text)) { desc.push(text); if (desc.length > 4) desc.shift(); } continue; }
+    const full = [...desc, text].join(" ");
+    const lead = text.match(/^\s*(?:item\s*(?:no\.?)?\s*)?(\d{1,3}(?:\.\d{1,2})?|ex)\b[.)]?/i)?.[1] || "";
+    const it = { desc: full.replace(/-?\d[\d,]*(?:\.\d+)?/g, " ").replace(/\s+/g, " ").trim(), lead, parts };
+    // Best BOQ line; a rate that only one line has decides on its own.
+    const byRate = L.filter((l) => parts.some((x) => Math.abs(num(l.rate) - x.rate) < 0.01));
+    let line = byRate.length === 1 ? byRate[0] : null, score = line ? 9 : 0;
+    if (!line) for (const l of L) { const sc = scoreLine(l, it); if (sc > score) { score = sc; line = l; } }
+    if (line && score >= 2.5) found.push({ ...it, line, check });
+    desc = []; i += used - 1;
+  }
+  // The same BOQ item on several lines or pages (abstract and detail, since-last and up-to-date):
+  // one entry per item, keeping the largest amount for each rate.
+  const byId = new Map();
+  for (const f of found) {
+    const cur = byId.get(f.line.id) || { mb: "", no: f.line.no, sched: f.line.extra ? "X" : f.line.s, desc: f.desc, parts: [], ok: true, line: f.line.id, sig: f.line.id };
+    if (f.check) cur.ok = false; // read without an amount to prove it: highlighted for a look
+    for (const x of f.parts) { const k = cur.parts.findIndex((y) => Math.abs(y.rate - x.rate) < 0.01); if (k < 0) cur.parts.push(x); else if (x.amt > cur.parts[k].amt) cur.parts[k] = x; }
+    byId.set(f.line.id, cur);
+  }
+  return [...byId.values()];
+}
+
 async function loadPrevBill(files) {
   if (!files.length) return;
   const p = ctx.project();
@@ -1254,9 +1356,16 @@ async function loadPrevBill(files) {
     docStatus("Reading the previous bill… (photos and scans take a little longer)");
     const doc = await readDocument(files, (t) => docStatus(t));
     const lineText = doc.lines.length ? doc.lines : doc.rows.flatMap((sh) => sh.rows.map((r) => r.join("  ")));
+    // 1. The department's Form 27G layout ("MB S.No / BOQ No." lines).
     const read = parsePrevBill(lineText);
+    // 2. Any other layout: lines with quantity × rate = amount, matched to the BOQ.
+    const covered = new Set(read.items.map((it) => matchLine(p, it)).filter(Boolean));
+    for (const it of parseAnyBill(lineText, lines(p))) if (!covered.has(it.line)) read.items.push(it);
     docStatus("");
-    if (!read.items.length) { docStatus("No bill items could be read. Check the file is the bill (Form 27G pages with the items), or type it with “Enter last submitted bill”.", "err"); return; }
+    if (!read.items.length) {
+      docStatus(`No item of this work's BOQ was found in this file${doc.ocr ? " (a photo or scan: try a sharper, straight photo of each page)" : ""}. Check that the BOQ loaded in the Contract tab is the one this bill is for, or type the bill with “Enter last submitted bill”.`, "err");
+      return;
+    }
     reviewPrevBill(p, read);
   } catch (e) { console.error(e); docStatus(e.message, "err"); }
 }
@@ -1274,16 +1383,16 @@ function cleanParts(p, it, lineId) {
 
 function reviewPrevBill(p, read) {
   const L = lines(p);
-  const rows = read.items.map((it) => { const line = matchLine(p, it) || (it.sched === "X" ? "__new" : ""); return { ...it, line, parts: cleanParts(p, it, line === "__new" ? "" : line) }; });
+  const rows = read.items.map((it) => { const line = it.line || matchLine(p, it) || (it.sched === "X" ? "__new" : ""); return { ...it, line, parts: cleanParts(p, it, line === "__new" ? "" : line) }; });
   const used = (p.bills || []).map((b) => billNo(p, b));
   const nextNo = read.number || (used.length ? Math.max(...used) + 1 : 1);
   const opt = (sel) => `<option value="">— not in this work —</option><option value="__new" ${sel === "__new" ? "selected" : ""}>＋ Add as a new extra item</option>${L.map((l) => `<option value="${l.id}" ${l.id === sel ? "selected" : ""}>${l.extra ? "Ex" : l.s + " " + esc(l.no)} · ${esc(l.desc.slice(0, 70))}</option>`).join("")}`;
-  const body = () => rows.map((r, i) => `<tr data-i="${i}" class="${(!r.line || !r.ok) && r.line !== "__new" ? "need-row" : ""}"><td>${esc(r.mb)}/${esc(r.no)}</td><td><select data-k="line" class="w-full">${opt(r.line)}</select><div class="small muted">${esc(r.desc.slice(0, 90))}</div></td>
+  const body = () => rows.map((r, i) => `<tr data-i="${i}" class="${(!r.line || !r.ok) && r.line !== "__new" ? "need-row" : ""}"><td>${r.mb ? `${esc(r.mb)}/` : ""}${esc(r.no)}</td><td><select data-k="line" class="w-full">${opt(r.line)}</select><div class="small muted">${esc(r.desc.slice(0, 90))}</div></td>
     <td>${r.parts.map((x, k) => `<div class="row gap"><input type="number" step="any" class="w90 num" data-k="qty" data-p="${k}" value="${x.qty}"> @ <input type="number" step="any" class="w90 num" data-k="rate" data-p="${k}" value="${x.rate}"></div>`).join("") || `<span class="danger-text small">quantity not read</span> <button class="link small" data-addpart>＋ add</button>`}</td>
     <td class="num">${m2(r.parts.reduce((a, x) => a + round(x.qty * x.rate, 2), 0))}</td></tr>`).join("");
   const sum = () => round(rows.filter((r) => r.line && r.line !== "") .reduce((a, r) => a + r.parts.reduce((s, x) => s + round(x.qty * x.rate, 2), 0), 0), 2);
   ctx.modal(`<h2>Check the previous bill</h2>
-    <p class="muted small">${rows.length} items read, ${rows.filter((r) => r.line && r.ok).length} matched to this work's BOQ. Pick the right BOQ item where it is wrong or empty (highlighted), correct any quantity, then save.</p>
+    <p class="muted small">${rows.length} items read, ${rows.filter((r) => r.line && r.ok).length} matched to this work's BOQ (by item No., rate, unit and description; the bill can be in any layout). Pick the right BOQ item where it is wrong or empty (highlighted), correct any quantity, then save.</p>
     <div class="form-grid compact"><label class="field">Bill No.<input type="number" min="1" id="pbNo" value="${nextNo}"></label>
       <label class="field">Kind<select id="pbKind"><option value="running" ${read.kind !== "final" ? "selected" : ""}>Running bill</option><option value="final" ${read.kind === "final" ? "selected" : ""}>Final bill</option></select></label>
       <label class="field">Bill date<input type="date" id="pbDate" value="${read.date}"></label></div>
