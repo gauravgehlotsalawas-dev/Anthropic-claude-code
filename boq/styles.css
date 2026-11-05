@@ -961,3 +961,10 @@ button.primary:hover:not(:disabled), label.primary.btn-file:hover { background: 
 button.ghost.dark:hover:not(:disabled) { background: rgba(255, 255, 255, .16); }
 .row input[type="date"], .row input[type="search"] { width: auto; }
 tr.need-row td { background: #fff4df; }
+@media (max-width: 760px) {
+  .topbar { padding: .5rem .7rem .35rem; gap: .4rem .6rem; }
+  .tabs { flex-wrap: nowrap !important; overflow-x: auto; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; padding-bottom: .2rem; }
+  .tabs button { flex: none; scroll-snap-align: start; padding: .35rem .7rem .35rem .4rem; }
+  .tabs .tab-label small { display: none; }
+  .tabs button .step { width: 1.45rem; height: 1.45rem; font-size: .75rem; }
+}
