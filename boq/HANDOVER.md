@@ -80,6 +80,7 @@ git push origin HEAD:claude/cross-car-parts-database-0ivvqo   # if rejected: fet
     - `mbAbstract()`, `fitPages()`: scales a page that is too long.
   - Uploads: `extractBoq(files)` (exported; NIC xls / NIC PDF columns / OCR), `reviewBoq`, `loadWorkOrder` + `parseWorkOrder` (in `docread.js`).
   - Dialogs: `mbRefsDialog`, `addExtraDialog`.
+  - Previous bill from a file: `loadPrevBill` → `parsePrevBill(lines)` (item blocks start at "MB/BOQ" such as `3/12` or `4/Ex`; triplets qty × rate = amount in any order, 3-decimal numbers preferred as quantities; per rate the largest amount = up-to-date) → `matchLine`, `cleanParts` → `reviewPrevBill` (saves a bill with `number`, `base`, `uploaded`).
   - `deleteExtras` also removes the item from every bill.
 - **`site.js`**
   - Daily entry: `entry(day)`, `saveEntry`/`saveNow`, `rowTable`.
