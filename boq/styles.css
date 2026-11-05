@@ -968,3 +968,47 @@ tr.need-row td { background: #fff4df; }
   .tabs .tab-label small { display: none; }
   .tabs button .step { width: 1.45rem; height: 1.45rem; font-size: .75rem; }
 }
+
+/* Workspaces: Contractor (BuildRigs orange) and Engineer (steel blue) */
+.role-chip { display: inline-flex; align-items: center; gap: .35rem; border-radius: 999px; padding: .45rem .85rem; font-weight: 700; font-size: .85rem; background: var(--br-orange-soft); color: var(--br-black); border: 1px solid #f5cf8f; box-shadow: none; }
+.role-chip small { font-weight: 500; color: var(--muted); font-size: .72rem; }
+.role-chip:hover { border-color: var(--br-orange); }
+body[data-role="engineer"] .role-chip { background: #e8f0fb; border-color: #b9cff0; color: #12305c; }
+.role-pick { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 1rem; overflow: auto;
+  background: radial-gradient(700px 400px at 85% 0%, rgba(249, 160, 27, .35), transparent 70%), radial-gradient(700px 400px at 10% 100%, rgba(59, 125, 216, .35), transparent 70%), rgba(10, 10, 11, .88); }
+.role-box { background: #fff; border-radius: 26px; padding: 1.8rem; max-width: 860px; width: 100%; text-align: center; box-shadow: 0 30px 70px rgba(0, 0, 0, .35); }
+.role-box h2 { margin: .6rem 0 .3rem; font-size: 1.7rem; }
+.role-logo { height: 40px; width: auto; }
+.role-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin: 1.2rem 0 .8rem; }
+.role-card { position: relative; display: grid; gap: .4rem; align-content: start; text-align: left; padding: 1.3rem 1.3rem 1.1rem; border-radius: 22px; color: #fff; border: 2px solid transparent; overflow: hidden; transition: transform .15s, box-shadow .15s; }
+.role-card:hover { transform: translateY(-3px); box-shadow: 0 16px 34px rgba(0, 0, 0, .25); }
+.role-card.on { border-color: #fff; outline: 3px solid var(--br-orange); }
+.role-contractor { background: radial-gradient(360px 200px at 100% 0%, rgba(249, 160, 27, .7), transparent 70%), linear-gradient(135deg, #1d1e22, #0a0a0b); }
+.role-engineer { background: radial-gradient(360px 200px at 100% 0%, rgba(96, 165, 250, .7), transparent 70%), linear-gradient(135deg, #10213d, #070d19); }
+.role-engineer.on { outline-color: #60a5fa; }
+.role-ic { font-size: 2.2rem; }
+.role-card b { font-family: var(--head-font); font-size: 1.35rem; }
+.role-sub { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--br-orange); font-weight: 700; }
+.role-engineer .role-sub { color: #93c5fd; }
+.role-card ul { margin: .3rem 0 .4rem; padding-left: 1.1rem; color: #dcd9d2; font-size: .9rem; line-height: 1.5; }
+.role-card i { font-style: normal; font-weight: 700; color: var(--br-orange); }
+.role-engineer i { color: #93c5fd; }
+.role-cancel { margin-top: .2rem; }
+
+/* Engineer atmosphere: the same layout in department blue */
+body[data-role="engineer"] .br-hero { background: radial-gradient(640px 320px at 95% -10%, rgba(96, 165, 250, .55), transparent 70%), radial-gradient(520px 300px at -5% 120%, rgba(59, 125, 216, .25), transparent 70%), linear-gradient(135deg, #10213d, #060b16); }
+body[data-role="engineer"] .br-kicker, body[data-role="engineer"] .br-hero h1 span { color: #93c5fd; }
+body[data-role="engineer"] .br-hero-art { filter: hue-rotate(185deg) saturate(.9) drop-shadow(0 12px 24px rgba(59, 125, 216, .35)); }
+body[data-role="engineer"] .br-mod::before { background: linear-gradient(90deg, #3b7dd8, #93c5fd); }
+body[data-role="engineer"] .br-mod:hover, body[data-role="engineer"] .br-stat:hover { border-color: #3b7dd8; }
+body[data-role="engineer"] .br-mod i { color: #1e5bb0; }
+body[data-role="engineer"] .br-node { background: #e8f0fb; border-color: #b9cff0; }
+body[data-role="engineer"] .br-node:hover { background: #93c5fd; }
+body[data-role="engineer"] .br-arrow { color: #3b7dd8; }
+body[data-role="engineer"] .brand-tag { border-left-color: #3b7dd8; }
+body[data-role="engineer"] .tabs button.active .step { background: #93c5fd; }
+body[data-role="engineer"] .tabs button.active .tab-label small { color: #bcd6fb; }
+body[data-role="engineer"] .tabs button:hover { background: #eef4fc; border-color: #c9dbf3; }
+@media print { .role-chip, .role-pick { display: none !important; } }
+body[data-role="engineer"] .br-cta button.primary { background: #60a5fa; border-color: #60a5fa; color: #06101f; box-shadow: 0 6px 16px rgba(59, 125, 216, .35); }
+body[data-role="engineer"] .br-cta button.primary:hover { background: #93c5fd; border-color: #93c5fd; }

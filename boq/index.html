@@ -31,7 +31,7 @@
 </script>
   <link rel="stylesheet" href="styles.css?v=202611052054">
   <script src="vendor/xlsx.full.min.js?v=202611052054"></script>
-  <script type="importmap" id="versions">{"imports":{"./js/ai.js":"./js/ai.js?v=202611052054","./js/app.js":"./js/app.js?v=202611052054","./js/bills.js":"./js/bills.js?v=202611052054","./js/blueprint.js":"./js/blueprint.js?v=202611052054","./js/bsr-import.js":"./js/bsr-import.js?v=202611052054","./js/demo.js":"./js/demo.js?v=202611052054","./js/docread.js":"./js/docread.js?v=202611052054","./js/docs.js":"./js/docs.js?v=202611052054","./js/export.js":"./js/export.js?v=202611052054","./js/files.js":"./js/files.js?v=202611052054","./js/home.js":"./js/home.js?v=202611052054","./js/match.js":"./js/match.js?v=202611052054","./js/materials.js":"./js/materials.js?v=202611052054","./js/nicboq.js":"./js/nicboq.js?v=202611052054","./js/office.js":"./js/office.js?v=202611052054","./js/quick.js":"./js/quick.js?v=202611052054","./js/resources.js":"./js/resources.js?v=202611052054","./js/sample.js":"./js/sample.js?v=202611052054","./js/site.js":"./js/site.js?v=202611052054","./js/store.js":"./js/store.js?v=202611052054","./js/tenders.js":"./js/tenders.js?v=202611052054","./vendor/libs.mjs":"./vendor/libs.mjs?v=202611052054","./vendor/pdf-lib.esm.min.js":"./vendor/pdf-lib.esm.min.js?v=202611052054","./vendor/pdf.min.mjs":"./vendor/pdf.min.mjs?v=202611052054","./vendor/pdf.worker.min.mjs":"./vendor/pdf.worker.min.mjs?v=202611052054"}}</script>
+  <script type="importmap" id="versions">{"imports":{"./js/ai.js":"./js/ai.js?v=202611052054","./js/app.js":"./js/app.js?v=202611052054","./js/bills.js":"./js/bills.js?v=202611052054","./js/blueprint.js":"./js/blueprint.js?v=202611052054","./js/bsr-import.js":"./js/bsr-import.js?v=202611052054","./js/demo.js":"./js/demo.js?v=202611052054","./js/docread.js":"./js/docread.js?v=202611052054","./js/docs.js":"./js/docs.js?v=202611052054","./js/export.js":"./js/export.js?v=202611052054","./js/files.js":"./js/files.js?v=202611052054","./js/home.js":"./js/home.js?v=202611052054","./js/match.js":"./js/match.js?v=202611052054","./js/materials.js":"./js/materials.js?v=202611052054","./js/nicboq.js":"./js/nicboq.js?v=202611052054","./js/office.js":"./js/office.js?v=202611052054","./js/quick.js":"./js/quick.js?v=202611052054","./js/resources.js":"./js/resources.js?v=202611052054","./js/role.js":"./js/role.js?v=202611052054","./js/sample.js":"./js/sample.js?v=202611052054","./js/site.js":"./js/site.js?v=202611052054","./js/store.js":"./js/store.js?v=202611052054","./js/tenders.js":"./js/tenders.js?v=202611052054","./vendor/libs.mjs":"./vendor/libs.mjs?v=202611052054","./vendor/pdf-lib.esm.min.js":"./vendor/pdf-lib.esm.min.js?v=202611052054","./vendor/pdf.min.mjs":"./vendor/pdf.min.mjs?v=202611052054","./vendor/pdf.worker.min.mjs":"./vendor/pdf.worker.min.mjs?v=202611052054"}}</script>
 </head>
 <body>
   <header class="topbar">
@@ -290,6 +290,10 @@
             <select id="modelSel"></select>
           </label>
           <button id="testKeyBtn" class="ghost">Test key</button> <span id="keyStatus" class="status"></span>
+        </div>
+        <div class="card">
+          <h2>Workspace</h2>
+          <div id="roleSettings"></div>
         </div>
         <div class="card">
           <h2>Defaults</h2>
