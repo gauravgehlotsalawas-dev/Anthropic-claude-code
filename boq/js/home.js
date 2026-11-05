@@ -1,6 +1,7 @@
 // Home: the BuildRigs dashboard. One look at every part of the work (estimates, bills, sites,
 // accounts, tenders) and a door into each, following the product's Plan · Procure · Progress idea.
 import { idb, esc, num } from "./store.js";
+import { allowed, roleInfo } from "./role.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 let ctx = null;
@@ -47,23 +48,30 @@ export async function renderHome() {
     ["07", "Workforce & attendance", "Worker register, daily attendance (P / ½ / A, overtime), muster roll and wage sheet with advances.", "resources:workforce", "👷"],
     ["08", "Materials, machinery & vendors", "Stock per site with low-stock alerts, equipment register with rent payable, supplier directory with credit.", "resources:inventory", "🚜"],
   ];
+  // Only what belongs to this role's workspace.
+  const r = roleInfo();
+  const okGo = (go) => !go || allowed(go);
+  const showStats = stats.filter((x) => allowed(x[3]));
+  const showFlow = flow.filter((x) => okGo(x[1]));
+  const showMods = modules.filter((x) => allowed(x[3])).map((x, i) => [String(i + 1).padStart(2, "0"), ...x.slice(1)]);
+  const cta = r ? r.cta : [["primary", "sites:newSite", "＋ Start a site"], ["ghost dark", "bills", "🧾 Make a bill"], ["ghost dark", "tenders:bid", "📝 Fill a tender BOQ"]];
   const soon = [["ThekedarGPT", "The construction-aware AI assistant: ask, analyse and act on your project data."], ["Equipment rental", "On-demand machinery from verified owners, booked and billed in the app."], ["Marketplace", "Vendors, suppliers and surplus materials, connected to your sites."]];
   root.innerHTML = `<section class="br-hero">
       <div class="br-hero-main">
         <img src="img/logo-white.png" alt="BuildRigs" class="br-hero-logo">
-        <div class="br-kicker">AI-powered construction super ecosystem</div>
-        <h1>Plan <span>·</span> Procure <span>·</span> Progress</h1>
-        <p>Projects, BOQs, bills, sites, people, materials, machinery, money and tenders: connected in one place${co.name ? ` for <b>${esc(co.name)}</b>` : ""}.</p>
-        <div class="br-cta"><button class="primary" data-go="sites:newSite">＋ Start a site</button><button class="ghost dark" data-go="bills">🧾 Make a bill</button><button class="ghost dark" data-go="tenders:bid">📝 Fill a tender BOQ</button></div>
+        <div class="br-kicker">${r ? `${r.icon} ${esc(r.kicker)}` : "AI-powered construction super ecosystem"}</div>
+        <h1>${(r ? r.title : "Plan · Procure · Progress").split(" · ").join(" <span>·</span> ")}</h1>
+        <p>${r ? r.pitch : "Projects, BOQs, bills, sites, people, materials, machinery, money and tenders: connected in one place"}${co.name && r?.label !== "Engineer" ? ` for <b>${esc(co.name)}</b>` : ""}.</p>
+        <div class="br-cta">${cta.map(([cls, go, label]) => `<button class="${cls}" data-go="${go}">${label}</button>`).join("")}</div>
       </div>
       <div class="br-hero-art" aria-hidden="true"><svg viewBox="0 0 220 220"><defs><linearGradient id="hg" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#FFC15E"/><stop offset="1" stop-color="#F9A01B"/></linearGradient></defs>
         <rect x="18" y="120" width="34" height="80" rx="4" fill="url(#hg)" opacity=".55"/><rect x="62" y="92" width="34" height="108" rx="4" fill="url(#hg)" opacity=".7"/><rect x="106" y="62" width="34" height="138" rx="4" fill="url(#hg)" opacity=".85"/><rect x="150" y="30" width="34" height="170" rx="4" fill="url(#hg)"/>
         <path d="M14 150 C70 140 120 110 196 22" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round"/><path d="M180 18 l18 2 -4 18" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
     </section>
-    <div class="br-stats">${stats.map(([l, v, s, go]) => `<button class="br-stat" data-go="${go}"><small>${l}</small><b>${v}</b><span>${esc(s)}</span></button>`).join("")}</div>
+    <div class="br-stats">${showStats.map(([l, v, s, go]) => `<button class="br-stat" data-go="${go}"><small>${l}</small><b>${v}</b><span>${esc(s)}</span></button>`).join("")}</div>
     <div class="card br-flow"><h3>Building the intelligence layer for construction</h3>
-      <div class="br-flow-row">${flow.map(([l, go], i) => `${i ? `<span class="br-arrow">→</span>` : ""}<button class="br-node ${go ? "" : "soon"}" ${go ? `data-go="${go}"` : "disabled"}>${l}${go ? "" : " <em>soon</em>"}</button>`).join("")}</div></div>
-    <div class="br-modules">${modules.map(([n, t, d, go, ic]) => `<button class="br-mod" data-go="${go}"><span class="br-num">${n}</span><span class="br-ic">${ic}</span><b>${t}</b><span>${d}</span><i>Open →</i></button>`).join("")}</div>
+      <div class="br-flow-row">${showFlow.map(([l, go], i) => `${i ? `<span class="br-arrow">→</span>` : ""}<button class="br-node ${go ? "" : "soon"}" ${go ? `data-go="${go}"` : "disabled"}>${l}${go ? "" : " <em>soon</em>"}</button>`).join("")}</div></div>
+    <div class="br-modules">${showMods.map(([n, t, d, go, ic]) => `<button class="br-mod" data-go="${go}"><span class="br-num">${n}</span><span class="br-ic">${ic}</span><b>${t}</b><span>${d}</span><i>Open →</i></button>`).join("")}</div>
     <div class="br-soon"><h3>Coming next on BuildRigs</h3><div class="br-soon-row">${soon.map(([t, d]) => `<div class="br-soon-card"><span class="badge">Coming soon</span><b>${t}</b><span>${d}</span></div>`).join("")}</div></div>
-    <p class="br-foot">Your data stays on this device. Keep a backup from <button class="link" data-go="office:backup">Office → Backup</button>. · <a href="https://www.buildrigs.com" target="_blank" rel="noopener">www.buildrigs.com</a> · <a href="mailto:hello@buildrigs.com">hello@buildrigs.com</a></p>`;
+    <p class="br-foot">Your data stays on this device. Keep a backup from ${allowed("office") ? `<button class="link" data-go="office:backup">Office → Backup</button>` : `<button class="link" data-go="settings">Settings → Back up everything</button>`}. · <a href="https://www.buildrigs.com" target="_blank" rel="noopener">www.buildrigs.com</a> · <a href="mailto:hello@buildrigs.com">hello@buildrigs.com</a></p>`;
 }

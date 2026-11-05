@@ -16,6 +16,7 @@ import { initOffice, renderOffice, company } from "./office.js";
 import { initTenders, renderTenders } from "./tenders.js";
 import { initHome, renderHome } from "./home.js";
 import { initResources, renderResources } from "./resources.js";
+import { initRole, allowed, roleInfo, chooseRole } from "./role.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -96,7 +97,19 @@ async function boot() {
   await initResources({ toast, modal, closeModal, showTab, company, sites: siteList, currentSite: currentSiteId });
   renderAll();
   resetHistory();
+  initRole({ onRoleChange: () => { const r = roleInfo(); showTab("home"); renderRoleSettings(); if (r) toast(`${r.label} workspace: only the ${r.label.toLowerCase()}'s tools are shown.`); } });
+  renderRoleSettings();
   renderHome();
+}
+
+// Settings: which workspace (Contractor / Engineer) this device shows.
+function renderRoleSettings() {
+  const box = $("#roleSettings"); if (!box) return;
+  const r = roleInfo();
+  box.innerHTML = `<p class="muted small">BuildRigs shows each role only the tools for their work. Switching changes what is shown, not your data.</p>
+    <p>Current: <b>${r ? `${r.icon} ${r.label}` : "not chosen"}</b>${r ? ` <span class="muted small">(${r.kicker})</span>` : ""}</p>
+    <button class="ghost" id="roleSwitchBtn">Change workspace</button>`;
+  $("#roleSwitchBtn").onclick = () => chooseRole();
 }
 
 function renderAll() {
@@ -430,6 +443,7 @@ function renderKeyHint() {
 }
 
 function showTab(name) {
+  if (!allowed(name)) { const r = roleInfo(); toast(`That part of BuildRigs is not in the ${r.label} workspace.`, 3200, { label: "Switch", fn: () => chooseRole() }); name = "home"; }
   const was = state.tab; state.tab = name;
   if (was !== name) renderProjectSelect();
   $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
